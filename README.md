@@ -35,12 +35,19 @@ allows slight tilt, and retains a margin of approximately 3% of the gel's shorte
 side (with a minimum allowance for detection precision). The rectangular crop
 encloses the tilted gel's corners. There are no crop adjustment controls.
 
+Weak background transitions must form a consistent competing edge before they
+block cropping. Broad lighting changes that continue beyond the gel are treated
+as illumination. Faint or blurred alternatives confined to the gel, and multiple
+outer sides suggesting a larger enclosure, still trigger the conservative
+fallback. The main gel-edge contrast and support requirements remain unchanged.
+
 If a safe boundary cannot be confirmed, the app retains the full frame and says
 so. Examples include ambiguous nested rectangles, very faint edges, strong
 rotation, and gels extending outside the photographed frame. This conservative
-fallback favors preserving gel content over removing background. One supplied
-real gel and generated cases have been verified; additional real examples are
-needed to assess how well the detector generalizes.
+fallback favors preserving gel content over removing background. Five supplied
+real gels and generated cases have been verified, with one real gel reserved
+from tuning. This is a small validation set, so broader generalization still
+needs additional examples.
 
 The previous preview is replaced by a processing message during upload. Only
 the finished crop (or the full-frame fallback) is then shown. The original TIFF
@@ -92,15 +99,23 @@ Generated fixtures cover TIFF decoding, original-byte preservation, PNG preview
 pixel values, image proportions, and upload/replace/clear behavior. Crop tests
 include known gel masks, illumination gradients, wells and bands, tilted corners,
 peripheral dark objects, missing edges, nested rectangles, and uncertainty
-fallbacks. Integration tests cover exact 16-bit/RGBA crop pixels, TIFF orientation,
+fallbacks. Sensitivity regressions cover smooth background shading, local
+artifacts, faint/blurred outer rectangles, obscured edges, and physical gel
+extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
+TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `uv run --locked pytest -q`: 134 passed.
-- Browser verification passed for the supplied TIFF and for the full-frame
-  fallback on an image without a reliable gel boundary. No crop controls are
-  displayed.
+- `uv run --locked pytest -q`: 158 passed.
+- All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
+  five). Four were used for tuning; one was reserved for validation and
+  retained its previously accepted bounds. Visual review confirms the visible
+  gel remains enclosed in each crop, and decoded preview pixels exactly match
+  the source region. Original file hashes and retained upload bytes are unchanged.
+- Browser verification covers TIFF upload and replacement, including previously
+  rejected gels, plus the full-frame fallback when a reliable boundary is absent.
+  No crop controls are displayed.
 
-The supplied 2749 × 2199 example produces a 1301 × 2013 crop with bounds
+The first supplied 2749 × 2199 example still produces a 1301 × 2013 crop with bounds
 `(837, 102, 2138, 2115)`, retaining the gel and a small surrounding margin. Private
 gel files and generated previews are excluded from Git.
 

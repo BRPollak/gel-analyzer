@@ -16,6 +16,9 @@ _ANALYSIS_LIMIT = 768
 _MIN_STEP = 0.06
 _MIN_SUPPORT = 0.90
 _MARGIN_FRACTION = 0.03
+_MIN_OUTER_STEP = 0.025
+_MIN_EDGE_LOCALIZATION = 0.65
+_MIN_OUTER_SUPPORT = 0.75
 
 
 @dataclass(frozen=True)
@@ -25,14 +28,15 @@ class _Edge:
     slope: float
 
 
-def _step_response(profile: np.ndarray) -> np.ndarray:
-    """Measure a step across eight analysis pixels after mild noise smoothing."""
+def _step_response(profile: np.ndarray, radius: int = 4) -> np.ndarray:
+    """Measure a step across a chosen scale after mild noise smoothing."""
     smooth = np.convolve(np.pad(profile, 2, mode="edge"), np.ones(5) / 5, mode="valid")
-    padded = np.pad(smooth, 4, mode="edge")
-    return padded[8:] - padded[:-8]
+    padded = np.pad(smooth, radius, mode="edge")
+    return padded[2 * radius :] - padded[: -2 * radius]
 
 
-def _initial_edge(profile: np.ndarray, sign: int, near: bool) -> int | None:
+def _edge_response(profile: np.ndarray, sign: int) -> np.ndarray:
+    """Require a sustained brightness step rather than a thin band or dark rim."""
     size = len(profile)
     response = _step_response(profile) * sign
     padded = np.pad(profile, 14, mode="edge")
@@ -42,9 +46,23 @@ def _initial_edge(profile: np.ndarray, sign: int, near: bool) -> int | None:
     after = np.median(
         [padded[14 + offset : 14 + offset + size] for offset in range(6, 14)], axis=0
     )
-    # Bands can have a stronger step than the physical gel. Require the same
-    # sustained contrast here as in tracing, before ranking candidate edges.
-    response = np.minimum(response, (after - before) * sign)
+    return np.minimum(response, (after - before) * sign)
+
+
+def _localized_response(profile: np.ndarray, sign: int) -> np.ndarray:
+    """Separate localized boundaries from broad, smooth illumination changes.
+
+    A sharp step has similar contrast across short and long windows. Gradual
+    changes grow with window width; blurred physical edges are checked separately.
+    """
+    response = _edge_response(profile, sign)
+    broad = _step_response(profile, radius=16) * sign
+    return np.where(response >= _MIN_EDGE_LOCALIZATION * broad, response, 0)
+
+
+def _initial_edge(profile: np.ndarray, sign: int, near: bool) -> int | None:
+    size = len(profile)
+    response = _edge_response(profile, sign)
     start, stop = (int(size * 0.02), int(size * 0.46)) if near else (
         int(size * 0.54), int(size * 0.98)
     )
@@ -52,23 +70,22 @@ def _initial_edge(profile: np.ndarray, sign: int, near: bool) -> int | None:
     if response[index] < _MIN_STEP:
         return None
 
-    # An outer transition may be the actual gel boundary while a stronger inner
-    # rectangle is a band or shadow. Do not choose the inner rectangle blindly.
-    gap = max(10, int(size * 0.04))
-    outer = response[start : max(start, index - gap)] if near else response[
-        min(stop, index + gap) : stop
-    ]
-    if outer.size and np.max(outer) > 0.025:
-        return None
     return index
 
 
 def _trace_edge(
-    pixels: np.ndarray, base: int, start: int, stop: int, axis: int, sign: int
+    pixels: np.ndarray, base: int, start: int, stop: int, axis: int, sign: int,
+    *, outer_range: tuple[int, int] | None = None, localized: bool = True,
 ) -> _Edge | None:
     """Require a sustained, nearly straight boundary along almost the whole side."""
     size = pixels.shape[axis]
     search = max(6, int(size * 0.07))
+    # An alternative must be traced independently; never let its search window
+    # jump inward to the already detected physical gel edge.
+    if outer_range is not None:
+        search = max(3, int(size * 0.02))
+    minimum_step = _MIN_STEP if outer_range is None else _MIN_OUTER_STEP
+    minimum_support = _MIN_SUPPORT if outer_range is None else _MIN_OUTER_SUPPORT
     traces = []
     positions = np.linspace(
         start + (stop - start) * 0.04, stop - (stop - start) * 0.04, 41
@@ -79,8 +96,16 @@ def _trace_edge(
             profile = np.median(pixels[:, max(0, center - 2) : center + 3], axis=1)
         else:
             profile = np.median(pixels[max(0, center - 2) : center + 3, :], axis=0)
-        response = _step_response(profile) * sign
+        response = (
+            _step_response(profile) * sign
+            if outer_range is None else (
+                _localized_response(profile, sign) if localized
+                else _edge_response(profile, sign)
+            )
+        )
         low, high = max(8, base - search), min(size - 8, base + search)
+        if outer_range is not None:
+            low, high = max(low, outer_range[0]), min(high, outer_range[1])
         if high <= low:
             return None
         index = low + int(np.argmax(response[low:high]))
@@ -92,13 +117,13 @@ def _trace_edge(
         traces.append((position, index, min(response[index], sustained)))
 
     samples = np.asarray(traces)
-    strong = samples[:, 2] > _MIN_STEP
-    if np.mean(strong) < _MIN_SUPPORT:
+    strong = samples[:, 2] > minimum_step
+    if np.mean(strong) < minimum_support:
         return None
     line = np.polyfit(samples[strong, 0], samples[strong, 1], 1)
     errors = np.abs(np.polyval(line, samples[:, 0]) - samples[:, 1])
     valid = strong & (errors < max(3, size * 0.01))
-    if np.mean(valid) < _MIN_SUPPORT:
+    if np.mean(valid) < minimum_support:
         return None
     line = np.polyfit(samples[valid, 0], samples[valid, 1], 1)
     # Include observed extrema and extrapolated corners; a tilted gel must not
@@ -107,6 +132,75 @@ def _trace_edge(
     # every strong observation in the enclosure, including those outliers.
     extents = np.concatenate((np.polyval(line, [start, stop]), samples[strong, 1]))
     return _Edge(float(extents.min()), float(extents.max()), float(line[0]))
+
+
+def _has_competing_outer_edge(
+    pixels: np.ndarray, profile: np.ndarray, base: int, start: int, stop: int,
+    axis: int, sign: int, near: bool, *, localized: bool = True,
+    require_termination: bool = False,
+) -> bool:
+    """Reject a smaller crop only for a supported alternative outer boundary."""
+    size = len(profile)
+    gap = max(10, int(size * 0.04))
+    low, high = (
+        (int(size * 0.02), base - gap)
+        if near else (base + gap, int(size * 0.98))
+    )
+    if high <= low:
+        return False
+    response = (
+        _localized_response(profile, sign) if localized else _edge_response(profile, sign)
+    )
+    candidates = np.flatnonzero(response[low:high] > _MIN_OUTER_STEP) + low
+    if not candidates.size:
+        return False
+    groups = np.split(candidates, np.flatnonzero(np.diff(candidates) > 1) + 1)
+    # Many competing structures are themselves a reason to keep the full frame.
+    if len(groups) > 8:
+        return True
+    for group in groups:
+        index = int(group[np.argmax(response[group])])
+        if _trace_edge(
+            pixels, index, start, stop, axis, sign, outer_range=(low, high),
+            localized=localized,
+        ) is not None:
+            if not require_termination or not _continues_outside_gel(
+                pixels, index, start, stop, axis, sign, low, high
+            ):
+                return True
+    return False
+
+
+def _continues_outside_gel(
+    pixels: np.ndarray, index: int, start: int, stop: int, axis: int, sign: int,
+    low: int, high: int,
+) -> bool:
+    """A broad lighting transition can continue beyond the gel's end corners.
+
+    Check several strips beyond either end, clear of the edge-smoothing window.
+    A broad alternative confined to the gel's span could be a blurred physical
+    extension and must not be discarded. Missing exterior evidence stays unsafe.
+    """
+    across = pixels.shape[1 - axis]
+    radius = max(3, int(pixels.shape[axis] * 0.01))
+    low, high = max(low, index - radius), min(high, index + radius + 1)
+    for positions in (
+        [start - offset for offset in (20, 24, 28)],
+        [stop + offset for offset in (20, 24, 28)],
+    ):
+        support = []
+        for center in positions:
+            if center < 2 or center >= across - 2:
+                continue
+            if axis == 0:
+                profile = np.median(pixels[:, center - 2 : center + 3], axis=1)
+            else:
+                profile = np.median(pixels[center - 2 : center + 3, :], axis=0)
+            response = _edge_response(profile, sign)
+            support.append(np.max(response[low:high]) > _MIN_OUTER_STEP)
+        if len(support) == 3 and all(support):
+            return True
+    return False
 
 
 def find_gel_crop(image: Image.Image) -> tuple[int, int, int, int]:
@@ -164,6 +258,30 @@ def find_gel_crop(image: Image.Image) -> tuple[int, int, int, int]:
         or abs(top_edge.slope - bottom_edge.slope) > 0.05
     ):
         return full_frame
+
+    # A weak projection alone can be background shading. Require an alternative
+    # to look like an actual edge and persist along the side before rejecting.
+    sides = (
+        (horizontal, left, top, bottom, 1, -1, True),
+        (vertical, top, left, right, 0, -1, True),
+        (horizontal, right, top, bottom, 1, 1, False),
+        (vertical, bottom, left, right, 0, 1, False),
+    )
+    for side in sides:
+        if _has_competing_outer_edge(pixels, *side):
+            return full_frame
+
+    # Blur can soften a physical boundary too. Multiple broad outer sides, or a
+    # single broad side that ends at the gel, may belong to a larger enclosure.
+    # Keep the frame rather than trusting the sharper inner region in that case.
+    broad_sides = 0
+    for side in sides:
+        if _has_competing_outer_edge(pixels, *side, localized=False):
+            broad_sides += 1
+            if broad_sides >= 2 or _has_competing_outer_edge(
+                pixels, *side, localized=False, require_termination=True
+            ):
+                return full_frame
 
     bounds = (left_edge.low, top_edge.low, right_edge.high, bottom_edge.high)
     # A boundary at the frame edge has no supporting exterior; keep everything.
