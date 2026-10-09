@@ -11,11 +11,12 @@ from uuid import uuid4
 from PIL import Image
 import streamlit as st
 
-from . import lane_crop
+from . import annotation_ui, lane_crop
 from .wells import SelectionError, validate_line
 
 
 def reset_lane_review() -> None:
+    annotation_ui.reset_annotations()
     st.session_state.lane_stage = None
     st.session_state.lane_wells = ()
     st.session_state.lane_right = None
@@ -44,6 +45,7 @@ def _set_stage(stage: str) -> None:
     st.session_state.lane_revision = 0
     st.session_state.lane_crop = None
     st.session_state.lane_error = None
+    annotation_ui.invalidate_confirmation()
 
 
 def start_lane_review() -> None:
@@ -61,6 +63,7 @@ def start_lane_review() -> None:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_source = gel
+    annotation_ui.reset_annotations()
     st.session_state.lane_wells = wells
     st.session_state.lane_right = gel.preview_width
     # Freeze the original guide, including uncertain candidates, while the
@@ -116,6 +119,7 @@ def accept_lane_event(event: object) -> None:
     st.session_state.lane_error = None
     st.session_state.lane_crop = None
     if action == "delete":
+        annotation_ui.delete_lane_label(index)
         st.session_state.lane_wells = wells[:index] + wells[index + 1:]
         # A structural edit invalidates every event from the old collection,
         # including clicks which still use its former lane numbering.
@@ -143,6 +147,7 @@ def add_lane() -> None:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_wells = wells
+    annotation_ui.add_lane_label(len(wells))
     _set_stage("borders")
 
 
@@ -157,6 +162,7 @@ def confirm_lane_borders() -> None:
 def back_to_lane_borders() -> None:
     if st.session_state.lane_stage not in ("extent", "cropped"):
         return
+    annotation_ui.consume_latest_event()
     _consume_latest_event()
     if _confirmed_image() is st.session_state.lane_source and st.session_state.lane_wells:
         _set_stage("borders")
@@ -193,11 +199,9 @@ def show_lane_review(gel) -> None:
     stage = st.session_state.lane_stage
     if stage == "cropped":
         crop = st.session_state.lane_crop
-        st.subheader("Cropped gel")
-        st.image(BytesIO(crop.preview_png), width=crop.width, output_format="PNG")
         count = len(crop.lanes)
-        st.success(f"Crop confirmed · {count} lane{'s' if count != 1 else ''} · {crop.width:,} × {crop.height:,} pixels")
-        st.caption("The crop includes the space between lanes, a small margin left of the wells, and a buffer above and below the outer lanes.")
+        st.caption(f"Crop confirmed · {count} lane{'s' if count != 1 else ''}")
+        annotation_ui.show_annotations(crop, gel.filename)
         st.button(
             "Revise lanes and crop", key="revise_lane_crop", on_click=back_to_lane_borders,
         )

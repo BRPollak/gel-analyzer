@@ -17,8 +17,9 @@ clear the image at any time. After confirming orientation, define a line through
 selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
-Individual band identification, ladder analysis, labels, and export remain later
-steps; band contrast already helps refine automatic lane coverage.
+After cropping, annotate lanes and two independent sets of groups, then confirm
+and download the composed PNG. Individual band identification and ladder analysis
+remain later steps; band contrast already helps refine automatic lane coverage.
 
 ## Run locally
 
@@ -38,7 +39,8 @@ terminal to stop the server.
 
 1. Browse for or drop one single-image TIFF into **Choose a gel image**.
 2. Wait for the automatic crop, then inspect the preview and its cropped pixel
-   dimensions. Large images fit the page width; small images are not enlarged.
+   dimensions. Large images fit the screen's width and height; small images are
+   not enlarged. New previews are brought into view automatically.
 3. Click **Rotate and Orient** to fit the gel outline and preview its orientation.
 4. Inspect the result, then click **Confirm** at the bottom left of the preview.
    Both orientation buttons disappear, and the confirmed image stays displayed.
@@ -54,10 +56,20 @@ terminal to stop the server.
    lane borders**. **Add lane** is also available when detection finds no wells.
 8. Drag the shared right boundary to the farthest point you want to keep.
    Click **Confirm lanes and crop** to create the cropped gel preview.
-9. Use **Revise lanes and crop** to adjust the existing review, or **Edit well
+9. Click a lane label beside the crop and type directly on the preview. The
+   compact toolbar formats the selected label. Expand **Lane groups** to create
+   groups in either set. Click
+   **Confirm annotations** to compose the final image. **Edit annotations**
+   returns to the saved labels and groups; **Download annotated PNG** saves it.
+10. Use **Revise lanes and crop** to adjust the existing review, or **Edit well
    line** to detect again. **Reset points** starts a new guide on the same gel.
-10. Choose another TIFF to replace the image, even if it has the same filename.
+11. Choose another TIFF to replace the image, even if it has the same filename.
    Use **Clear image** or the uploader's remove button to start again.
+
+All previews adapt to the browser window without changing source pixels, lane
+coordinates, or download resolution. The annotation editor defaults to **Fit
+screen**; choose a percentage under **Zoom** to inspect it more closely with
+scrolling. Editing controls and the rest of the page remain accessible normally.
 
 ### Define wells and detect lanes
 
@@ -169,6 +181,54 @@ expanded revision recovers the original pixels and never crops an earlier crop.
 Changing the image/orientation or editing the well guide clears this review and
 its final crop. Late events from earlier stages cannot restore old geometry.
 
+### Lane annotations
+
+The app uses a wide workspace. Upload controls and optional detection settings
+can be expanded when needed, leaving more room for the gel.
+
+Crop confirmation opens an annotation editor using the crop's translated lane
+coordinates. Click a right-aligned Arial label beside the gel to edit its text
+in place. The compact toolbar formats the selected label with bold, italic
+(including both together), and color. There is no separate lane-text form.
+Formatting controls stay outside the final image; the selected label stays
+highlighted while you use them. Group creation and membership controls are in
+the collapsible **Lane groups** section below the preview.
+
+The initial font size is 80% of the average cropped lane height, rounded to a
+whole pixel. It applies to lane and group labels, and can be adjusted from
+1–4096 pixels. **Auto size** reapplies that calculation to existing annotations
+without changing their text or groups. Saved font choices survive reediting and
+crop revisions.
+
+Groups have editable labels and lane memberships. Set 1 appears immediately left
+of the lane labels; Set 2 appears farther left, and both remain visible. A bracket
+spans the selected lanes' outer bounds, with ticks at the selected lane centers.
+Ticks identify membership when the selected lanes are not consecutive. The group
+label sits to the bracket's left, right-aligned and vertically centered. Groups
+may be renamed, reformatted, or deleted. Overlapping groups
+within a set receive separate horizontal tracks so their labels and brackets
+remain distinct.
+
+The left margin grows to fit measured Arial text, including bold/italic overhang.
+Outer padding protects annotations near the image edges. Closely spaced labels
+use additional horizontal tracks while retaining their font size and lane centers.
+Preview zoom only changes the on-screen view: the final gel
+region retains its crop dimensions and is never resampled to make room for labels.
+
+**Confirm annotations** captures the same canvas used for the live preview into
+a new PNG containing the gel, labels, and brackets. Text-box borders, selection
+indicators, and editing controls are excluded. **Edit annotations** keeps every
+label, format, and group. Revising crop bounds retains annotations; deleting a
+lane removes its label and group membership, and adding a lane creates a new
+label. Replacing the image, redefining the well guide, or restarting detection
+clears annotations along with the lane geometry.
+
+Composition uses the browser's Arial font and display-color canvas (8-bit RGBA),
+not the original 16-bit grayscale data. The original TIFF and lossless crop remain
+unchanged. Arial must be installed on the browser's system for exact typography.
+All editing and composition stay local to the app/browser session, without an
+external service or font download.
+
 ### Rotate and orient
 
 The button starts from the first cropped image and fits a tilted rectangle to
@@ -243,6 +303,8 @@ display scaling and orientation never alter the original TIFF bytes.
 ```sh
 uv run pytest
 node --test tests/test_well_component.mjs
+node --test tests/test_annotation_layout.mjs
+node --test tests/test_preview_fit.mjs
 ```
 
 The JavaScript unit tests require Node.js 18 or newer. Running the app itself
@@ -266,6 +328,10 @@ events before accepting geometry, and only a confirmation stages detection.
 `gel_analyzer/lane_crop.py` independently validates manual geometry, proposes
 appended lanes, and makes a lossless enclosing crop. `gel_analyzer/lane_review_ui.py`
 manages the two review stages, lane insertion/deletion, and confirmation callbacks.
+`gel_analyzer/annotation_ui.py` retains annotation drafts and confirmed images;
+`annotations.py` validates label, group, and PNG events. The local
+`annotation_component_frontend/` editor measures and draws the same canvas for
+both live preview and final PNG, with token/revision checks guarding stale events.
 Structural edits rotate the component token so delayed events cannot restore
 deleted lanes or target an outdated lane number. The overlay's `lane_review.mjs`
 handles trash buttons and axis-constrained border and extent dragging with the
@@ -298,15 +364,23 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **503 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **576 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
-  lifecycle, manual review, lane insertion/deletion, and app workflow tests.
+  lifecycle, manual review, lane insertion/deletion, annotation validation,
+  confirmation/editing, and app workflow tests.
   The nine original-TIFF sample cases require `GEL_ANALYZER_EXAMPLE_TIFF`;
   the saved oriented sample was separately checked across all nine guides.
 - `node --test tests/test_well_component.mjs`: **9 passed**, checking scaled and
   offset coordinates, edge clipping, endpoint order, handle sizing, constrained
   border/right-edge movement, independent targeting of narrow-lane handles,
   responsive trash buttons, and mouse/keyboard deletion events.
+- `node --test tests/test_annotation_layout.mjs`: **11 passed**, checking native
+  lane alignment, both group sets, overlapping groups, changing memberships,
+  bold/italic text metrics, lane-based font sizing, edge padding, dense lanes,
+  and clean composition.
+- `node --test tests/test_preview_fit.mjs`: **6 passed**, checking portrait and
+  landscape fitting, viewport-height budgets, lane-control gutters, native
+  pointer coordinates, and protection against iframe resize feedback.
 - All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
   five). Four were used for tuning; one was reserved for validation and
   retained its previously accepted bounds. Visual review confirms the visible
@@ -315,6 +389,35 @@ completed-preview rendering, and detection only once per upload.
 - Browser verification covers TIFF upload and replacement, including previously
   rejected gels, plus the full-frame fallback when a reliable boundary is absent.
   No initial outer-crop controls are displayed.
+
+Annotation browser verification covers the actual upload → orientation → lane
+review → crop → annotation workflow on the generated four-lane fixture. Lane
+and group labels were edited, bold and italic combined, colors changed, both
+sets displayed together, an overlapping sparse group added/edited/deleted, and
+confirmation followed by reediting. A rapid edit followed by crop revision
+retained the last text. At a 420-pixel viewport the 377-pixel editor fits the page,
+and native-size preview scrolling stays inside the editor.
+The 498 × 265 gel remains the same size within the 1051 × 289 composed image;
+its rendered pixels match the browser-decoded crop exactly. The confirmed PNG
+matches the clean preview pixel for pixel and contains no editing controls.
+Screenshots and a downloaded example are in ignored `output/playwright/annotations-*`.
+
+The simplified editor was also checked in a 1200-pixel desktop viewport: the
+workspace is 1029 pixels wide (previously about 704), and formatting fits in a
+single 52-pixel toolbar above the preview. Direct typing, combined styles,
+caret retention, arrow navigation, in-preview group renaming, collapsed group
+creation/membership editing, and **Auto size** were exercised in Chrome.
+The four-lane fixture averages 25 pixels per lane and uses a 20-pixel font;
+128-pixel manual labels were also verified without the former size cap.
+
+Screen-fit verification used a 600 × 3000 portrait TIFF and a 4000 × 700
+landscape TIFF, preserving their native dimensions while fitting both desktop
+and shorter browser windows. At 900 × 450, clicks on the scaled well overlay
+still mapped to the intended source pixels and detected all four fixture lanes.
+The annotation editor had no internal scrolling in Fit screen mode at 420 × 720;
+100% zoom retained scrolling. Both group sets survived confirmation and reediting,
+and the 869 × 289 confirmed PNG matched the native canvas pixel for pixel.
+The toolbar fits the 377-pixel mobile content area without page overflow.
 
 Orientation tests cover both tilt directions, fitted boundaries, distinctive
 side markers, unsigned 16-bit values, color channels, and uncertain outlines.
@@ -433,9 +536,9 @@ gel files and generated previews are excluded from Git.
 4. Shared right-edge selection and confirmed cropping around lanes (implemented)
 5. Ladder-band detection, with manual corrections
 6. Ladder presets and size markings
-7. Editable lane labels
-8. Finished PNG export of the adjusted and annotated image, with selectable
-   pixel dimensions and print-resolution metadata (DPI)
+7. Editable lane labels and two group sets (implemented after cropping)
+8. Annotated PNG export (implemented at native crop dimensions); selectable
+   pixel dimensions and print-resolution metadata (DPI) remain future work
 
 Build and verify one version at a time. Detection versions will use separate
 tuning and validation gels. Named gel profiles will remain separate from ladder

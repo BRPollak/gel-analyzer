@@ -1,0 +1,96 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {fitPreviewGeometry, outerViewportHeight} from "../gel_analyzer/well_component_frontend/fit_geometry.mjs";
+import {laneDeleteLayout, pointerToImage} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+
+test("landscape and portrait previews fit both dimensions without changing source geometry", () => {
+  for (const [imageWidth, imageHeight] of [[2400, 800], [800, 2400], [1600, 1600]]) {
+    const fit = fitPreviewGeometry({imageWidth, imageHeight, availableWidth: 900,
+      viewportHeight: 800, chromeHeight: 60});
+    assert.ok(fit.scale <= 1);
+    assert.ok(fit.width <= 900);
+    assert.ok(fit.height <= 640);
+    assert.equal(fit.width / imageWidth, fit.height / imageHeight);
+    assert.equal(fit.wrapperWidth, fit.width);
+    assert.equal(fit.totalHeight, fit.height);
+  }
+});
+
+test("small images stay at native size and the lane-review gutter is additional width", () => {
+  const fit = fitPreviewGeometry({imageWidth: 280, imageHeight: 180, availableWidth: 1000,
+    viewportHeight: 900, chromeHeight: 60, reviewMode: "borders", laneCount: 4});
+  assert.equal(fit.scale, 1);
+  assert.equal(fit.width, 280);
+  assert.equal(fit.height, 180);
+  assert.equal(fit.wrapperWidth, 320);
+  assert.equal(fit.rightGutter, 40);
+  assert.equal(fit.overflowHeight, 0);
+});
+
+test("reserved gutter participates in width fitting and status text participates in height fitting", () => {
+  const input = {imageWidth: 2000, imageHeight: 1000, availableWidth: 540,
+    viewportHeight: 600, chromeHeight: 80, reviewMode: "borders", laneCount: 6};
+  const narrow = fitPreviewGeometry(input);
+  assert.equal(narrow.width, 500);
+  assert.equal(narrow.wrapperWidth, 540);
+  assert.equal(narrow.height, 250);
+  const tall = fitPreviewGeometry({...input, imageWidth: 500, imageHeight: 2000});
+  assert.equal(tall.height, 420);
+  assert.equal(tall.width, 105);
+  const moreInstructions = fitPreviewGeometry({...input, imageWidth: 500, imageHeight: 2000, chromeHeight: 140});
+  assert.equal(moreInstructions.height, 360);
+});
+
+test("lane-delete overflow is counted once and matches its actual native-coordinate layout", () => {
+  const lanes = Array.from({length: 10}, (_, index) => [0, index * 2, 2000, index * 2 + 1]);
+  const fit = fitPreviewGeometry({imageWidth: 2000, imageHeight: 800, availableWidth: 540,
+    viewportHeight: 800, chromeHeight: 60, reviewMode: "borders", laneCount: lanes.length});
+  const controls = laneDeleteLayout(lanes, 800, 1 / fit.scale);
+  assert.equal(fit.height, 200);
+  assert.equal(fit.overflowHeight, controls.overflow * fit.scale);
+  assert.equal(fit.totalHeight, 320);
+  assert.equal(fit.controlsOverflow, false);
+  assert.ok(fit.totalHeight <= fit.heightBudget);
+
+  const many = fitPreviewGeometry({imageWidth: 2000, imageHeight: 800, availableWidth: 540,
+    viewportHeight: 600, chromeHeight: 100, reviewMode: "borders", laneCount: 30});
+  assert.ok(many.height <= many.heightBudget, "the gel always fits even when many accessible controls need more room");
+  assert.equal(many.totalHeight, 30 * 32);
+  assert.equal(many.controlsOverflow, true);
+});
+
+test("pointer mapping returns the same source pixels after viewport and gutter resizing", () => {
+  const imageWidth = 1600;
+  const imageHeight = 900;
+  for (const availableWidth of [350, 900, 2000]) {
+    for (const viewportHeight of [500, 900]) {
+      const fit = fitPreviewGeometry({imageWidth, imageHeight, availableWidth, viewportHeight,
+        chromeHeight: 70, reviewMode: "borders", laneCount: 4});
+      const rect = {left: 27, top: 81, width: fit.width, height: fit.height};
+      const point = pointerToImage(rect.left + 624 * fit.scale, rect.top + 384 * fit.scale,
+        rect, imageWidth, imageHeight);
+      assert.ok(Math.abs(point[0] - 624) < 1e-10);
+      assert.ok(Math.abs(point[1] - 384) < 1e-10);
+      assert.deepEqual(pointerToImage(rect.left, rect.top, rect, imageWidth, imageHeight), [0, 0]);
+    }
+  }
+});
+
+test("parent viewport is stable when iframe height changes and cross-origin fallback avoids feedback", () => {
+  const parent = {innerHeight: 900, visualViewport: {height: 820}};
+  const host = {parent, innerHeight: 10, screen: {availHeight: 1000}, outerHeight: 1100};
+  assert.equal(outerViewportHeight(host), 820);
+  host.innerHeight = 600;
+  assert.equal(outerViewportHeight(host), 820);
+  delete parent.visualViewport;
+  assert.equal(outerViewportHeight(host), 900);
+  Object.defineProperty(host, "parent", {get() { throw new Error("cross origin"); }});
+  assert.equal(outerViewportHeight(host), 1000);
+  host.screen.availHeight = 0;
+  assert.equal(outerViewportHeight(host), 1100);
+  host.outerHeight = 0;
+  assert.equal(outerViewportHeight(host), 800);
+  const standalone = {innerHeight: 700, screen: {availHeight: 1000}};
+  standalone.parent = standalone;
+  assert.equal(outerViewportHeight(standalone), 700);
+});

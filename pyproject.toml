@@ -7,7 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=2,<3",
     "pillow>=11,<13",
-    "streamlit>=1.50,<2",
+    "streamlit>=1.65,<2",
 ]
 
 [dependency-groups]
