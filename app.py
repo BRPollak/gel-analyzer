@@ -1,10 +1,10 @@
-"""Version 1: a session-only viewer for one unmodified PNG gel image."""
+"""Version 1: a session-only TIFF gel viewer with a PNG browser preview."""
 
 from io import BytesIO
 
 import streamlit as st
 
-from gel_analyzer.image_io import GelImage, ImageValidationError, load_png
+from gel_analyzer.image_io import GelImage, ImageValidationError, load_tiff
 
 
 def clear_image() -> None:
@@ -22,7 +22,7 @@ def read_upload(uploader_key: str) -> None:
     if uploaded_file is None:
         return
     try:
-        st.session_state.gel_image = load_png(
+        st.session_state.gel_image = load_tiff(
             uploaded_file.getvalue(), uploaded_file.name
         )
     except ImageValidationError as exc:
@@ -41,17 +41,17 @@ def main() -> None:
 
     st.caption("VERSION 1 · UPLOAD & DISPLAY")
     st.title("Agarose Gel Analyzer")
-    st.write("Upload a gel image to view it at its original proportions.")
+    st.write("Upload a TIFF gel image to view it at its original proportions.")
 
     uploader_key = f"gel_upload_{st.session_state.uploader_generation}"
     st.file_uploader(
         "Choose a gel image",
-        type=["png"],
+        type=["tif", "tiff"],
         accept_multiple_files=False,
         key=uploader_key,
         on_change=read_upload,
         args=(uploader_key,),
-        help="Upload one static PNG. Choose another file to replace it.",
+        help="Upload one single-image TIFF (.tif or .tiff). Choose another file to replace it.",
     )
     st.button(
         "Clear image",
@@ -73,7 +73,7 @@ def main() -> None:
     st.subheader("Gel preview")
     st.text(f"{gel.filename} · {gel.width:,} × {gel.height:,} pixels")
     st.image(
-        BytesIO(gel.source_bytes),
+        BytesIO(gel.preview_png),
         # Explicit source width prevents Streamlit's implicit 1460 px resampling.
         # The browser still caps the displayed width to the available space.
         width=gel.width,

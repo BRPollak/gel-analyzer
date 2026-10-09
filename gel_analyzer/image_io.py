@@ -3,84 +3,89 @@
 from dataclasses import dataclass
 from io import BytesIO
 import warnings
-import zlib
 
 from PIL import Image
 
 
 class ImageValidationError(ValueError):
-    """An uploaded file cannot be used as a static PNG gel image."""
+    """An uploaded file cannot be used as a single-image TIFF gel."""
 
 
 @dataclass(frozen=True, slots=True)
 class GelImage:
-    """An immutable original PNG and the metadata of its decoded image."""
+    """An original TIFF and a separate, lossless PNG for browser display.
+
+    Dimensions describe the decoded image, including TIFF orientation metadata.
+    The original bytes remain the source for future processing and export.
+    """
 
     source_bytes: bytes
     filename: str
     width: int
     height: int
     mode: str
+    preview_png: bytes
 
 
-_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-_IEND_CRC = b"\xaeB`\x82"
-_CORRUPT_MESSAGE = "This PNG is incomplete or damaged. Please choose another image."
+_PREVIEW_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B", "I;16L"}
+_CORRUPT_MESSAGE = "This TIFF is incomplete or damaged, or cannot be decoded. Please choose another image."
+_UNSUPPORTED_MESSAGE = (
+    "This TIFF uses an unsupported pixel format. Please choose an unsigned "
+    "8-bit grayscale/color or 16-bit grayscale TIFF."
+)
 
 
-def _validate_container(data: bytes) -> None:
-    """Check chunk completeness, including the IEND CRC that Pillow skips."""
-    if not data.startswith(_PNG_SIGNATURE):
-        raise ImageValidationError("Please choose a PNG image. This file is not a PNG.")
+def load_tiff(data: bytes, filename: str) -> GelImage:
+    """Decode one TIFF and encode a PNG preview without changing source bytes.
 
-    offset = len(_PNG_SIGNATURE)
-    while offset + 12 <= len(data):
-        length = int.from_bytes(data[offset : offset + 4], "big")
-        chunk_type = data[offset + 4 : offset + 8]
-        chunk_end = offset + length + 12
-        if chunk_end > len(data):
-            break
-        if chunk_type == b"acTL":
-            raise ImageValidationError(
-                "Animated PNGs are not supported. Please choose a static PNG image."
-            )
-        if chunk_type == b"IEND":
-            if length == 0 and data[offset + 8 : chunk_end] == _IEND_CRC:
-                return
-            break
-        offset = chunk_end
-
-    raise ImageValidationError(_CORRUPT_MESSAGE)
-
-
-def load_png(data: bytes, filename: str) -> GelImage:
-    """Validate and fully decode one static PNG while preserving its bytes.
-
-    No image transformations, display adjustments, or filesystem writes occur.
-    The filename is metadata only; actual file contents determine acceptance.
+    No contrast adjustment, normalization, resizing, or filesystem writes occur.
+    Pillow honors TIFF orientation during decoding; do not transpose it again.
     """
-    _validate_container(data)
-
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
+            # Pillow may otherwise keep reading after corrupt TIFF metadata.
+            warnings.simplefilter("error", UserWarning)
             with Image.open(BytesIO(data)) as image:
-                if image.format != "PNG":
-                    raise ImageValidationError("Please choose a PNG image.")
-                image.verify()
+                if image.format != "TIFF":
+                    raise ImageValidationError(
+                        "Please choose a TIFF image (.tif or .tiff). This file is not a TIFF."
+                    )
+                if image.n_frames != 1:
+                    raise ImageValidationError(
+                        "Multipage TIFFs are not supported yet. Please choose a single-image TIFF."
+                    )
 
-            # verify() consumes the stream; reopen it to actually decode pixels.
-            with Image.open(BytesIO(data)) as image:
+                # Pillow can reduce high-bit-depth color TIFFs to 8-bit on load.
+                # Check the TIFF tags first rather than silently lose precision.
+                bits = image.tag_v2.get(258, (1,))
+                samples = image.tag_v2.get(339, (1,))
+                if isinstance(bits, int):
+                    bits = (bits,)
+                if isinstance(samples, int):
+                    samples = (samples,)
+                if (
+                    any(sample != 1 for sample in samples)
+                    or max(bits) > 16
+                    or (len(bits) > 1 and max(bits) > 8)
+                    or image.mode not in _PREVIEW_MODES
+                ):
+                    raise ImageValidationError(_UNSUPPORTED_MESSAGE)
+
+                # TIFF verify() does not decode the pixels. load() also applies
+                # the file's orientation, so read size only after it completes.
                 image.load()
                 width, height = image.size
                 mode = image.mode
+                preview = BytesIO()
+                image.save(preview, format="PNG")
     except ImageValidationError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ImageValidationError(
-            "This PNG is too large to open safely. Please choose a smaller image."
+            "This TIFF is too large to open safely. Please choose a smaller image."
         ) from exc
-    except (OSError, SyntaxError, ValueError, EOFError, zlib.error) as exc:
+    except (OSError, SyntaxError, ValueError, EOFError, UserWarning) as exc:
         raise ImageValidationError(_CORRUPT_MESSAGE) from exc
 
     return GelImage(
@@ -89,4 +94,5 @@ def load_png(data: bytes, filename: str) -> GelImage:
         width=width,
         height=height,
         mode=mode,
+        preview_png=preview.getvalue(),
     )

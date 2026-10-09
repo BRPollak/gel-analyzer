@@ -1,8 +1,9 @@
 # Agarose Gel Analyzer
 
-Version 1 is a local viewer for one PNG gel image. Upload a file, inspect the full
+Version 1 is a local viewer for one TIFF gel image (`.tif` or `.tiff`). Upload a file, inspect the full
 image at its original proportions, replace it, or clear it. Rotation, cropping,
-detection, annotations, and export are planned for later versions.
+detection, annotations, and export are planned for later versions. The final
+annotated output will remain PNG, with selectable output resolution.
 
 ## Run locally
 
@@ -20,22 +21,28 @@ terminal to stop the server.
 
 ## Use
 
-1. Browse for or drop one static PNG into **Choose a gel image**.
+1. Browse for or drop one single-image TIFF into **Choose a gel image**.
 2. Inspect the preview and its original pixel dimensions. Large images fit the
    page width; small images are not enlarged.
-3. Choose another PNG to replace the image, even if it has the same filename.
+3. Choose another TIFF to replace the image, even if it has the same filename.
 4. Use **Clear image** or the uploader's remove button to start again.
 
 An invalid selection clears the previous preview and shows an error. Valid
-grayscale (including 16-bit), RGB, RGBA, and palette PNGs are supported. Animated
-PNGs are rejected. The standard Streamlit upload limit is 200 MB; Pillow's
-decompression protection also rejects exceptionally large decoded images.
+unsigned grayscale (including 16-bit in either byte order), 8-bit RGB/RGBA,
+palette, and bilevel TIFFs are supported. Common TIFF compression such as LZW
+and deflate is supported. Multipage TIFFs, floating-point/signed samples, and
+high-bit-depth color TIFFs are rejected explicitly rather than selecting a page
+or silently reducing precision. PNG is no longer an input format. The standard
+Streamlit upload limit is 200 MB; Pillow's decompression protection also rejects
+exceptionally large decoded images.
 
 Uploaded bytes are retained unchanged in the current browser session. The app
 does not save images to disk or send them to an external processing service.
-Refreshing the page or ending the session clears the image. The preview applies
-no contrast adjustment, normalization, rotation, or cropping. Browser display
-scaling does not alter the stored source image.
+Refreshing the page or ending the session clears the image. A separate lossless
+PNG is generated for the browser, preserving unsigned 16-bit grayscale values.
+The decoder honors TIFF orientation metadata; the app applies no additional
+rotation, contrast adjustment, normalization, or cropping. Browser display
+scaling does not alter the original TIFF.
 
 ## Development and verification
 
@@ -43,38 +50,40 @@ scaling does not alter the stored source image.
 uv run pytest
 ```
 
-The Streamlit entry point is `app.py`. `gel_analyzer/image_io.py` handles PNG
+The Streamlit entry point is `app.py`. `gel_analyzer/image_io.py` handles TIFF
 validation independently of Streamlit and returns an immutable `GelImage` with
-the original bytes, filename, dimensions, and image mode.
+the original bytes, filename, decoded dimensions, image mode, and a separate PNG
+preview. Later image adjustments and analysis must derive from the original
+TIFF, keeping this preview separate from the processing source.
 
 Before advancing to Version 2, review your own gel images in the running app.
 Generated fixtures check the mechanics but cannot replace that visual review.
 Keep private example images in the ignored `local-gels/` folder if desired.
 
-### Version 1 verification record
+### Version 1 verification
 
-- `uv run --locked pytest -q`: 41 passed (36 loader cases and 5 Streamlit
-  integration cases).
-- Browser checks passed with generated landscape, portrait, square, transparent,
-  and 16-bit grayscale PNGs. A 960 × 480 image displayed at 704 × 352 on desktop
-  and 358 × 179 in a 390-pixel-wide viewport; smaller images were not enlarged.
-- Same-filename replacement, invalid replacement without a stale preview,
-  clearing, and reuploading passed in the browser. Automated checks also cover
-  uploader removal and a 2000 × 1 image that previously triggered Streamlit's
-  implicit preview resampling.
-- Visual acceptance using real gel images is still pending. This checkpoint
-  implements Version 1 only.
+Generated fixtures cover TIFF decoding, original-byte preservation, PNG preview
+pixel values, image proportions, and upload/replace/clear behavior. Visual
+acceptance using real gel images is still pending; this checkpoint implements
+Version 1 only.
+
+- `uv run --locked pytest -q`: 72 passed.
+- Browser checks passed for LZW-compressed `.tif`, 16-bit big-endian `.tiff`,
+  replacement, invalid-file rejection without a stale preview, and recovery.
+- A 960 × 480 TIFF renders as a 704 × 352 PNG preview in the desktop layout,
+  preserving its proportions and keeping the original TIFF unchanged.
 
 ### Version roadmap
 
-1. Upload and display
+1. TIFF upload and display
 2. Orientation and basic cropping
 3. Automatic well and lane detection, with manual corrections
 4. Automatic cropping around selected lanes
 5. Ladder-band detection, with manual corrections
 6. Ladder presets and size markings
 7. Editable lane labels
-8. Finished PNG export
+8. Finished PNG export of the adjusted and annotated image, with selectable
+   pixel dimensions and print-resolution metadata (DPI)
 
 Build and verify one version at a time. Detection versions will use separate
 tuning and validation gels. Named gel profiles will remain separate from ladder

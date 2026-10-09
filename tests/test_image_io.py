@@ -1,121 +1,174 @@
-"""Generated images exercise real PNG parsing without storing gel fixtures."""
+"""Generated TIFFs exercise source preservation and the separate PNG preview."""
 
 from dataclasses import FrozenInstanceError
 from io import BytesIO
-import zlib
+import struct
 
-from PIL import Image
+from PIL import Image, TiffImagePlugin
 import pytest
 
-from gel_analyzer import ImageValidationError, load_png
+from gel_analyzer import ImageValidationError, load_tiff
 
 
-def make_png(mode="L", size=(31, 9), color=0):
+def make_tiff(mode="L", size=(31, 9), color=0, **save_options):
     output = BytesIO()
-    Image.new(mode, size, color).save(output, format="PNG")
+    Image.new(mode, size, color).save(output, format="TIFF", **save_options)
     return output.getvalue()
 
 
-@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B"])
 @pytest.mark.parametrize("size", [(31, 9), (9, 31), (12, 12)])
 def test_load_preserves_original_bytes_and_metadata(mode, size):
-    source = make_png(mode, size)
+    source = make_tiff(mode, size)
 
-    gel = load_png(source, "my gel.png")
+    gel = load_tiff(source, "my gel.tif")
 
     assert gel.source_bytes == source
-    assert gel.filename == "my gel.png"
+    assert gel.filename == "my gel.tif"
     assert (gel.width, gel.height) == size
     assert gel.mode == mode
+    assert gel.preview_png.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(BytesIO(gel.preview_png)) as preview:
+        preview.load()
+        assert preview.format == "PNG"
+        assert preview.size == size
     with pytest.raises(FrozenInstanceError):
         gel.width = 999
 
 
-def test_preserves_16_bit_grayscale_pixel_values():
-    source_image = Image.new("I;16", (3, 1))
-    source_image.putdata([0, 32768, 65535])
+@pytest.mark.parametrize("mode", ["I;16", "I;16B", "I;16L"])
+@pytest.mark.parametrize("compression", ["raw", "tiff_lzw", "tiff_adobe_deflate"])
+def test_preserves_16_bit_grayscale_values_in_source_and_preview(mode, compression):
+    values = [0, 256, 32768, 65535]
+    source_image = Image.new(mode, (len(values), 1))
+    source_image.putdata(values)
     output = BytesIO()
-    source_image.save(output, format="PNG")
+    source_image.save(output, format="TIFF", compression=compression)
 
-    gel = load_png(output.getvalue(), "high-bit-depth.png")
+    gel = load_tiff(output.getvalue(), "high-bit-depth.tiff")
 
-    with Image.open(BytesIO(gel.source_bytes)) as image:
-        assert [image.getpixel((x, 0)) for x in range(3)] == [0, 32768, 65535]
+    assert gel.source_bytes == output.getvalue()
+    for encoded_image in [gel.source_bytes, gel.preview_png]:
+        with Image.open(BytesIO(encoded_image)) as image:
+            assert [image.getpixel((x, 0)) for x in range(len(values))] == values
+
+
+@pytest.mark.parametrize(
+    "mode,color",
+    [("RGB", (37, 124, 211)), ("RGBA", (37, 124, 211, 42)), ("LA", (124, 42))],
+)
+def test_color_and_alpha_are_preserved_in_preview(mode, color):
+    gel = load_tiff(make_tiff(mode=mode, color=color), "color.tif")
+
+    with Image.open(BytesIO(gel.preview_png)) as preview:
+        assert preview.mode == mode
+        assert preview.getpixel((0, 0)) == color
+
+
+@pytest.mark.parametrize("compression", ["raw", "tiff_lzw", "tiff_adobe_deflate"])
+def test_tiff_orientation_is_applied_once_to_preview_and_dimensions(compression):
+    image = Image.new("L", (3, 2))
+    image.putdata([1, 2, 3, 4, 5, 6])
+    output = BytesIO()
+    image.save(output, format="TIFF", tiffinfo={274: 6}, compression=compression)
+    source = output.getvalue()
+
+    gel = load_tiff(source, "oriented.tif")
+    assert gel.source_bytes == source
+    assert (gel.width, gel.height) == (2, 3)
+    with Image.open(BytesIO(gel.preview_png)) as preview:
+        assert preview.size == (2, 3)
+        pixels = [preview.getpixel((x, y)) for y in range(3) for x in range(2)]
+        assert pixels == [4, 1, 5, 2, 6, 3]
+        assert preview.getexif().get(274, 1) == 1
 
 
 def test_different_images_with_same_filename_are_loaded_independently():
-    first = load_png(make_png(size=(7, 21)), "gel.png")
-    second = load_png(make_png(size=(40, 5), color=255), "gel.png")
+    first = load_tiff(make_tiff(size=(7, 21)), "gel.tif")
+    second = load_tiff(make_tiff(size=(40, 5), color=255), "gel.tif")
 
     assert (first.width, first.height) == (7, 21)
     assert (second.width, second.height) == (40, 5)
     assert first.source_bytes != second.source_bytes
+    assert first.preview_png != second.preview_png
 
 
-@pytest.mark.parametrize("source", [b"", b"not an image", b"\x89PNG\r\n\x1a\n"])
+@pytest.mark.parametrize("source", [b"", b"not an image", b"II*\x00", b"MM\x00*"])
 def test_rejects_empty_or_invalid_data(source):
     with pytest.raises(ImageValidationError):
-        load_png(source, "looks-valid.png")
+        load_tiff(source, "looks-valid.tif")
 
 
-def test_rejects_a_jpeg_disguised_as_png():
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def test_rejects_other_formats_disguised_as_tiff(format):
     output = BytesIO()
-    Image.new("RGB", (8, 8)).save(output, format="JPEG")
+    Image.new("RGB", (8, 8)).save(output, format=format)
 
-    with pytest.raises(ImageValidationError, match="not a PNG"):
-        load_png(output.getvalue(), "gel.png")
-
-
-@pytest.mark.parametrize("removed_bytes", [1, 12, 20])
-def test_rejects_truncated_png(removed_bytes):
-    with pytest.raises(ImageValidationError, match="incomplete or damaged"):
-        load_png(make_png()[:-removed_bytes], "truncated.png")
+    with pytest.raises(ImageValidationError, match="TIFF"):
+        load_tiff(output.getvalue(), "gel.tif")
 
 
-def test_rejects_bad_chunk_crc():
-    source = bytearray(make_png())
-    idat_offset = source.index(b"IDAT")
-    source[idat_offset + 4] ^= 0xFF
+@pytest.mark.parametrize("compression", ["raw", "tiff_lzw", "tiff_adobe_deflate"])
+@pytest.mark.parametrize("removed_bytes", [1, 10, 20])
+def test_rejects_truncated_tiff(compression, removed_bytes):
+    source = make_tiff(compression=compression)
 
     with pytest.raises(ImageValidationError, match="incomplete or damaged"):
-        load_png(bytes(source), "corrupt.png")
+        load_tiff(source[:-removed_bytes], "truncated.tif")
 
 
-def test_rejects_bad_iend_crc():
-    source = bytearray(make_png())
-    source[-1] ^= 0xFF
-
-    with pytest.raises(ImageValidationError, match="incomplete or damaged"):
-        load_png(bytes(source), "corrupt-end.png")
-
-
-def test_fully_decodes_png_instead_of_only_checking_chunk_crcs():
-    source = bytearray(make_png())
-    idat_offset = source.index(b"IDAT")
-    length = int.from_bytes(source[idat_offset - 4 : idat_offset], "big")
-    payload_end = idat_offset + 4 + length
-    source[idat_offset + 4 : payload_end] = b"\x00" * length
-    crc = zlib.crc32(source[idat_offset:payload_end])
-    source[payload_end : payload_end + 4] = crc.to_bytes(4, "big")
+def test_fully_decodes_compressed_tiff_instead_of_only_checking_metadata():
+    source = bytearray(make_tiff(compression="tiff_adobe_deflate"))
+    with Image.open(BytesIO(source)) as image:
+        offset = image.tag_v2[273][0]
+        count = image.tag_v2[279][0]
+    source[offset : offset + count] = b"\x00" * count
 
     with pytest.raises(ImageValidationError, match="incomplete or damaged"):
-        load_png(bytes(source), "invalid-pixels.png")
+        load_tiff(bytes(source), "invalid-pixels.tif")
 
 
-def test_rejects_animated_png():
+def test_rejects_multipage_tiff_instead_of_silently_using_first_page():
     output = BytesIO()
     first = Image.new("L", (8, 8), 0)
     second = Image.new("L", (8, 8), 255)
-    first.save(output, format="PNG", save_all=True, append_images=[second], duration=100)
+    first.save(output, format="TIFF", save_all=True, append_images=[second])
 
-    with pytest.raises(ImageValidationError, match="Animated PNG"):
-        load_png(output.getvalue(), "animated.png")
+    with pytest.raises(ImageValidationError, match="(?i)page"):
+        load_tiff(output.getvalue(), "stack.tif")
+
+
+@pytest.mark.parametrize("mode", ["I", "F", "CMYK"])
+def test_rejects_unsupported_modes_instead_of_clipping_or_reinterpreting_pixels(mode):
+    with pytest.raises(ImageValidationError, match="(?i)support|8-bit|16-bit"):
+        load_tiff(make_tiff(mode=mode), "unsupported.tif")
+
+
+def test_rejects_high_bit_depth_color_before_pillow_silently_reduces_precision():
+    # Pillow writes RGB TIFFs at 8 bits, so build this small 16-bit RGB fixture
+    # with its TIFF directory writer. StripOffsets=0 means immediately after IFD.
+    directory = TiffImagePlugin.ImageFileDirectory_v2()
+    for tag, value in {
+        256: 2, 257: 1, 258: (16, 16, 16), 259: 1, 262: 2,
+        273: 0, 277: 3, 278: 1, 279: 12, 284: 1,
+    }.items():
+        directory[tag] = value
+    source = (
+        b"II" + struct.pack("<HI", 42, 8) + directory.tobytes(offset=8)
+        + struct.pack("<6H", 0, 32768, 65535, 65535, 32768, 0)
+    )
+
+    with Image.open(BytesIO(source)) as image:
+        image.load()
+        assert image.mode == "RGB"
+    with pytest.raises(ImageValidationError, match="(?i)support|8-bit|16-bit"):
+        load_tiff(source, "16-bit-rgb.tif")
 
 
 @pytest.mark.parametrize("limit", [100, 50])
 def test_surfaces_pillow_decompression_protections_as_validation_errors(monkeypatch, limit):
-    source = make_png(size=(11, 10))
+    source = make_tiff(size=(11, 10))
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", limit)
 
     with pytest.raises(ImageValidationError, match="too large"):
-        load_png(source, "large.png")
+        load_tiff(source, "large.tif")
