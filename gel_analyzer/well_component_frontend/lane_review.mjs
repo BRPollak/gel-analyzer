@@ -1,10 +1,13 @@
-import {clampRightEdge, laneBorderLimits, moveLaneBorder, nearestHandle, screenRadius, wellsWithLaneBorders} from "./geometry.mjs";
+import {clampRightEdge, laneBorderLimits, laneDeleteLayout, moveLaneBorder, nearestHandle, screenRadius, wellsWithLaneBorders} from "./geometry.mjs";
 
 /** Axis-constrained review interactions, independent of the guide editor. */
 export function createLaneReview({svg, getState, pointerPosition, repaint, emit}) {
   const layer = document.getElementById("lane-review");
   const excluded = document.getElementById("excluded-right");
+  const wrap = document.getElementById("image-wrap");
   let handles = [];
+  let deleteButtons = [];
+  let deletionPending = false;
   let active = null;
   let lineLayer = null;
 
@@ -32,6 +35,19 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     return {group, line, hit, grip, gripHit, symbol, index, edge};
   }
 
+  function makeDeleteButton(index) {
+    const connector = element("line", {class: "delete-connector", "pointer-events": "none"});
+    const group = element("g", {class: "lane-delete", "data-delete-lane": index,
+      "data-testid": `lane-${index + 1}-delete`, role: "button", tabindex: "0",
+      "aria-label": `Delete lane ${index + 1}`});
+    element("rect", {x: -16, y: -16, width: 32, height: 32, rx: 5, class: "delete-background"}, group);
+    element("path", {d: "M-7 -5 H7 M-3 -5 V-8 H3 V-5 M-5 -5 L-4 8 H4 L5 -5 M-2 -2 V5 M2 -2 V5",
+      class: "delete-symbol", "pointer-events": "none"}, group);
+    const title = element("title", {}, group);
+    title.textContent = `Delete lane ${index + 1}`;
+    return {group, connector, index};
+  }
+
   function reset() {
     const pointerId = active?.pointerId;
     active = null;
@@ -39,12 +55,17 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     layer.replaceChildren();
     lineLayer = element("g", {"data-testid": "lane-review-lines"});
     handles = [];
+    deleteButtons = [];
+    deletionPending = false;
+    wrap.style.paddingBottom = "0px";
     excluded.setAttribute("visibility", "hidden");
     const state = getState();
     if (state?.reviewMode === "borders") {
       state.lanes.forEach((lane, index) => {
         handles.push(makeHandle(index, "top"), makeHandle(index, "bottom"));
       });
+      // Trash controls sit above all draggable hit regions in the SVG stack.
+      state.lanes.forEach((lane, index) => deleteButtons.push(makeDeleteButton(index)));
     } else if (state?.reviewMode === "extent") handles.push(makeHandle(-1, "right"));
   }
 
@@ -52,6 +73,25 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     const state = getState();
     if (!state?.reviewMode) return;
     const unit = screenRadius(1, svg.getBoundingClientRect(), state.width);
+    const enabled = state.editable && !deletionPending;
+    svg.dataset.reviewPending = String(deletionPending);
+    if (state.reviewMode === "borders") {
+      const layout = laneDeleteLayout(state.lanes, state.height, unit);
+      // On a thumbnail, extend the control column below the image instead of
+      // shrinking or overlapping the trash targets. Keep that space in-frame.
+      wrap.style.paddingBottom = `${layout.overflow / unit}px`;
+      deleteButtons.forEach(({group, connector, index}) => {
+        const {x, y} = layout.buttons[index];
+        const lane = state.lanes[index];
+        group.setAttribute("transform", `translate(${x} ${y}) scale(${unit})`);
+        group.setAttribute("tabindex", enabled ? "0" : "-1");
+        group.setAttribute("aria-disabled", String(!enabled));
+        for (const [attribute, coordinate] of Object.entries({x1: lane[2],
+          y1: (lane[1] + lane[3]) / 2, x2: x - 16 * unit, y2: y})) {
+          connector.setAttribute(attribute, coordinate);
+        }
+      });
+    }
     if (state.reviewMode === "extent") {
       excluded.setAttribute("visibility", "visible");
       excluded.setAttribute("x", state.rightEdge);
@@ -94,8 +134,8 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
       group.dataset.x = x;
       group.dataset.y = y;
       group.dataset.value = value;
-      group.setAttribute("tabindex", state.editable ? "0" : "-1");
-      group.setAttribute("aria-disabled", String(!state.editable));
+      group.setAttribute("tabindex", enabled ? "0" : "-1");
+      group.setAttribute("aria-disabled", String(!enabled));
       group.setAttribute("aria-valuemin", limits[0]);
       group.setAttribute("aria-valuemax", limits[1]);
       group.setAttribute("aria-valuenow", value);
@@ -123,9 +163,33 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
       lanes: state.lanes.map(lane => [...lane]), right_edge: state.rightEdge});
   }
 
+  function deleteLane(button) {
+    const state = getState();
+    if (state?.reviewMode !== "borders" || !state.editable || deletionPending || active) return;
+    const index = Number(button.dataset.deleteLane);
+    if (!Number.isInteger(index) || index < 0 || index >= state.lanes.length) return;
+    deletionPending = true;
+    draw();
+    emit({kind: "lane_review", mode: "borders", action: "delete", lane_index: index,
+      lanes: state.lanes.map(lane => [...lane]), right_edge: state.rightEdge});
+  }
+
+  svg.addEventListener("click", event => {
+    const button = event.target.closest("[data-delete-lane]");
+    if (!button) return;
+    event.preventDefault();
+    deleteLane(button);
+  });
+
   svg.addEventListener("pointerdown", event => {
     const state = getState();
-    if (!state?.reviewMode || !state.editable || event.button !== 0 || active) return;
+    if (!state?.reviewMode || !state.editable || deletionPending || event.button !== 0 || active) return;
+    const deleteButton = event.target.closest("[data-delete-lane]");
+    if (deleteButton) {
+      event.preventDefault();
+      deleteButton.focus();
+      return;
+    }
     const point = pointerPosition(event);
     const nearest = point && nearestHandle(handles.map(handle => ({
       handle, x: Number(handle.group.dataset.x), y: Number(handle.group.dataset.y),
@@ -170,7 +234,15 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
 
   svg.addEventListener("keydown", event => {
     const state = getState();
-    if (!state?.reviewMode || !state.editable || active) return;
+    if (!state?.reviewMode || !state.editable || deletionPending || active) return;
+    const deleteButton = event.target.closest("[data-delete-lane]");
+    if (deleteButton) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        if (!event.repeat) deleteLane(deleteButton);
+      }
+      return;
+    }
     const handle = event.target.closest("[data-review-edge]");
     if (!handle) return;
     const edge = handle.dataset.reviewEdge;

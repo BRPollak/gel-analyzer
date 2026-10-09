@@ -9,6 +9,7 @@ import pytest
 
 from gel_analyzer.lane_crop import (
     LaneAdjustmentError,
+    append_lane,
     crop_lanes,
     validate_lane_adjustments,
 )
@@ -261,3 +262,112 @@ def test_well_geometry_retained_across_module_reload_can_still_be_cropped():
     image = Image.new("I;16", SIZE, 32769)
 
     assert crop_lanes(image, retained, 80) == crop_lanes(image, WELLS, 80)
+
+
+APPEND_WELLS = (
+    Well((30, 20, 42, 40), (36, 30)),
+    Well((35, 60, 47, 80), (41, 70)),
+)
+
+
+def test_append_uses_bottom_endpoint_and_preserves_reviewed_geometry():
+    points = ((36, 15), (46, 140))
+
+    result = append_lane(APPEND_WELLS, points, 90, (100, 200))
+
+    assert result[:-1] == APPEND_WELLS
+    assert result[-1] == Well((40, 130, 52, 150), (46, 140))
+    assert append_lane(APPEND_WELLS, points[::-1], 90, (100, 200)) == result
+
+
+def test_append_below_covered_endpoint_uses_spacing_and_extrapolates_guide():
+    points = ((36, 15), (42, 75))
+
+    result = append_lane(APPEND_WELLS, points, 90, (100, 200))
+
+    assert result[:-1] == APPEND_WELLS
+    assert result[-1].bounds == (40, 100, 52, 120)
+    repeated = append_lane(result, points, 90, (100, 200))
+    assert repeated[:-1] == result
+    assert repeated[-1].bounds == (44, 140, 56, 160)
+    assert all(a.bounds[3] <= b.bounds[1] for a, b in zip(repeated, repeated[1:]))
+
+
+def test_empty_detection_can_seed_a_lane_at_the_bottom_of_a_guide():
+    points = ((20, 20), (30, 160))
+
+    result = append_lane((), points, 90, (100, 200))
+
+    assert len(result) == 1
+    assert result[0].center == pytest.approx((30, 160), abs=0.5)
+    assert result[0].bounds[2] - result[0].bounds[0] == 4
+    assert result[0].bounds[3] - result[0].bounds[1] == 7
+    assert append_lane((), points[::-1], 90, (100, 200)) == result
+    # The manual seed is accepted by the normal adjustment/crop path.
+    assert crop_lanes(Image.new("L", (100, 200)), result, 90).wells
+
+
+@pytest.mark.parametrize(
+    "points,right_edge,size,expected",
+    [
+        (((0, 0), (0, 100)), 80, (100, 100), (0, 96, 4, 100)),
+        (((100, 0), (100, 100)), 80, (100, 100), (76, 96, 80, 100)),
+        (((1, 0), (1, 10)), 1, (1, 10), (0, 6, 1, 10)),
+    ],
+)
+def test_empty_append_clamps_all_image_and_shared_right_edges(points, right_edge, size, expected):
+    result = append_lane((), points, right_edge, size)
+
+    assert result[0].bounds == expected
+    assert all(type(value) is int for value in result[0].bounds)
+
+
+@pytest.mark.parametrize(
+    "well,points,right_edge,expected",
+    [
+        (Well((0, 10, 10, 30), (5, 20)), ((12, 10), (0, 30)), 80, (0, 35, 10, 55)),
+        (Well((80, 10, 90, 30), (85, 20)), ((78, 10), (90, 30)), 90, (80, 35, 90, 55)),
+    ],
+)
+def test_append_handles_sloped_guide_extrapolation_at_horizontal_borders(well, points, right_edge, expected):
+    result = append_lane((well,), points, right_edge, (100, 100))
+
+    assert result == (well, Well(expected, ((expected[0] + expected[2]) / 2, 45)))
+
+
+def test_append_can_use_remaining_full_height_when_ideal_gap_does_not_fit():
+    result = append_lane(APPEND_WELLS, ((36, 15), (42, 75)), 90, (100, 100))
+
+    assert result[:-1] == APPEND_WELLS
+    assert result[-1].bounds[1::2] == (80, 100)
+
+
+@pytest.mark.parametrize("height", [80, 90, 99])
+def test_append_rejects_insufficient_space_without_repositioning_existing_lanes(height):
+    with pytest.raises(LaneAdjustmentError, match="not enough room below"):
+        append_lane(APPEND_WELLS, ((36, 15), (42, 75)), 90, (100, height))
+
+    assert APPEND_WELLS[-1].bounds == (35, 60, 47, 80)
+
+
+@pytest.mark.parametrize(
+    "wells,points,right_edge,size,message",
+    [
+        (APPEND_WELLS[::-1], ((36, 15), (42, 75)), 90, (100, 200), "top-to-bottom"),
+        ((APPEND_WELLS[0], Well((35, 35, 47, 55), (41, 45))), ((36, 15), (42, 75)), 90, (100, 200), "overlapping"),
+        ((Well((-1, 0, 8, 20), (3.5, 10)),), ((36, 15), (42, 75)), 90, (100, 200), "inside the confirmed"),
+        (APPEND_WELLS, ((36, 15), (42, 75)), 46, (100, 200), "at or beyond"),
+        ((), ((36, 15), (42, 75)), 0, (100, 200), "at or beyond"),
+        ((), ((36, 15), (42, 75)), 101, (100, 200), "at or beyond"),
+        ((), ((36, 15), (42, 75)), 80.5, (100, 200), "whole-pixel"),
+        ((), ((36, 15), (42, 75)), 90, (100.5, 200), "whole-pixel"),
+        ((), (), 90, (100, 200), "two points"),
+        ((), ((36, 15), (42, 15)), 90, (100, 200), "generally vertical"),
+        ((), ((36, 15), (42, 17)), 90, (100, 200), "generally vertical"),
+        ((), ((36, 15), (36, 17)), 90, (100, 200), "too short"),
+        ((), ((36, 15), (42, 201)), 90, (100, 200), "inside the confirmed"),
+    ],
+)
+def test_append_validates_existing_geometry_and_guide(wells, points, right_edge, size, message):
+    with pytest.raises(LaneAdjustmentError, match=message):
+        append_lane(wells, points, right_edge, size)

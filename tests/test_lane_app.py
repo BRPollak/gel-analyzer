@@ -39,14 +39,15 @@ def workflow(monkeypatch):
     result = wells.DetectionResult(
         detected_wells, tuple((left, top, 300, bottom) for left, top, _, bottom in DETECTED_BOUNDS)
     )
-    harness = SimpleNamespace(event=None, renders=[], detections=[], result=result)
+    harness = SimpleNamespace(event=None, renders=[], detections=[], expected_counts=[], result=result)
 
     def component(*args, **kwargs):
         harness.renders.append((args, kwargs))
         return harness.event
 
-    def detect(image, points):
+    def detect(image, points, *, expected_count=None):
         harness.detections.append((image.copy(), points))
+        harness.expected_counts.append(expected_count)
         return harness.result
 
     monkeypatch.setattr(well_component, "render_well_component", component)
@@ -153,12 +154,191 @@ def test_detected_candidates_can_start_border_review_without_reanalysis(workflow
     assert len(workflow.detections) == 1
 
 
+def test_refined_lane_heights_survive_review_and_final_crop(workflow):
+    workflow.result = wells.DetectionResult(workflow.result.wells, REVIEWED_LANES)
+    start_review(workflow)
+    app = workflow.app
+    assert bounds(workflow) == ((30, 17, 46, 55), (32, 75, 49, 118))
+    assert workflow.renders[-1][1]["lanes"] == REVIEWED_LANES
+    app.button(key="confirm_lane_borders").click().run()
+    app.button(key="confirm_lane_crop").click().run()
+
+    assert not app.exception
+    assert app.session_state["lane_crop"].crop_box == (27, 14, 300, 121)
+    assert tuple(well.bounds for well in workflow.result.wells) == DETECTED_BOUNDS
+    assert len(workflow.detections) == 1
+
+
+@pytest.mark.parametrize("stage", ["borders", "extent", "cropped"])
+def test_lane_count_change_discards_review_and_crop_but_preserves_guide(workflow, stage):
+    start_review(workflow)
+    app = workflow.app
+    if stage == "extent":
+        app.button(key="confirm_lane_borders").click().run()
+    elif stage == "cropped":
+        finish_review(workflow)
+    original_points = app.session_state["well_points"]
+    old_lane_token = app.session_state["lane_token"]
+
+    app.number_input(key="expected_lane_count").set_value(3).run()
+
+    assert not app.exception
+    assert app.session_state["well_expected_count"] == 3
+    assert app.session_state["well_points"] == original_points
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_editing"] is True
+    assert app.session_state["lane_stage"] is None
+    assert app.session_state["lane_wells"] == ()
+    assert app.session_state["lane_right"] is None
+    assert app.session_state["lane_crop"] is None
+    assert app.session_state["lane_token"] != old_lane_token
+    assert not app.button(key="confirm_well_line").disabled
+    assert len(workflow.detections) == 1
+    app.button(key="confirm_well_line").click().run()
+    app.button(key="adjust_lane_borders").click().run()
+    assert not app.exception
+    assert workflow.expected_counts == [None, 3]
+    assert app.number_input(key="expected_lane_count").value == 3
+    assert app.session_state["lane_stage"] == "borders"
+
+
 def test_empty_detection_cannot_start_border_review(workflow):
     workflow.result = wells.DetectionResult((), (), ("No wells found.",))
     detect_lanes(workflow)
     assert "adjust_lane_borders" not in keys(workflow.app)
     assert workflow.app.session_state["lane_stage"] is None
     assert workflow.app.session_state["lane_crop"] is None
+
+
+def test_empty_detection_can_add_adjust_and_crop_a_manual_lane(workflow):
+    workflow.result = wells.DetectionResult((), (), ("No wells found.",))
+    detect_lanes(workflow)
+    app = workflow.app
+    gel = app.session_state["gel_image"]
+    app.button(key="add_lane").click().run()
+    assert not app.exception
+    assert app.session_state["lane_stage"] == "borders"
+    assert len(bounds(workflow)) == 1
+    left, top, right, bottom = bounds(workflow)[0]
+    assert top <= 112 <= bottom
+    lane_event(workflow, lanes=((left, 70, 300, 130),))
+    app.button(key="confirm_lane_borders").click().run()
+    app.button(key="confirm_lane_crop").click().run()
+    assert not app.exception
+    assert app.session_state["lane_stage"] == "cropped"
+    assert len(app.session_state["lane_crop"].lanes) == 1
+    assert app.session_state["gel_image"] is gel
+    assert len(workflow.detections) == 1
+
+
+def test_delete_renumbers_survivors_rejects_old_events_and_preserves_latest_drag(workflow):
+    start_review(workflow)
+    app = workflow.app
+    original = app.session_state["well_result"]
+    old_token = app.session_state["lane_token"]
+    deleted = lane_event(workflow, action="delete", lane_index=0)
+    assert bounds(workflow) == ((32, 75, 49, 118),)
+    assert app.session_state["lane_token"] != old_token
+    assert app.session_state["well_result"] is original
+    assert tuple(well.bounds for well in original.wells) == DETECTED_BOUNDS
+    workflow.event = {**deleted, "revision": 999}
+    app.run()
+    assert bounds(workflow) == ((32, 75, 49, 118),)
+    # The remaining lane now owns index 0, and can still be edited/cropped.
+    lane_event(workflow, lanes=((32, 72, 300, 120),))
+    app.button(key="confirm_lane_borders").click().run()
+    lane_event(workflow, lanes=((32, 72, 240, 120),), right_edge=240)
+    app.button(key="confirm_lane_crop").click().run()
+    assert not app.exception
+    assert app.session_state["lane_crop"].crop_box == (29, 69, 240, 123)
+    app.button(key="revise_lane_crop").click().run()
+    assert bounds(workflow) == ((32, 72, 49, 120),)
+
+
+def test_delete_all_blocks_confirmation_and_add_restores_review(workflow):
+    start_review(workflow)
+    app = workflow.app
+    lane_event(workflow, action="delete", lane_index=1)
+    lane_event(workflow, lanes=((30, 17, 300, 55),), action="delete", lane_index=0)
+    assert bounds(workflow) == ()
+    assert app.button(key="confirm_lane_borders").disabled
+    app.button(key="add_lane").click().run()
+    assert not app.exception
+    assert len(bounds(workflow)) == 1
+    assert not app.button(key="confirm_lane_borders").disabled
+    assert len(workflow.detections) == 1
+
+
+def test_add_consumes_pending_drag_and_invalidates_old_collection(workflow):
+    start_review(workflow)
+    app = workflow.app
+    old_token = app.session_state["lane_token"]
+    pending = lane_event(workflow, run=False)
+    app.button(key="add_lane").click().run()
+    assert not app.exception
+    added = bounds(workflow)
+    assert len(added) == 3
+    assert added[:2] == ((30, 17, 46, 55), (32, 75, 49, 118))
+    assert added[2][1] >= added[1][3]
+    assert app.session_state["lane_token"] != old_token
+    workflow.event = {**pending, "revision": 999}
+    app.run()
+    assert bounds(workflow) == added
+    assert len(workflow.detections) == 1
+
+
+def test_immediate_confirmation_consumes_pending_deletion(workflow):
+    start_review(workflow)
+    lane_event(workflow, action="delete", lane_index=0, run=False)
+    app = workflow.app
+    app.button(key="confirm_lane_borders").click().run()
+    assert not app.exception
+    assert app.session_state["lane_stage"] == "extent"
+    assert bounds(workflow) == ((32, 75, 49, 118),)
+    app.button(key="confirm_lane_crop").click().run()
+    assert len(app.session_state["lane_crop"].lanes) == 1
+
+
+def test_add_after_pending_guide_edit_cannot_restore_obsolete_detection(workflow):
+    workflow.result = wells.DetectionResult(
+        workflow.result.wells, workflow.result.lanes, ("Review the uncertain boundaries.",)
+    )
+    detect_lanes(workflow)
+    app = workflow.app
+    token = app.session_state["well_token"]
+    pending = {"token": token, "revision": 2, "points": [[42, 18], [42, 115]]}
+    app.session_state[f"well_overlay_{token}"] = pending
+    workflow.event = pending
+    app.button(key="add_lane").click().run()
+    assert not app.exception
+    assert app.session_state["well_result"] is None
+    assert app.session_state["lane_stage"] is None
+    assert app.session_state["lane_wells"] == ()
+    assert len(workflow.detections) == 1
+
+
+@pytest.mark.parametrize("overrides", [
+    {"lane_index": -1}, {"lane_index": 2}, {"lane_index": True},
+    {"lane_index": "0"}, {"lane_index": None}, {"action": "replace"},
+    {"mode": "extent"}, {"token": "old-image"},
+    {"lanes": [[30, 17, 300, 55]]},
+])
+def test_delete_rejects_invalid_or_stale_requests(workflow, overrides):
+    start_review(workflow)
+    before = bounds(workflow)
+    lane_event(workflow, **{"action": "delete", "lane_index": 0, **overrides})
+    assert bounds(workflow) == before
+
+
+def test_extent_stage_cannot_delete_lanes(workflow):
+    start_review(workflow)
+    app = workflow.app
+    app.button(key="confirm_lane_borders").click().run()
+    before = bounds(workflow)
+    original_lanes = tuple((left, top, 300, bottom) for left, top, _, bottom in before)
+    lane_event(workflow, lanes=original_lanes, action="delete", lane_index=0)
+    assert bounds(workflow) == before
+    assert app.session_state["lane_stage"] == "extent"
 
 
 def test_pending_edit_of_uncertain_guide_prevents_reviewing_obsolete_detection(workflow):

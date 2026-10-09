@@ -88,9 +88,10 @@ function drawGuide() {
   }
   svg.dataset.editable = String(state.editable);
   svg.dataset.reviewMode = state.reviewMode || "";
+  wrap.dataset.reviewMode = state.reviewMode || "";
   svg.dataset.pointCount = String(state.points.length);
   status.textContent = state.reviewMode === "borders"
-    ? "Adjust each lane’s top and bottom border using the arrow handles. Borders move vertically and cannot cross neighboring lanes. Use Up/Down keys on a focused handle."
+    ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane below to insert one at the bottom of the detection line."
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
     : !state.editable

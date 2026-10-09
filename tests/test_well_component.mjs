@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {clampRightEdge, clipPoint, laneBorderLimits, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {createLaneReview} from "../gel_analyzer/well_component_frontend/lane_review.mjs";
 
 test("pointer mapping is independent of scale and page offset", () => {
   for (const scale of [1, 0.5, 0.2, 1.25]) {
@@ -71,4 +72,125 @@ test("tiny lanes retain independent grips despite overlapping hit areas and DOM 
   }
   // A thumbnail uses a larger image-coordinate hit radius, with the same pick.
   assert.equal(nearestHandle([bottom, top], [13, 20], 15 / 0.1), top);
+});
+
+test("trash controls follow lane ends, remain separate, and fit their reserved gutter at every scale", () => {
+  const lanes = [[10, 0, 350, 1], [10, 2, 350, 3], [10, 199, 350, 200]];
+  for (const scale of [1, 0.5, 0.2]) {
+    const unit = 1 / scale;
+    const {buttons, overflow} = laneDeleteLayout(lanes, 200, unit);
+    assert.equal(buttons.length, 3);
+    buttons.forEach((button, index) => {
+      assert.equal((button.x - lanes[index][2]) * scale, 20);
+      assert.ok((button.x - lanes[index][2]) * scale + 16 <= 40);
+      assert.ok(button.y - 16 * unit >= 0);
+      assert.ok(button.y + 16 * unit <= 200 + overflow);
+      if (index) assert.ok((button.y - buttons[index - 1].y) * scale >= 32);
+    });
+  }
+  assert.equal(laneDeleteLayout([[10, 10, 150, 70]], 200, 1).buttons[0].x, 170);
+  assert.deepEqual(laneDeleteLayout([], 200, 1), {buttons: [], overflow: 0});
+});
+
+// The component uses only standard SVG and delegated events. This small DOM
+// double exercises its bridge contract without requiring a browser runtime.
+class ReviewNode {
+  constructor() {
+    this.attributes = {};
+    this.dataset = {};
+    this.style = {};
+    this.children = [];
+    this.events = {};
+    this.captures = new Set();
+  }
+  setAttribute(key, value) {
+    this.attributes[key] = String(value);
+    if (key.startsWith("data-")) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = String(value);
+  }
+  appendChild(child) { child.parent = this; this.children.push(child); }
+  replaceChildren() { this.children = []; }
+  closest(selector) {
+    const attribute = selector.slice(1, -1);
+    return attribute in this.attributes ? this : this.parent?.closest(selector) ?? null;
+  }
+  focus() { this.focused = true; }
+  addEventListener(type, callback) { (this.events[type] ??= []).push(callback); }
+  getBoundingClientRect() { return {width: 400, height: 200, left: 0, top: 0}; }
+  hasPointerCapture(id) { return this.captures.has(id); }
+  setPointerCapture(id) { this.captures.add(id); }
+  releasePointerCapture(id) { this.captures.delete(id); }
+  dispatch(type, event) {
+    let prevented = false;
+    for (const callback of this.events[type] ?? []) callback({button: 0, pointerId: 1,
+      preventDefault() { prevented = true; }, ...event});
+    return prevented;
+  }
+  descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
+}
+
+test("trash click and keyboard emit one deletion per token without altering local geometry or starting a drag", () => {
+  const originalDocument = globalThis.document;
+  const svg = new ReviewNode();
+  const elements = Object.fromEntries(["lane-review", "excluded-right", "image-wrap"].map(id => [id, new ReviewNode()]));
+  globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+  try {
+    const state = {width: 400, height: 200, reviewMode: "borders", editable: true,
+      lanes: [[10, 10, 100, 24], [12, 26, 100, 42]],
+      wells: [{bounds: [10, 10, 30, 24]}, {bounds: [12, 26, 33, 42]}], rightEdge: 100};
+    const initialLanes = structuredClone(state.lanes);
+    const events = [];
+    let pointerLookups = 0;
+    const review = createLaneReview({svg, getState: () => state,
+      pointerPosition: () => { pointerLookups++; return [40, 10]; },
+      repaint: () => review.draw(), emit: event => events.push(event)});
+    const findButton = index => elements["lane-review"].descendants().find(node => node.dataset.deleteLane === String(index));
+    review.reset();
+    review.draw();
+    let button = findButton(1);
+    assert.equal(button.attributes.role, "button");
+    assert.equal(button.attributes["aria-label"], "Delete lane 2");
+    svg.dispatch("pointerdown", {target: button.children[0]});
+    assert.equal(pointerLookups, 0, "trash targets bypass nearest handle picking");
+    assert.equal(svg.captures.size, 0);
+    assert.equal(button.focused, true);
+    svg.dispatch("click", {target: button.children[0]});
+    assert.deepEqual(events, [{kind: "lane_review", mode: "borders", action: "delete",
+      lane_index: 1, lanes: initialLanes, right_edge: 100}]);
+    assert.deepEqual(state.lanes, initialLanes);
+    assert.notEqual(events[0].lanes, state.lanes);
+    assert.equal(button.attributes["aria-disabled"], "true");
+    svg.dispatch("click", {target: findButton(0)});
+    svg.dispatch("keydown", {target: button, key: "Enter"});
+    assert.equal(events.length, 1, "repeat activation waits for server token reset");
+
+    for (const key of ["Enter", " "]) {
+      review.reset();
+      review.draw();
+      button = findButton(0);
+      assert.equal(button.attributes["aria-disabled"], "false");
+      assert.equal(svg.dispatch("keydown", {target: button, key}), true);
+      assert.equal(events.at(-1).lane_index, 0);
+    }
+    assert.equal(events.length, 3);
+    review.reset();
+    state.editable = false;
+    review.draw();
+    svg.dispatch("click", {target: findButton(0)});
+    assert.equal(events.length, 3, "read-only review cannot delete");
+
+    state.editable = true;
+    review.reset();
+    review.draw();
+    const handle = elements["lane-review"].descendants().find(node => node.dataset.reviewEdge === "top" && node.dataset.laneIndex === "0");
+    svg.dispatch("pointerdown", {target: handle});
+    assert.equal(svg.captures.size, 1, "border handles still start independent drags");
+    svg.dispatch("pointerup", {target: handle});
+    assert.equal(events.length, 4);
+    assert.equal(events.at(-1).kind, "lane_review");
+    assert.equal(events.at(-1).action, undefined);
+    assert.equal(svg.captures.size, 0);
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
 });

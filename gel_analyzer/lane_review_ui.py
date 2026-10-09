@@ -12,6 +12,7 @@ from PIL import Image
 import streamlit as st
 
 from . import lane_crop
+from .wells import SelectionError, validate_line
 
 
 def reset_lane_review() -> None:
@@ -48,14 +49,15 @@ def _set_stage(stage: str) -> None:
 def start_lane_review() -> None:
     gel = _confirmed_image()
     result = st.session_state.well_result
-    if gel is None or result is None or not result.wells:
+    if gel is None or result is None:
         return
     try:
+        validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
         wells = lane_crop.validate_lane_adjustments(
             result.wells, result.lanes, gel.preview_width,
             (gel.preview_width, gel.preview_height),
-        )
-    except lane_crop.LaneAdjustmentError as exc:
+        ) if result.wells else ()
+    except (lane_crop.LaneAdjustmentError, SelectionError) as exc:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_source = gel
@@ -89,9 +91,15 @@ def accept_lane_event(event: object) -> None:
     if type(revision) is not int or revision <= st.session_state.lane_revision:
         return
     right = event.get("right_edge")
+    action = event.get("action", "adjust")
+    if action not in ("adjust", "delete") or (action == "delete" and stage != "borders"):
+        return
+    index = event.get("lane_index")
+    if action == "delete" and (type(index) is not int or not 0 <= index < len(st.session_state.lane_wells)):
+        return
     try:
         wells = lane_crop.validate_lane_adjustments(
-            st.session_state.well_result.wells, event.get("lanes"), right,
+            st.session_state.lane_wells, event.get("lanes"), right,
             (gel.preview_width, gel.preview_height),
         )
     except lane_crop.LaneAdjustmentError:
@@ -107,10 +115,35 @@ def accept_lane_event(event: object) -> None:
     st.session_state.lane_revision = revision
     st.session_state.lane_error = None
     st.session_state.lane_crop = None
+    if action == "delete":
+        st.session_state.lane_wells = wells[:index] + wells[index + 1:]
+        # A structural edit invalidates every event from the old collection,
+        # including clicks which still use its former lane numbering.
+        _set_stage("borders")
 
 
 def _consume_latest_event() -> None:
     accept_lane_event(st.session_state.get(f"lane_overlay_{st.session_state.lane_token}"))
+
+
+def add_lane() -> None:
+    """Append a manual proposal without rerunning detection or changing pixels."""
+    if st.session_state.lane_stage != "borders":
+        return
+    _consume_latest_event()
+    gel = _confirmed_image()
+    if gel is None or gel is not st.session_state.lane_source:
+        return
+    try:
+        wells = lane_crop.append_lane(
+            st.session_state.lane_wells, st.session_state.well_points,
+            st.session_state.lane_right, (gel.preview_width, gel.preview_height),
+        )
+    except lane_crop.LaneAdjustmentError as exc:
+        st.session_state.lane_error = str(exc)
+        return
+    st.session_state.lane_wells = wells
+    _set_stage("borders")
 
 
 def confirm_lane_borders() -> None:
@@ -174,11 +207,16 @@ def show_lane_review(gel) -> None:
         st.subheader("1. Adjust lane borders")
         st.caption(
             "Drag the top and bottom borders of each numbered lane up or down. "
-            "Each well and its lane share the same height. Neighboring lanes cannot overlap. "
+            "Use the trash button to the right of a lane to delete it, or Add lane to insert "
+            "one at the bottom of the guide, below any existing lanes. Neighboring lanes cannot overlap. "
             "Arrow keys adjust a focused handle by one pixel; Shift moves ten pixels."
         )
         for warning in st.session_state.well_result.warnings:
             st.warning(warning)
+        count = len(st.session_state.lane_wells)
+        st.write(f"{count} lane{'s' if count != 1 else ''} in review")
+        if not count:
+            st.info("No lanes remain. Choose Add lane, then adjust its borders over the well and bands.")
     else:
         st.subheader("2. Set the right edge")
         st.caption(
@@ -193,13 +231,17 @@ def show_lane_review(gel) -> None:
         token=st.session_state.lane_token, key=f"lane_overlay_{st.session_state.lane_token}",
         review_mode=stage, right_edge=st.session_state.lane_right,
     )
+    token = st.session_state.lane_token
     accept_lane_event(event)
+    if token != st.session_state.lane_token:
+        st.rerun()
     if st.session_state.lane_error:
         st.warning(st.session_state.lane_error)
     if stage == "borders":
+        st.button("Add lane", key="add_lane", on_click=add_lane)
         st.button(
             "Confirm lane borders", key="confirm_lane_borders", type="primary",
-            on_click=confirm_lane_borders,
+            on_click=confirm_lane_borders, disabled=not st.session_state.lane_wells,
         )
     else:
         margin = max(3, round(gel.preview_width * 0.01))

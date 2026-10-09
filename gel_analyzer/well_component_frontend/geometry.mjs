@@ -68,3 +68,20 @@ export function nearestHandle(handles, point, radius) {
   }
   return nearest;
 }
+
+/** A screen-sized trash column stays reachable even for tightly packed lanes. */
+export function laneDeleteLayout(lanes, height, unit) {
+  const size = 32 * unit;
+  const half = size / 2;
+  const layoutHeight = Math.max(height, lanes.length * size);
+  const buttons = lanes.map((lane, index) => ({index, x: lane[2] + 20 * unit,
+    y: Math.min(layoutHeight - half, Math.max(half, (lane[1] + lane[3]) / 2))}));
+  for (let index = 1; index < buttons.length; index++) {
+    buttons[index].y = Math.max(buttons[index].y, buttons[index - 1].y + size);
+  }
+  if (buttons.length) buttons.at(-1).y = Math.min(buttons.at(-1).y, layoutHeight - half);
+  for (let index = buttons.length - 2; index >= 0; index--) {
+    buttons[index].y = Math.min(buttons[index].y, buttons[index + 1].y - size);
+  }
+  return {buttons, overflow: layoutHeight - height};
+}

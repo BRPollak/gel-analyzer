@@ -15,7 +15,7 @@ from numbers import Integral, Real
 import numpy as np
 from PIL import Image
 
-from .wells import Bounds, Well
+from .wells import Bounds, SelectionError, Well, validate_line
 
 
 class LaneAdjustmentError(ValueError):
@@ -74,10 +74,10 @@ def _bounds(bounds, label: str) -> Bounds:
     return tuple(_pixel(value, label) for value in values)
 
 
-def _checked_wells(wells, size: tuple[int, int]) -> tuple[Well, ...]:
+def _checked_wells(wells, size: tuple[int, int], *, allow_empty: bool = False) -> tuple[Well, ...]:
     originals = _sequence(wells, "Wells")
-    if not originals:
-        raise LaneAdjustmentError("Detect at least one well before adjusting or cropping lanes.")
+    if not originals and not allow_empty:
+        raise LaneAdjustmentError("Add or detect at least one lane before adjusting or cropping lanes.")
     width, height = size
     checked = []
     for number, well in enumerate(originals, start=1):
@@ -90,7 +90,7 @@ def _checked_wells(wells, size: tuple[int, int]) -> tuple[Well, ...]:
             and type(well).__qualname__ == Well.__qualname__
         )
         if not isinstance(well, Well) and not retained_well:
-            raise LaneAdjustmentError(f"Well {number} has invalid geometry. Detect the wells again.")
+            raise LaneAdjustmentError(f"Well {number} has invalid geometry. Review the lanes again.")
         left, top, right, bottom = _bounds(well.bounds, f"Well {number}")
         if not (0 <= left < right <= width and 0 <= top < bottom <= height):
             raise LaneAdjustmentError(f"Well {number} must have positive bounds inside the confirmed image.")
@@ -113,7 +113,7 @@ def validate_lane_adjustments(
     originals = _checked_wells(original_wells, (width, height))
     proposed = _sequence(lanes, "Lanes")
     if len(proposed) != len(originals):
-        raise LaneAdjustmentError("Keep exactly one lane for each detected well.")
+        raise LaneAdjustmentError("Keep exactly one lane for each reviewed well.")
     shared_right = _pixel(right_edge, "The shared right edge")
     if not max(well.bounds[2] for well in originals) <= shared_right <= width:
         raise LaneAdjustmentError("Keep the shared right edge inside the image and at or beyond every well's right edge.")
@@ -122,7 +122,7 @@ def validate_lane_adjustments(
     for number, (well, lane) in enumerate(zip(originals, proposed), start=1):
         left, top, right, bottom = _bounds(lane, f"Lane {number}")
         if left != well.bounds[0]:
-            raise LaneAdjustmentError(f"Lane {number}'s left edge must stay at its detected well's left edge.")
+            raise LaneAdjustmentError(f"Lane {number}'s left edge must stay at its reviewed well's left edge.")
         if right != shared_right:
             raise LaneAdjustmentError("Every lane must use the same shared right edge.")
         if not (0 <= top < bottom <= height):
@@ -133,6 +133,56 @@ def validate_lane_adjustments(
         adjusted.append(Well(bounds, ((left + well.bounds[2]) / 2, (top + bottom) / 2)))
         previous_bottom = bottom
     return tuple(adjusted)
+
+
+def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well, ...]:
+    """Append an editable lane at the guide's bottom without moving other lanes.
+
+    Existing lanes supply the median height, width, and gap. With no lanes,
+    conservative image/guide-scaled dimensions seed manual recovery. Prefer a
+    center at the lower endpoint; continue below the final lane when needed.
+    Image edges may shift the new rectangle, but cannot shrink existing lanes
+    or cause overlap. Reject when the inferred lane height cannot fit below.
+    """
+    width, height = _size(size)
+    originals = _checked_wells(wells, (width, height), allow_empty=True)
+    try:
+        upper, lower = validate_line(points, (width, height))
+    except SelectionError as exc:
+        raise LaneAdjustmentError(str(exc)) from exc
+    shared_right = _pixel(right_edge, "The shared right edge")
+    minimum_right = max((well.bounds[2] for well in originals), default=1)
+    if not minimum_right <= shared_right <= width:
+        raise LaneAdjustmentError("Keep the shared right edge inside the image and at or beyond every well's right edge.")
+    if originals:
+        # Reuse adjustment validation so invalid order/overlap never becomes
+        # accepted simply because the next action is adding a lane.
+        lanes = tuple((well.bounds[0], well.bounds[1], shared_right, well.bounds[3]) for well in originals)
+        originals = validate_lane_adjustments(originals, lanes, shared_right, (width, height))
+        lane_height = max(1, int(round(float(np.median([well.bounds[3] - well.bounds[1] for well in originals])))))
+        lane_width = max(1, int(round(float(np.median([well.bounds[2] - well.bounds[0] for well in originals])))))
+        gaps = [following.bounds[1] - previous.bounds[3] for previous, following in zip(originals, originals[1:])]
+        gap = max(1, int(round(float(np.median(gaps))))) if gaps else max(1, round(lane_height / 4))
+        previous_bottom = originals[-1].bounds[3]
+    else:
+        lane_height = min(height, max(4, round(min(height * 0.035, (lower[1] - upper[1]) * 0.12))))
+        lane_width = max(4, round(min(width, height) * 0.025))
+        gap, previous_bottom = 0, 0
+    if height - previous_bottom < lane_height:
+        raise LaneAdjustmentError("There is not enough room below the last lane. Move its bottom edge up or delete a lane before adding another.")
+
+    top = int(round(lower[1] - lane_height / 2))
+    if originals and top < previous_bottom:
+        top = previous_bottom + gap
+    top = min(max(previous_bottom, top, 0), height - lane_height)
+    bottom = top + lane_height
+    center_y = (top + bottom) / 2
+    center_x = upper[0] + (center_y - upper[1]) * (lower[0] - upper[0]) / (lower[1] - upper[1])
+    lane_width = min(lane_width, shared_right)
+    left = min(max(0, int(round(center_x - lane_width / 2))), shared_right - lane_width)
+    right = left + lane_width
+    new_well = Well((left, top, right, bottom), ((left + right) / 2, center_y))
+    return (*originals, new_well)
 
 
 def crop_lanes(image: Image.Image, wells, right_edge) -> LaneCrop:
