@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Well line selection</title>
+  <style>
+    :root { color-scheme: light dark; font-family: sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: transparent; color: var(--text-color, #31333f); }
+    #component { padding: 12px 12px 3px; }
+    #image-wrap { width: 100%; }
+    #gel { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
+    #gel[data-editable="true"] { cursor: crosshair; }
+    #gel[data-editable="false"] { touch-action: auto; }
+    #status { margin: 12px 0 3px; font-size: 13px; line-height: 1.5; }
+    #guide-halo { stroke: #111b; stroke-width: 4; }
+    #guide { stroke: #fff; stroke-width: 2; stroke-dasharray: 3 5; }
+    .endpoint { cursor: grab; outline: none; }
+    .endpoint .dot { fill: #fbbf24; stroke: #111; stroke-width: 2; }
+    .endpoint:focus .dot { fill: #fff; stroke: #2563eb; stroke-width: 3; }
+    #gel[data-dragging="true"], #gel[data-dragging="true"] .endpoint { cursor: grabbing; }
+    #gel[data-editable="false"] .endpoint { cursor: default; }
+    .lane { fill: none; stroke: #67e8f9; stroke-width: 1.25; opacity: .8; }
+    .well { fill: #fbbf2410; stroke: #fbbf24; stroke-width: 1.7; }
+    .center { fill: #fbbf24; }
+    .number { fill: #fff; stroke: #111; stroke-width: 3px; paint-order: stroke; font-weight: 700; }
+    .outline, #guide-halo, #guide, .dot { vector-effect: non-scaling-stroke; }
+    #gel[data-review-mode="borders"], #gel[data-review-mode="extent"] { cursor: default; }
+    .review-handle { outline: none; }
+    .border-handle { cursor: ns-resize; }
+    .extent-handle { cursor: ew-resize; }
+    .review-line { stroke: #67e8f9; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
+    .review-grip { fill: #0f172a; stroke: #67e8f9; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .review-symbol { fill: #67e8f9; pointer-events: none; }
+    .review-hit { fill: none; stroke: transparent; stroke-width: 14; vector-effect: non-scaling-stroke; }
+    .review-handle:focus .review-grip { fill: #fff; stroke: #2563eb; stroke-width: 3; }
+    .review-handle:focus .review-symbol { fill: #2563eb; }
+    .review-line.extent-line { stroke: #fbbf24; stroke-width: 2; }
+    .extent-handle .review-grip { stroke: #fbbf24; }
+    .extent-handle .review-symbol { fill: #fbbf24; }
+    #excluded-right { fill: #0f172a88; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <main id="component">
+    <div id="image-wrap">
+      <svg id="gel" xmlns="http://www.w3.org/2000/svg" role="group"
+          aria-label="Confirmed gel with well selection overlay" aria-describedby="status"
+          data-testid="well-overlay">
+        <image id="gel-image" x="0" y="0" preserveAspectRatio="none" />
+        <rect id="excluded-right" visibility="hidden" />
+        <g id="results" pointer-events="none"></g>
+        <line id="guide-halo" pointer-events="none" visibility="hidden" />
+        <line id="guide" pointer-events="none" visibility="hidden" data-testid="well-guide" />
+        <g id="endpoint-0" class="endpoint" data-endpoint="0" role="button" visibility="hidden">
+          <circle class="hit" fill="transparent" />
+          <circle class="dot" pointer-events="none" />
+        </g>
+        <g id="endpoint-1" class="endpoint" data-endpoint="1" role="button" visibility="hidden">
+          <circle class="hit" fill="transparent" />
+          <circle class="dot" pointer-events="none" />
+        </g>
+        <g id="lane-review"></g>
+      </svg>
+    </div>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script type="module" src="overlay.mjs"></script>
+</body>
+</html>
