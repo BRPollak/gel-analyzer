@@ -6,6 +6,8 @@ import warnings
 
 from PIL import Image
 
+from .auto_crop import find_gel_crop
+
 
 class ImageValidationError(ValueError):
     """An uploaded file cannot be used as a single-image TIFF gel."""
@@ -13,7 +15,7 @@ class ImageValidationError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class GelImage:
-    """An original TIFF and a separate, lossless PNG for browser display.
+    """An original TIFF and a cropped, lossless PNG for browser display.
 
     Dimensions describe the decoded image, including TIFF orientation metadata.
     The original bytes remain the source for future processing and export.
@@ -25,6 +27,19 @@ class GelImage:
     height: int
     mode: str
     preview_png: bytes
+    crop_box: tuple[int, int, int, int]
+
+    @property
+    def preview_width(self) -> int:
+        return self.crop_box[2] - self.crop_box[0]
+
+    @property
+    def preview_height(self) -> int:
+        return self.crop_box[3] - self.crop_box[1]
+
+    @property
+    def auto_cropped(self) -> bool:
+        return self.crop_box != (0, 0, self.width, self.height)
 
 
 _PREVIEW_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B", "I;16L"}
@@ -36,7 +51,7 @@ _UNSUPPORTED_MESSAGE = (
 
 
 def load_tiff(data: bytes, filename: str) -> GelImage:
-    """Decode one TIFF and encode a PNG preview without changing source bytes.
+    """Decode and safely crop one TIFF before encoding its first PNG preview.
 
     No contrast adjustment, normalization, resizing, or filesystem writes occur.
     Pillow honors TIFF orientation during decoding; do not transpose it again.
@@ -77,8 +92,9 @@ def load_tiff(data: bytes, filename: str) -> GelImage:
                 image.load()
                 width, height = image.size
                 mode = image.mode
+                crop_box = find_gel_crop(image)
                 preview = BytesIO()
-                image.save(preview, format="PNG")
+                image.crop(crop_box).save(preview, format="PNG")
     except ImageValidationError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
@@ -95,4 +111,5 @@ def load_tiff(data: bytes, filename: str) -> GelImage:
         height=height,
         mode=mode,
         preview_png=preview.getvalue(),
+        crop_box=crop_box,
     )

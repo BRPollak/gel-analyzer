@@ -1,9 +1,9 @@
 # Agarose Gel Analyzer
 
-Version 1 is a local viewer for one TIFF gel image (`.tif` or `.tiff`). Upload a file, inspect the full
-image at its original proportions, replace it, or clear it. Rotation, cropping,
-detection, annotations, and export are planned for later versions. The final
-annotated output will remain PNG, with selectable output resolution.
+This local app accepts one TIFF gel image (`.tif` or `.tiff`) and automatically
+crops the surrounding background before displaying it. Replace or clear the
+image at any time. Rotation, lane/band detection, annotations, and export remain
+later steps. Final annotated output will be PNG with selectable resolution.
 
 ## Run locally
 
@@ -22,10 +22,29 @@ terminal to stop the server.
 ## Use
 
 1. Browse for or drop one single-image TIFF into **Choose a gel image**.
-2. Inspect the preview and its original pixel dimensions. Large images fit the
-   page width; small images are not enlarged.
+2. Wait for the automatic crop, then inspect the preview and its cropped pixel
+   dimensions. Large images fit the page width; small images are not enlarged.
 3. Choose another TIFF to replace the image, even if it has the same filename.
 4. Use **Clear image** or the uploader's remove button to start again.
+
+### Automatic crop
+
+The detector looks for one approximately centered rectangular gel that is
+darker than its surroundings. It checks sustained contrast along all four edges,
+allows slight tilt, and retains a margin of approximately 3% of the gel's shorter
+side (with a minimum allowance for detection precision). The rectangular crop
+encloses the tilted gel's corners. There are no crop adjustment controls.
+
+If a safe boundary cannot be confirmed, the app retains the full frame and says
+so. Examples include ambiguous nested rectangles, very faint edges, strong
+rotation, and gels extending outside the photographed frame. This conservative
+fallback favors preserving gel content over removing background. One supplied
+real gel and generated cases have been verified; additional real examples are
+needed to assess how well the detector generalizes.
+
+The previous preview is replaced by a processing message during upload. Only
+the finished crop (or the full-frame fallback) is then shown. The original TIFF
+is always retained unchanged in session memory.
 
 An invalid selection clears the previous preview and shows an error. Valid
 unsigned grayscale (including 16-bit in either byte order), 8-bit RGB/RGBA,
@@ -40,9 +59,10 @@ Uploaded bytes are retained unchanged in the current browser session. The app
 does not save images to disk or send them to an external processing service.
 Refreshing the page or ending the session clears the image. A separate lossless
 PNG is generated for the browser, preserving unsigned 16-bit grayscale values.
-The decoder honors TIFF orientation metadata; the app applies no additional
-rotation, contrast adjustment, normalization, or cropping. Browser display
-scaling does not alter the original TIFF.
+The decoder honors TIFF orientation metadata. Cropping copies pixels directly
+from the decoded source without applying contrast adjustment, normalization,
+resampling, or additional rotation. Browser display scaling does not alter the
+original TIFF.
 
 ## Development and verification
 
@@ -52,31 +72,42 @@ uv run pytest
 
 The Streamlit entry point is `app.py`. `gel_analyzer/image_io.py` handles TIFF
 validation independently of Streamlit and returns an immutable `GelImage` with
-the original bytes, filename, decoded dimensions, image mode, and a separate PNG
-preview. Later image adjustments and analysis must derive from the original
-TIFF, keeping this preview separate from the processing source.
+the original bytes, filename, decoded dimensions, mode, crop bounds, and cropped
+PNG preview. `gel_analyzer/auto_crop.py` detects edges on a reduced grayscale
+analysis copy; normalization is confined to that temporary copy. Later image
+adjustments and analysis must derive from the original TIFF.
 
-Before advancing to Version 2, review your own gel images in the running app.
-Generated fixtures check the mechanics but cannot replace that visual review.
-Keep private example images in the ignored `local-gels/` folder if desired.
+`crop_box` uses Pillow's half-open `(left, top, right, bottom)` coordinates in
+the full decoded image after TIFF orientation is applied. `width` and `height`
+remain the source dimensions; `preview_width` and `preview_height` describe the
+crop. Bounds are rounded outward when mapped from analysis to source pixels.
 
-### Version 1 verification
+Review each new capability on your own gels before moving to the next one.
+Generated fixtures supplement that visual review. Keep private example images
+in the ignored `local-gels/` folder if desired.
+
+### Verification
 
 Generated fixtures cover TIFF decoding, original-byte preservation, PNG preview
-pixel values, image proportions, and upload/replace/clear behavior. Visual
-acceptance using real gel images is still pending; this checkpoint implements
-Version 1 only.
+pixel values, image proportions, and upload/replace/clear behavior. Crop tests
+include known gel masks, illumination gradients, wells and bands, tilted corners,
+peripheral dark objects, missing edges, nested rectangles, and uncertainty
+fallbacks. Integration tests cover exact 16-bit/RGBA crop pixels, TIFF orientation,
+completed-preview rendering, and detection only once per upload.
 
-- `uv run --locked pytest -q`: 72 passed.
-- Browser checks passed for LZW-compressed `.tif`, 16-bit big-endian `.tiff`,
-  replacement, invalid-file rejection without a stale preview, and recovery.
-- A 960 × 480 TIFF renders as a 704 × 352 PNG preview in the desktop layout,
-  preserving its proportions and keeping the original TIFF unchanged.
+- `uv run --locked pytest -q`: 134 passed.
+- Browser verification passed for the supplied TIFF and for the full-frame
+  fallback on an image without a reliable gel boundary. No crop controls are
+  displayed.
+
+The supplied 2749 × 2199 example produces a 1301 × 2013 crop with bounds
+`(837, 102, 2138, 2115)`, retaining the gel and a small surrounding margin. Private
+gel files and generated previews are excluded from Git.
 
 ### Version roadmap
 
 1. TIFF upload and display
-2. Orientation and basic cropping
+2. Automatic outer-gel crop (implemented); orientation controls remain future work
 3. Automatic well and lane detection, with manual corrections
 4. Automatic cropping around selected lanes
 5. Ladder-band detection, with manual corrections
