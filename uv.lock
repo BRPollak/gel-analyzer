@@ -26,7 +26,7 @@ dev = [
 requires-dist = [
     { name = "numpy", specifier = ">=2,<3" },
     { name = "pillow", specifier = ">=11,<13" },
-    { name = "streamlit", specifier = ">=1.50,<2" },
+    { name = "streamlit", specifier = ">=1.65,<2" },
 ]
 
 [package.metadata.requires-dev]

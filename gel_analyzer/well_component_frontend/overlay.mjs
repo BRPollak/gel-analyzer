@@ -1,9 +1,11 @@
 import {clipPoint, pointerToImage, readPoints, screenRadius} from "./geometry.mjs";
 import {createLaneReview} from "./lane_review.mjs";
+import {fitPreviewGeometry, outerViewportHeight} from "./fit_geometry.mjs";
 
 // Streamlit's documented v1 component postMessage protocol. No CDN, external
 // runtime, network service, or image processing is used in this iframe.
 const svg = document.getElementById("gel");
+const component = document.getElementById("component");
 const image = document.getElementById("gel-image");
 const wrap = document.getElementById("image-wrap");
 const status = document.getElementById("status");
@@ -14,6 +16,7 @@ let state = null;
 let drag = null;
 let revision = 0;
 let frameHeight = 0;
+let fitFrame = 0;
 const review = createLaneReview({svg, getState: () => state, pointerPosition,
   repaint, emit: emitEvent});
 
@@ -22,7 +25,7 @@ function post(type, data = {}) {
 }
 
 function resizeFrame() {
-  const height = Math.ceil(document.getElementById("component").getBoundingClientRect().height);
+  const height = Math.ceil(component.getBoundingClientRect().height);
   if (height !== frameHeight) {
     frameHeight = height;
     post("streamlit:setFrameHeight", {height});
@@ -44,9 +47,43 @@ function emitPoints() {
 }
 
 function repaint() {
+  if (!state) return;
+  // Instructions may wrap differently after a stage change; measure that real
+  // height before allocating the image's viewport budget.
+  drawGuide();
+  fitPreview();
   drawGuide();
   drawResults();
   review.draw();
+}
+
+function fitPreview() {
+  const componentStyle = getComputedStyle(component);
+  const statusStyle = getComputedStyle(status);
+  const wrapStyle = getComputedStyle(wrap);
+  const px = value => Number.parseFloat(value) || 0;
+  const horizontalPadding = px(componentStyle.paddingLeft) + px(componentStyle.paddingRight);
+  const chromeHeight = px(componentStyle.paddingTop) + px(componentStyle.paddingBottom) +
+    status.getBoundingClientRect().height + px(statusStyle.marginTop) + px(statusStyle.marginBottom) +
+    px(wrapStyle.marginTop) + px(wrapStyle.marginBottom);
+  const fit = fitPreviewGeometry({imageWidth: state.width, imageHeight: state.height,
+    availableWidth: Math.max(1, component.clientWidth - horizontalPadding),
+    viewportHeight: outerViewportHeight(window), chromeHeight,
+    reviewMode: state.reviewMode, laneCount: state.lanes.length});
+  wrap.style.width = `${fit.wrapperWidth}px`;
+  wrap.style.maxWidth = `${state.width + fit.rightGutter}px`;
+  wrap.dataset.previewScale = String(fit.scale);
+  wrap.dataset.heightBudget = String(fit.heightBudget);
+  wrap.dataset.controlsOverflow = String(fit.controlsOverflow);
+}
+
+function scheduleFit() {
+  if (fitFrame) return;
+  fitFrame = requestAnimationFrame(() => {
+    fitFrame = 0;
+    repaint();
+    resizeFrame();
+  });
 }
 
 function pointerPosition(event) {
@@ -90,7 +127,7 @@ function drawGuide() {
   svg.dataset.reviewMode = state.reviewMode || "";
   wrap.dataset.reviewMode = state.reviewMode || "";
   svg.dataset.pointCount = String(state.points.length);
-  status.textContent = state.reviewMode === "borders"
+  const instructions = state.reviewMode === "borders"
     ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane below to insert one at the bottom of the detection line."
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
@@ -101,6 +138,10 @@ function drawGuide() {
       : state.points.length === 1
         ? "Click the other end of the well range. Drag either dot to adjust its position."
         : "Drag the dots so the dotted line passes through the well centers, then confirm below. Arrow keys also adjust a focused dot.";
+  if (status.textContent !== instructions) {
+    status.textContent = instructions;
+    scheduleFit();
+  }
 }
 
 function element(name, attributes, parent = resultLayer) {
@@ -230,7 +271,6 @@ window.addEventListener("message", event => {
     svg.setAttribute("viewBox", `0 0 ${args.width} ${args.height}`);
     svg.setAttribute("width", args.width);
     svg.setAttribute("height", args.height);
-    wrap.style.maxWidth = `${args.width}px`;
     image.setAttribute("width", args.width);
     image.setAttribute("height", args.height);
     image.setAttribute("href", args.image_src);
@@ -253,10 +293,33 @@ window.addEventListener("message", event => {
   requestAnimationFrame(resizeFrame);
 });
 
-new ResizeObserver(() => {
-  repaint();
-  resizeFrame();
-}).observe(document.getElementById("component"));
+// Observe only width changes. The iframe height is an output of this layout;
+// using its height as another input would cause repeated shrinking and reruns.
+let observedWidth = -1;
+const observer = new ResizeObserver(entries => {
+  const width = entries[0]?.contentRect.width;
+  if (width !== observedWidth) {
+    observedWidth = width;
+    scheduleFit();
+  }
+});
+observer.observe(component);
+
+const resizeTargets = new Set([window]);
+try {
+  resizeTargets.add(window.parent);
+  if (window.parent.visualViewport) resizeTargets.add(window.parent.visualViewport);
+} catch { /* Parent viewport access can be unavailable across origins. */ }
+for (const target of resizeTargets) {
+  try { target.addEventListener("resize", scheduleFit); } catch { /* Cross-origin parent. */ }
+}
+window.addEventListener("pagehide", () => {
+  observer.disconnect();
+  if (fitFrame) cancelAnimationFrame(fitFrame);
+  for (const target of resizeTargets) {
+    try { target.removeEventListener("resize", scheduleFit); } catch { /* Cross-origin parent. */ }
+  }
+});
 
 post("streamlit:componentReady", {apiVersion: 1});
 resizeFrame();

@@ -1,4 +1,4 @@
-"""Session-only gel orientation, lane detection, manual review, and cropping."""
+"""Session-only gel orientation, lane review, cropping, and annotation."""
 
 from io import BytesIO
 import math
@@ -14,6 +14,7 @@ from gel_analyzer.orientation import OrientationError
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
 from gel_analyzer import lane_review_ui
+from gel_analyzer.viewport import install_preview_viewport
 
 
 def reset_wells(*, editing: bool = False, preserve_points: bool = False) -> None:
@@ -246,8 +247,9 @@ def main() -> None:
     st.set_page_config(
         page_title="Agarose Gel Analyzer",
         page_icon="🧬",
-        layout="centered",
+        layout="wide",
     )
+    install_preview_viewport()
     st.session_state.setdefault("gel_image", None)
     st.session_state.setdefault("upload_error", None)
     st.session_state.setdefault("uploader_generation", 0)
@@ -261,29 +263,26 @@ def main() -> None:
     if "lane_stage" not in st.session_state:
         lane_review_ui.reset_lane_review()
 
-    st.caption("GEL ORIENTATION AND LANES")
     st.title("Agarose Gel Analyzer")
-    st.write(
-        "Upload a TIFF to automatically trim the surrounding background, "
-        "then confirm its orientation, detect and adjust the lanes, and choose the final crop."
-    )
+    st.caption("Orient your gel, define lanes, crop, and annotate.")
 
     uploader_key = f"gel_upload_{st.session_state.uploader_generation}"
-    st.file_uploader(
-        "Choose a gel image",
-        type=["tif", "tiff"],
-        accept_multiple_files=False,
-        key=uploader_key,
-        on_change=read_upload,
-        args=(uploader_key,),
-        help="Upload one single-image TIFF (.tif or .tiff). Choose another file to replace it.",
-    )
-    st.button(
-        "Clear image",
-        on_click=clear_image,
-        disabled=st.session_state.get(uploader_key) is None,
-    )
-    st.caption("Images stay in this session only. Refreshing the page clears your image.")
+    with st.expander("Gel image", expanded=st.session_state.gel_image is None):
+        st.file_uploader(
+            "Choose a gel image",
+            type=["tif", "tiff"],
+            accept_multiple_files=False,
+            key=uploader_key,
+            on_change=read_upload,
+            args=(uploader_key,),
+            help="Upload one single-image TIFF (.tif or .tiff). Choose another file to replace it.",
+        )
+        st.button(
+            "Clear image",
+            on_click=clear_image,
+            disabled=st.session_state.get(uploader_key) is None,
+        )
+        st.caption("Images stay in this session only. Refreshing the page clears your image.")
 
     # Replace this same slot immediately, so neither the previous upload nor an
     # uncropped new image is shown while the new source is being processed.
@@ -348,8 +347,9 @@ def main() -> None:
         pending: GelImage | None = st.session_state.orientation_preview
         gel = pending if pending is not None else current_gel
         st.divider()
-        st.subheader("Gel preview")
         final_crop = st.session_state.lane_crop if st.session_state.lane_stage == "cropped" else None
+        if final_crop is None:
+            st.subheader("Gel preview")
         visible_width = final_crop.width if final_crop else gel.preview_width
         visible_height = final_crop.height if final_crop else gel.preview_height
         st.text(f"{gel.filename} · {visible_width:,} × {visible_height:,} pixels")
@@ -359,14 +359,15 @@ def main() -> None:
                     "Rotated and straightened, flipped vertically, and cropped to the gel outline. "
                     "The original left side is now at the top. Confirm to accept this image."
                 )
-            else:
+            elif final_crop is None:
                 st.caption("Orientation confirmed. The original left side is at the top.")
         elif gel.auto_cropped:
             st.caption("Automatically cropped with a small margin around the gel.")
         else:
             st.caption("Gel boundary uncertain; showing the full image to preserve the gel.")
         if confirmed_gel() is not None and st.session_state.lane_stage is not None:
-            show_expected_lane_count()
+            with st.expander("Lane detection settings"):
+                show_expected_lane_count()
             lane_review_ui.show_lane_review(current_gel)
             st.button(
                 "Edit well line", key="edit_well_line", on_click=reset_wells,
