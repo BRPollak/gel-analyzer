@@ -33,14 +33,15 @@ def workflow(monkeypatch):
         )
 
     monkeypatch.setattr(image_io, "orient_gel", orient)
-    harness = SimpleNamespace(event=None, renders=[], calls=[], result=None)
+    harness = SimpleNamespace(event=None, renders=[], calls=[], expected_counts=[], result=None)
 
     def component(*args, **kwargs):
         harness.renders.append((args, kwargs))
         return harness.event
 
-    def detect(image, points):
+    def detect(image, points, *, expected_count=None):
         harness.calls.append((image.copy(), points))
+        harness.expected_counts.append(expected_count)
         return harness.result
 
     monkeypatch.setattr(well_component, "render_well_component", component)
@@ -103,6 +104,7 @@ def assert_reset(app, previous_token):
     assert app.session_state["well_editing"] is False
     assert app.session_state["well_revision"] == 0
     assert app.session_state["well_token"] != previous_token
+    assert app.session_state["well_expected_count"] is None
 
 
 def test_selection_is_only_available_after_explicit_orientation_confirmation(workflow):
@@ -171,6 +173,107 @@ def test_clicks_drags_and_reruns_do_not_detect_until_confirmed(workflow):
     assert app.session_state["well_result"] is workflow.result
     app.run()
     assert len(workflow.calls) == 1
+
+
+@pytest.mark.parametrize("warnings", [(), ("Review uncertain well boundaries.",)])
+def test_optional_lane_count_changes_invalidate_detection_and_require_confirmation(workflow, warnings):
+    begin_selection(workflow)
+    app = workflow.app
+    assert app.number_input(key="expected_lane_count").value is None
+    event(workflow)
+    points = app.session_state["well_points"]
+    workflow.result = replace(good_result(), warnings=warnings)
+    app.button(key="confirm_well_line").click().run()
+    assert workflow.expected_counts == [None]
+    old_token = app.session_state["well_token"]
+
+    app.number_input(key="expected_lane_count").set_value(3).run()
+
+    assert not app.exception
+    assert app.session_state["well_expected_count"] == 3
+    assert app.session_state["well_points"] == points
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_editing"] is True
+    assert app.session_state["well_token"] != old_token
+    assert workflow.renders[-1][1]["lanes"] == []
+    assert len(workflow.calls) == 1
+    # The old component cannot overwrite the retained guide after a change.
+    event(workflow, points=((70, 25), (70, 185)), revision=99, token=old_token)
+    assert app.session_state["well_points"] == points
+    app.button(key="confirm_well_line").click().run()
+    assert workflow.expected_counts == [None, 3]
+    assert app.session_state["well_result"] is workflow.result
+    confirmed_token = app.session_state["well_token"]
+    app.number_input(key="expected_lane_count").set_value(3).run()
+    app.run()
+    assert app.session_state["well_result"] is workflow.result
+    assert app.session_state["well_token"] == confirmed_token
+    assert len(workflow.calls) == 2
+
+    app.number_input(key="expected_lane_count").set_value(None).run()
+    assert not app.exception
+    assert app.session_state["well_expected_count"] is None
+    assert app.session_state["well_result"] is None
+    app.button(key="confirm_well_line").click().run()
+    assert workflow.expected_counts == [None, 3, None]
+
+
+@pytest.mark.parametrize("change", ["count", "guide", "image"])
+def test_pending_detection_request_cannot_use_stale_count_guide_or_image(workflow, change):
+    begin_selection(workflow)
+    event(workflow)
+    app = workflow.app
+    app.number_input(key="expected_lane_count").set_value(3).run()
+    token, points = app.session_state["well_token"], app.session_state["well_points"]
+    request_count = 3
+    if change == "count":
+        request_count = 2
+    elif change == "guide":
+        points = ((50.0, 20.0), (50.0, 180.0))
+    else:
+        token = "old-image-token"
+    app.session_state["well_detection_request"] = (token, points, request_count)
+
+    app.run()
+
+    assert not app.exception
+    assert not workflow.calls
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_detection_request"] is None
+
+
+def test_lane_count_survives_guide_edits_and_reset(workflow):
+    begin_selection(workflow)
+    event(workflow)
+    app = workflow.app
+    app.number_input(key="expected_lane_count").set_value(3).run()
+    workflow.result = good_result()
+    app.button(key="confirm_well_line").click().run()
+    app.button(key="edit_well_line").click().run()
+    assert app.number_input(key="expected_lane_count").value == 3
+    event(workflow, points=((45, 25), (45, 185)))
+    assert app.session_state["well_expected_count"] == 3
+    app.button(key="reset_well_line").click().run()
+    assert app.number_input(key="expected_lane_count").value == 3
+    assert app.session_state["well_points"] == ()
+
+
+def test_lane_count_change_keeps_latest_pending_guide_edit(workflow):
+    begin_selection(workflow)
+    event(workflow)
+    app = workflow.app
+    token = app.session_state["well_token"]
+    latest_points = ((45.0, 25.0), (45.0, 185.0))
+    pending = {"token": token, "revision": 2, "points": [list(point) for point in latest_points]}
+    app.session_state[f"well_overlay_{token}"] = pending
+    workflow.event = pending
+
+    app.number_input(key="expected_lane_count").set_value(3).run()
+
+    assert not app.exception
+    assert app.session_state["well_points"] == latest_points
+    assert app.session_state["well_token"] != token
+    assert not workflow.calls
 
 
 @pytest.mark.parametrize("warnings", [(), ("Review uncertain well boundaries.",)])
@@ -393,6 +496,7 @@ def test_orientation_changes_invalidate_any_existing_well_state(workflow, action
     app.session_state["well_result"] = good_result()
     app.session_state["well_editing"] = True
     app.session_state["well_revision"] = 9
+    app.session_state["well_expected_count"] = 3
     previous_token = app.session_state["well_token"]
 
     key = "rotate_and_orient" if action == "request" else "confirm_orientation"
@@ -430,6 +534,7 @@ def test_upload_changes_clear_results_and_reject_previous_image_events(workflow,
     event(workflow)
     workflow.result = good_result()
     app = workflow.app
+    app.number_input(key="expected_lane_count").set_value(3).run()
     app.button(key="confirm_well_line").click().run()
     old_token = app.session_state["well_token"]
 

@@ -68,11 +68,11 @@ def test_selection_range_excludes_visible_wells_above_and_below():
     assert [well.bounds[1::2] for well in result.wells] == [(58, 86), (111, 122)]
 
 
-def test_cutting_through_wells_does_not_turn_endpoints_into_invented_edges():
+def test_small_endpoint_cuts_complete_existing_wells_without_inventing_edges():
     result = detect_wells(_gel(), ((41, 25), (46, 180)))
 
-    assert [well.bounds[1::2] for well in result.wells] == [(58, 86), (111, 122)]
-    assert any("end inside a well" in warning for warning in result.warnings)
+    assert [well.bounds[1::2] for well in result.wells] == [bounds[1::2] for bounds in BOUNDS]
+    assert any("beyond a guide endpoint" in warning for warning in result.warnings)
 
 
 def test_downstream_bands_cannot_change_detection_or_create_missing_wells():
@@ -247,3 +247,96 @@ def test_invalid_guide_reports_helpful_instruction(points, message):
 
 def test_boundary_coordinates_are_valid_points():
     assert validate_line(((240, 220), (240, 0)), (240, 220)) == ((240, 0), (240, 220))
+
+
+def _fragmented_well_gel(seed):
+    """Synthetic thin rims over an uneven field, independent of sample pixels."""
+    ys, xs = np.mgrid[:1180, :1200]
+    values = 150 + ys * 0.002 - xs * 0.01 - 9 * np.exp(-((xs - 210) / 60) ** 2)
+    expected = []
+    for index, top in enumerate((205, 340, 472, 603, 735, 868, 1002)):
+        left, right, bottom = 164 - index, 209 - index * 2, top + 108
+        expected.append((left, top, right, bottom))
+        for row in range(top, bottom):
+            fraction = (row - top) / (bottom - top)
+            drift = int(2 * np.sin(fraction * np.pi * 2))
+            strength = (10 + index * 2) * (0.6 + 0.4 * np.sin(fraction * np.pi * 3) ** 2)
+            values[row, left + drift:left + drift + 4] -= strength
+            values[row, right + drift - 4:right + drift] -= strength
+            values[row, left + drift + 5:left + drift + 9] += strength * 0.7
+        values[top:top + 3, left:right] -= 6
+        values[bottom - 3:bottom, left:right] += 6
+    values += np.random.default_rng(seed).normal(0, 4, values.shape)
+    return Image.fromarray(values.clip(0, 255).astype(np.uint8)), expected
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_faint_fragmented_rims_recover_complete_separate_lanes(seed):
+    image, expected = _fragmented_well_gel(seed)
+    before = image.tobytes()
+
+    result = detect_wells(image, ((184, 190), (174, 1130)))
+
+    assert len(result.wells) == len(expected)
+    assert any("Low contrast" in warning for warning in result.warnings)
+    for well, lane, (left, top, _, bottom) in zip(result.wells, result.lanes, expected):
+        # Matching a count alone would miss the old failure: two fragments in
+        # one prep substituted for a missed or substantially truncated lane.
+        covered = max(0, min(bottom, lane[3]) - max(top, lane[1]))
+        assert covered / (bottom - top) >= 0.87
+        assert abs(lane[0] - left) <= 3
+        assert top <= well.center[1] <= bottom
+        assert lane[3] - lane[1] <= (bottom - top) * 1.2
+    assert all(first[3] <= second[1] for first, second in zip(result.lanes, result.lanes[1:]))
+    assert len(set(result.wells)) == len(result.wells)
+    assert image.tobytes() == before
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_full_height_noisy_textured_background_does_not_trigger_faint_recovery(seed):
+    rng = np.random.default_rng(seed)
+    ys, xs = np.mgrid[:1180, :400]
+    values = 120 + xs * 0.02 + ys * 0.003 + rng.normal(0, 4, xs.shape)
+    values[rng.integers(190, 1130, 80), rng.integers(155, 210, 80)] = 255
+    image = Image.fromarray(values.clip(0, 255).astype(np.uint8))
+
+    result = detect_wells(image, ((184, 190), (174, 1130)))
+
+    assert result.wells == result.lanes == ()
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_faint_recovery_preserves_clear_gaps_next_to_strong_wells(seed):
+    ys, xs = np.mgrid[:700, :600]
+    values = 120 + xs * 0.002 + np.zeros_like(ys, dtype=float)
+    expected = ((30, 90), (98, 158), (166, 226), (234, 294))
+    for (top, bottom), contrast in zip(expected, (80, 8, -60, -8)):
+        values[top:bottom, 90:110] += contrast
+    values += np.random.default_rng(seed).normal(0, 1.5, values.shape)
+
+    result = detect_wells(
+        Image.fromarray(values.clip(0, 255).astype(np.uint8)),
+        ((100, 20), (100, 310)),
+    )
+
+    assert len(result.wells) == 4
+    for well, bounds in zip(result.wells, expected):
+        np.testing.assert_allclose(well.bounds[1::2], bounds, atol=1)
+    assert all(first[3] <= second[1] for first, second in zip(result.lanes, result.lanes[1:]))
+
+
+@pytest.mark.parametrize("seed", (2, 6, 11))
+def test_blurred_random_texture_is_not_promoted_to_a_set_of_faint_lanes(seed):
+    rng = np.random.default_rng(seed)
+    ys, xs = np.mgrid[:1180, :400]
+    values = 120 + xs * 0.02 + ys * 0.003 + rng.normal(0, 4, xs.shape)
+    image = Image.fromarray(values.clip(0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(0.6))
+
+    result = detect_wells(image, ((184, 190), (174, 1130)))
+
+    # The conservative detector has an existing limitation on correlated
+    # texture: a few small weak fragments can survive. Recovery must not turn
+    # those into the 13–15 proposed lanes seen without a contrast prerequisite.
+    assert len(result.wells) <= 2
+    assert all(well.bounds[3] - well.bounds[1] <= 24 for well in result.wells)
+    assert any("Low contrast" in warning for warning in result.warnings)

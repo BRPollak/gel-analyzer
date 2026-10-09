@@ -10,6 +10,7 @@
     body { margin: 0; background: transparent; color: var(--text-color, #31333f); }
     #component { padding: 12px 12px 3px; }
     #image-wrap { width: 100%; }
+    #image-wrap[data-review-mode="borders"] { padding-right: 40px; }
     #gel { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
     #gel[data-editable="true"] { cursor: crosshair; }
     #gel[data-editable="false"] { touch-action: auto; }
@@ -39,6 +40,14 @@
     .review-line.extent-line { stroke: #fbbf24; stroke-width: 2; }
     .extent-handle .review-grip { stroke: #fbbf24; }
     .extent-handle .review-symbol { fill: #fbbf24; }
+    .lane-delete { cursor: pointer; outline: none; }
+    .delete-background { fill: #0f172a; stroke: #fda4af; stroke-width: 1.5; }
+    .delete-symbol { fill: none; stroke: #fda4af; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .delete-connector { stroke: #fda4af; stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .lane-delete:hover .delete-background, .lane-delete:focus .delete-background { fill: #881337; stroke: #fff; stroke-width: 2; }
+    .lane-delete:hover .delete-symbol, .lane-delete:focus .delete-symbol { stroke: #fff; }
+    .lane-delete[aria-disabled="true"] { cursor: default; opacity: .45; }
+    .review-handle[aria-disabled="true"] { cursor: default; }
     #excluded-right { fill: #0f172a88; pointer-events: none; }
   </style>
 </head>

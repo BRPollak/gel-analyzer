@@ -1,12 +1,14 @@
-"""Find visible well outlines near a user-confirmed guide, without editing pixels.
+"""Find supported well outlines and suggest lanes without editing image pixels.
 
-All geometry uses the confirmed image's pixel-boundary coordinates. Detection
-only examines a narrow strip following the guide and a small adjacent margin;
-it never searches the downstream lane for evidence or infers missing wells.
+All geometry uses the confirmed image's pixel-boundary coordinates. Well
+discovery stays close to the guide; a separate refinement step can use the
+downstream image to estimate lane coverage without changing the well outlines.
 """
 
 from dataclasses import dataclass
+from itertools import combinations
 import math
+from numbers import Integral
 
 import numpy as np
 from PIL import Image
@@ -95,7 +97,10 @@ def _analysis_pixels(image: Image.Image) -> np.ndarray:
     return np.asarray(gray, dtype=np.float64)
 
 
-def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
+def _detect_wells(
+    image: Image.Image, endpoints, *, sensitive: bool = False,
+    pixels: np.ndarray | None = None,
+) -> tuple[DetectionResult, bool]:
     """Detect contrast-supported wells and horizontal lanes in a selected range.
 
     Local background subtraction supports bright, dark, and outlined wells.
@@ -104,7 +109,8 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
     whether a visible well contains sample. Bounds are clipped and half-open.
     """
     upper, lower = validate_line(endpoints, image.size)
-    pixels = _analysis_pixels(image)
+    if pixels is None:
+        pixels = _analysis_pixels(image)
     height, width = pixels.shape
     top = max(0, int(math.floor(upper[1])))
     bottom = min(height, int(math.ceil(lower[1])))
@@ -131,7 +137,10 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
     blend = (offsets + margin - radius / 2) / (2 * margin - radius)
     baseline = left_bg[:, None] + (right_bg - left_bg)[:, None] * blend
     residual = stripe - baseline
-    smoothing = max(1, min(7, int(round(len(rows) / 200))))
+    # The recovery pass integrates thin, fragmented walls over more rows.
+    # Its output must still respect clear gaps and established well boundaries.
+    smoothing = (max(1, min(10, int(round(len(rows) / 130)))) if sensitive
+                 else max(1, min(7, int(round(len(rows) / 200)))))
     # A short median filter rejects isolated hot pixels before averaging; a
     # bright speck otherwise spreads into several apparently supported rows.
     padded_median = np.pad(residual, ((1, 1), (0, 0)), mode="edge")
@@ -148,7 +157,9 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
     core = coherent[:, margin - radius:margin + radius + 1]
     # Spatial averaging keeps isolated hot pixels from creating well evidence.
     core = (core[:, :-2] + core[:, 1:-1] + core[:, 2:]) / 3
-    evidence = np.quantile(np.abs(core), 0.8, axis=1)
+    # Thin walls can occupy less than 20% of the discovery strip. A higher
+    # quantile recovers their coherent signal without requiring a filled well.
+    evidence = np.quantile(np.abs(core), 0.95 if sensitive else 0.8, axis=1)
     # Include the integer-pixel quantization floor; a staircase illumination
     # gradient must not become a high-confidence feature in a noiseless image.
     coherent_noise = noise / math.sqrt((2 * smoothing + 1) * 3)
@@ -156,10 +167,17 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
     numerical_floor = max(float(np.max(np.abs(stripe))) * 1e-9, 1e-9)
     # An intensity fraction of the strongest well would lose faint neighbors.
     # Use the measured noise and between-feature floor instead.
-    threshold = max(coherent_noise * 2.5, floor * 1.7, numerical_floor)
+    threshold = max(coherent_noise * 2.5, floor * (1.1 if sensitive else 1.7), numerical_floor)
     min_height = max(4, int(round(height * 0.006)))
     min_width = 4
-    candidate_mask = _bridge(evidence > threshold, smoothing)
+    gap_limit = max(smoothing, int(radius * 0.6)) if sensitive else smoothing
+    candidate_mask = _bridge(evidence > threshold, gap_limit)
+    if sensitive:
+        # Bridge shallow interruptions in a faint wall, but retain even a short
+        # gap whose contrast drops below the measured between-feature floor.
+        for gap_start, gap_end in _runs(evidence <= threshold):
+            if float(np.min(evidence[gap_start:gap_end])) < floor * 0.9:
+                candidate_mask[gap_start:gap_end] = False
     raw_core = np.quantile(np.abs(filtered[:, margin-radius:margin+radius+1]), 0.8, axis=1)
     # Smoothing must not close a clear physical gap between two adjacent wells.
     for gap_start, gap_end in _runs(raw_core < max(noise * 0.5, numerical_floor)):
@@ -171,8 +189,13 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
     clipped = False
     cut_endpoint = False
     weak_boundary = False
+    recovery_support = 0
     for start, end in candidates:
         if end - start < min_height or float(np.max(evidence[start:end])) < max(coherent_noise * 3.0, numerical_floor):
+            continue
+        # A recovery feature must persist beyond the averaging window; a
+        # chance noise excursion cannot acquire support simply by smoothing.
+        if sensitive and end - start < 2 * smoothing + 1:
             continue
         # Taking the median of central rows rejects dirt confined to one row,
         # while retaining the outer rims of outlined (rather than filled) wells.
@@ -219,21 +242,25 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
             a -= 1
         while b < len(rows) and evidence[b] > vertical_threshold:
             b += 1
-        # Refine caps from nearby original contrast, including walls on both
-        # sides. A filled cap can have *less* high-pass response than hollow
-        # interior walls, so the discovery response alone would trim it away.
-        vertical = _smooth(np.quantile(np.abs(filtered[:, first:last]), 0.7, axis=1), 1)
-        raw_peak = float(np.percentile(vertical[start:end], 75))
-        cut = max(noise * 1.5, raw_peak * 0.5, numerical_floor)
-        lo, hi = max(0, start - radius), min(len(rows), end + radius)
-        while a > lo and vertical[a - 1] > cut:
-            a -= 1
-        while b < hi and vertical[b] > cut:
-            b += 1
-        while a < b and vertical[a] < cut:
-            a += 1
-        while b > a and vertical[b - 1] < cut:
-            b -= 1
+        # Raw contrast trims crisp caps precisely. For faint outlines on an
+        # uneven background it instead follows the illumination and can cut
+        # away half a lane, so retain their coherent discovery support.
+        if not sensitive or local_peak >= noise * 4:
+            # Refine caps from nearby original contrast, including walls on both
+            # sides. A filled cap can have *less* high-pass response than hollow
+            # interior walls, so the discovery response alone would trim it away.
+            vertical = _smooth(np.quantile(np.abs(filtered[:, first:last]), 0.7, axis=1), 1)
+            raw_peak = float(np.percentile(vertical[start:end], 75))
+            cut = max(noise * 1.5, raw_peak * 0.5, numerical_floor)
+            lo, hi = max(0, start - radius), min(len(rows), end + radius)
+            while a > lo and vertical[a - 1] > cut:
+                a -= 1
+            while b < hi and vertical[b] > cut:
+                b += 1
+            while a < b and vertical[a] < cut:
+                a += 1
+            while b > a and vertical[b - 1] < cut:
+                b -= 1
         if b - a < min_height:
             uncertain = True
             continue
@@ -258,6 +285,7 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
             continue
         bounds = (left, well_top, right, well_bottom)
         wells.append(Well(bounds, ((left + right) / 2, (well_top + well_bottom) / 2)))
+        recovery_support += local_peak >= noise * 2 and well_bottom - well_top >= radius * 2
         clipped |= left == 0 or right == width or well_top == 0 or well_bottom == height
 
     warnings = []
@@ -271,4 +299,302 @@ def detect_wells(image: Image.Image, endpoints) -> DetectionResult:
         warnings.append("Low contrast makes some well boundaries uncertain. Review every outline and edit the guide if needed; faint or fragmented wells may be missed or split.")
     if clipped:
         warnings.append("A detected well touches an image edge; its bounds are clipped to the available pixels.")
-    return DetectionResult(tuple(wells), tuple((well.bounds[0], well.bounds[1], width, well.bounds[3]) for well in wells), tuple(warnings))
+    result = DetectionResult(
+        tuple(wells),
+        tuple((well.bounds[0], well.bounds[1], width, well.bounds[3]) for well in wells),
+        tuple(warnings),
+    )
+    # Blurred random texture can itself produce weak apparent outlines. Do
+    # not relax the noise floor unless at least two sustained features have
+    # measurable original contrast; otherwise keep the conservative result.
+    return result, weak_boundary and recovery_support >= 2
+
+
+def _detect_supported_wells(image: Image.Image, endpoints) -> DetectionResult:
+    """Find locally supported wells, then recover faint fragmented outlines.
+
+    A conservative pass preserves crisp geometry. When it encounters low
+    contrast, a second pass can join weak parts of the same outline. Recovery
+    cannot merge multiple established wells or produce overlapping lanes.
+    Neither pass uses downstream bands or modifies the source image.
+    """
+    strict, recover_faint = _detect_wells(image, endpoints)
+    if not recover_faint:
+        return strict
+    recovered, _ = _detect_wells(image, endpoints, sensitive=True)
+    if not recovered.wells:
+        return strict
+
+    def overlap(first: Well, second: Well) -> int:
+        return min(first.bounds[3], second.bounds[3]) - max(first.bounds[1], second.bounds[1])
+
+    # Use the substantial observed outlines only to protect existing geometry,
+    # never to extrapolate positions, impose equal spacing, or invent a well.
+    heights = sorted(well.bounds[3] - well.bounds[1] for well in strict.wells)
+    substantial_height = float(np.median(heights[len(heights) // 2:])) * 0.65
+    protected = set()
+    for candidate in recovered.wells:
+        associated = [
+            well for well in strict.wells
+            if overlap(candidate, well) > min(
+                candidate.bounds[3] - candidate.bounds[1],
+                well.bounds[3] - well.bounds[1],
+            ) * 0.5
+        ]
+        substantial = [
+            well for well in associated
+            if well.bounds[3] - well.bounds[1] >= substantial_height
+        ]
+        separated_centers = (
+            len(associated) > 1
+            and associated[-1].center[1] - associated[0].center[1] > substantial_height
+        )
+        if len(substantial) > 1 or separated_centers:
+            protected.update(associated)
+
+    # Resolve all protected intervals first. Otherwise two recovered fragments
+    # could select the same old outline or overlap an adjacent protected lane.
+    selected = list(protected)
+    selected.extend(
+        candidate for candidate in recovered.wells
+        if not any(overlap(candidate, well) > 0 for well in protected)
+    )
+    for well in strict.wells:
+        if not any(overlap(well, other) > 0 for other in selected):
+            selected.append(well)
+    selected.sort(key=lambda well: well.center[1])
+    warnings = tuple(dict.fromkeys((*strict.warnings, *recovered.warnings)))
+    return DetectionResult(
+        tuple(selected),
+        tuple((well.bounds[0], well.bounds[1], image.width, well.bounds[3]) for well in selected),
+        warnings,
+    )
+
+
+def _overlap(first: Well, second: Well) -> int:
+    return min(first.bounds[3], second.bounds[3]) - max(first.bounds[1], second.bounds[1])
+
+
+def _well(bounds: Bounds) -> Well:
+    left, top, right, bottom = bounds
+    return Well(bounds, ((left + right) / 2, (top + bottom) / 2))
+
+
+def _nearby_guides(points, size: tuple[int, int], radius: int):
+    """Small translations sample either side of the user's intended well line."""
+    shift = max(2, min(5, int(round(radius / 4))))
+    return tuple(dict.fromkeys(
+        tuple((min(size[0], max(0, x + offset)), y) for x, y in points)
+        for offset in (-2 * shift, -shift, shift, 2 * shift)
+    ))
+
+
+def _extended_guide(points, size: tuple[int, int], margin: int):
+    """Continue the same line, bounded by nearby pixels and the image edges."""
+    upper, lower = points
+    slope = (lower[0] - upper[0]) / (lower[1] - upper[1])
+    top, bottom = max(0, upper[1] - margin), min(size[1], lower[1] + margin)
+    if slope:
+        y_at_left = upper[1] - upper[0] / slope
+        y_at_right = upper[1] + (size[0] - upper[0]) / slope
+        top = max(top, min(y_at_left, y_at_right))
+        bottom = min(bottom, max(y_at_left, y_at_right))
+    return tuple((min(size[0], max(0, upper[0] + (y - upper[1]) * slope)), y) for y in (top, bottom))
+
+
+def _agreed_wells(first: DetectionResult, second: DetectionResult) -> tuple[Well, ...]:
+    """Require comparable independent outlines on both neighboring guides."""
+    agreed = []
+    used = set()
+    for well in first.wells:
+        matches = [
+            (index, other) for index, other in enumerate(second.wells)
+            if index not in used
+            and _overlap(well, other) >= 0.65 * max(well.bounds[3] - well.bounds[1], other.bounds[3] - other.bounds[1])
+            and min(well.bounds[2], other.bounds[2]) > max(well.bounds[0], other.bounds[0])
+        ]
+        if not matches:
+            continue
+        index, other = max(matches, key=lambda item: _overlap(well, item[1]))
+        used.add(index)
+        agreed.append(_well(tuple(int(round((a + b) / 2)) for a, b in zip(well.bounds, other.bounds))))
+    return tuple(agreed)
+
+
+def _consensus_wells(results) -> tuple[Well, ...]:
+    candidates = [well for first, second in combinations(results, 2) for well in _agreed_wells(first, second)]
+    # Prefer the fuller repeatedly supported outline. Distinct neighbors still
+    # require separate intervals, and an existing well may not be swallowed.
+    candidates.sort(key=lambda well: well.bounds[3] - well.bounds[1], reverse=True)
+    selected = []
+    for candidate in candidates:
+        if not any(_overlap(candidate, other) > 0 for other in selected):
+            selected.append(candidate)
+    return tuple(selected)
+
+
+def _sustained_support(pixels: np.ndarray, well: Well, radius: int) -> bool:
+    """Reject repeated tiny texture peaks before adding a consensus candidate."""
+    left, top, right, bottom = well.bounds
+    if bottom - top < max(6, radius * 1.5):
+        return False
+    return _contrast_support(pixels, well)
+
+
+def _contrast_support(pixels: np.ndarray, well: Well) -> bool:
+    """Require original contrast across most rows, not only one bright cap."""
+    left, top, right, bottom = well.bounds
+    reach = max(4, right - left)
+    outside = np.hstack((pixels[top:bottom, max(0, left - reach):left],
+                         pixels[top:bottom, right:min(pixels.shape[1], right + reach)]))
+    if not outside.size:
+        return False
+    background = np.median(outside, axis=1)
+    noise = max(0.3, float(np.median(np.abs(np.diff(outside, axis=1))) / 0.954)) if outside.shape[1] > 1 else 0.3
+    contrast = np.quantile(np.abs(pixels[top:bottom, left:right] - background[:, None]), 0.9, axis=1)
+    return float(np.percentile(contrast, 25)) > noise * 2.5
+
+
+def _supported_extension(pixels: np.ndarray, candidate: Well, original: Well) -> bool:
+    left, top, right, bottom = candidate.bounds
+    for a, b in ((top, original.bounds[1]), (original.bounds[3], bottom)):
+        if b - a >= 3 and not _contrast_support(pixels, _well((left, a, right, b))):
+            return False
+    return True
+
+
+def _complete_endpoints(image: Image.Image, points, result: DetectionResult, radius: int) -> DetectionResult:
+    """Only recover wells that actually cross an original selection endpoint."""
+    extended = _extended_guide(points, image.size, min(80, radius * 3))
+    if extended == points:
+        return result
+    # Most guides already include complete wells. Avoid perturbing their
+    # smoothing scale or their deliberately selected first and last lanes.
+    if not any("end inside a well" in warning for warning in result.warnings):
+        return result
+    nearby = _detect_supported_wells(image, extended)
+    selected = list(result.wells)
+    completed = 0
+    for candidate in nearby.wells:
+        if not any(candidate.bounds[1] < endpoint[1] < candidate.bounds[3] for endpoint in points):
+            continue
+        associated = [well for well in selected if _overlap(candidate, well) > 0]
+        if len(associated) > 1:
+            continue
+        if associated and _overlap(candidate, associated[0]) < 0.75 * (associated[0].bounds[3] - associated[0].bounds[1]):
+            continue
+        selected = [well for well in selected if well not in associated]
+        selected.append(candidate)
+        completed += 1
+    if not completed:
+        return result
+    warnings = tuple(warning for warning in result.warnings if "end inside a well" not in warning and "No wells" not in warning)
+    warnings += ("Completed supported well boundaries just beyond a guide endpoint. Review the first and last lane; wells farther outside the selection remain excluded.",)
+    return _result(selected, image.width, warnings)
+
+
+def _result(wells, width: int, warnings=()) -> DetectionResult:
+    wells = tuple(sorted(wells, key=lambda well: well.center[1]))
+    return DetectionResult(wells, tuple((well.bounds[0], well.bounds[1], width, well.bounds[3]) for well in wells), tuple(dict.fromkeys(warnings)))
+
+
+def _join_count_fragments(wells, expected_count: int):
+    """Use typical observed size as a soft check, never impose an even grid."""
+    selected = sorted(wells, key=lambda well: well.center[1])
+    joined = False
+    while len(selected) > expected_count:
+        heights = sorted(well.bounds[3] - well.bounds[1] for well in selected)
+        typical = float(np.median(heights[len(heights) // 2:]))
+        proposals = []
+        for index, (first, second) in enumerate(zip(selected, selected[1:])):
+            a, b = first.bounds, second.bounds
+            gap = b[1] - a[3]
+            horizontal_overlap = min(a[2], b[2]) - max(a[0], b[0])
+            if (a[3] - a[1] < typical * 0.8 and b[3] - b[1] < typical * 0.8
+                    and 0 <= gap <= max(3, typical * 0.3)
+                    and b[3] - a[1] <= typical * 1.35
+                    and horizontal_overlap >= min(a[2] - a[0], b[2] - b[0]) * 0.65):
+                proposals.append((gap, index))
+        if not proposals:
+            break
+        _, index = min(proposals)
+        a, b = selected[index].bounds, selected[index + 1].bounds
+        selected[index:index + 2] = [_well((min(a[0], b[0]), a[1], max(a[2], b[2]), b[3]))]
+        joined = True
+    return selected, joined
+
+
+def detect_wells(image: Image.Image, endpoints, *, expected_count: int | None = None) -> DetectionResult:
+    """Locate wells, tolerate small guide errors, and independently fit lanes.
+
+    A lane-count hint can join compatible fragments and admit faint outlines
+    supported at nearby guide positions. It never creates an evenly spaced
+    set in the absence of image evidence or removes established wells merely
+    to reach the requested count.
+    """
+    if expected_count is not None and (isinstance(expected_count, bool) or not isinstance(expected_count, Integral) or expected_count <= 0):
+        raise SelectionError("Expected lane count must be a positive integer.")
+    points = validate_line(endpoints, image.size)
+    radius = max(7, min(40, int(round(min(image.size) * 0.016))))
+    original = _detect_supported_wells(image, points)
+    result = _complete_endpoints(image, points, original, radius)
+    guides = _nearby_guides(points, image.size, radius)
+    neighbors = tuple(_detect_supported_wells(image, guide) for guide in guides)
+    pixels = _analysis_pixels(image)
+    selected = list(result.wells)
+    warnings = list(result.warnings)
+    additions = []
+    uncertain = any("Low contrast" in warning or "uncertain" in warning for warning in warnings)
+    repaired = False
+    for candidate in _consensus_wells(neighbors):
+        associated = [well for well in selected if _overlap(candidate, well) > 0]
+        supported = _sustained_support(pixels, candidate, radius)
+        if not associated and supported:
+            selected.append(candidate)
+            additions.append(candidate)
+        elif uncertain and len(associated) == 1 and supported:
+            original_well = associated[0]
+            old_height = original_well.bounds[3] - original_well.bounds[1]
+            new_height = candidate.bounds[3] - candidate.bounds[1]
+            if (new_height >= max(old_height * 1.35, old_height + 6)
+                    and _overlap(candidate, original_well) >= old_height * 0.9
+                    and _supported_extension(pixels, candidate, original_well)):
+                selected[selected.index(original_well)] = candidate
+                repaired = True
+    if additions:
+        warnings = [warning for warning in warnings if "No wells" not in warning]
+        warnings.append("Nearby guide positions recovered additional supported wells. Review their lane boundaries.")
+    if repaired:
+        warnings.append("Nearby guide positions recovered fuller well outlines. Review the adjusted lane boundaries.")
+    if expected_count is not None:
+        selected, joined = _join_count_fragments(selected, int(expected_count))
+        if joined:
+            warnings.append("The expected lane count helped join short well fragments. Review the inferred boundaries of the joined lanes.")
+        if len(selected) < expected_count and len(selected) >= 2:
+            # A count hint permits a faint search, but candidates still need
+            # coherent contrast on both nearby guides and in the original data.
+            faint = tuple(_detect_wells(image, guide, sensitive=True, pixels=pixels)[0] for guide in guides)
+            candidates = [candidate for candidate in _consensus_wells(faint)
+                          if not any(_overlap(candidate, well) > 0 for well in selected)
+                          and _sustained_support(pixels, candidate, radius)]
+            if candidates:
+                centers = sorted(well.center[1] for well in selected)
+                spacing = float(np.median(np.diff(centers)))
+                # Rank observed candidates by a soft spacing preference only;
+                # their actual centers and independent heights are retained.
+                candidates.sort(key=lambda candidate: abs(min(abs(candidate.center[1] - center) for center in centers) - spacing))
+                accepted = 0
+                for candidate in candidates:
+                    if len(selected) >= expected_count:
+                        break
+                    if not any(_overlap(candidate, well) > 0 for well in selected):
+                        selected.append(candidate)
+                        accepted += 1
+                if accepted:
+                    warnings.append("The expected lane count helped recover faint well outlines. Review the inferred lane boundaries.")
+        if len(selected) != expected_count:
+            warnings.append(f"Expected {expected_count} lanes, but found {len(selected)} supported lanes. Review the guide and add or remove lanes if needed.")
+    result = _result(selected, image.width, warnings)
+    from .lane_refinement import refine_lanes
+
+    return refine_lanes(image, result, pixels=pixels)

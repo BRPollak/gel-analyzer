@@ -57,6 +57,7 @@ def request_well_detection() -> None:
         return
     st.session_state.well_detection_request = (
         st.session_state.well_token, st.session_state.well_points,
+        st.session_state.well_expected_count,
     )
 
 
@@ -100,6 +101,37 @@ def start_lane_adjustment() -> None:
     lane_review_ui.start_lane_review()
 
 
+def start_lane_addition() -> None:
+    start_lane_adjustment()
+    lane_review_ui.add_lane()
+
+
+def change_expected_lane_count() -> None:
+    """A new count needs fresh detection but keeps the guide for confirmation."""
+    count = st.session_state.expected_lane_count
+    if count == st.session_state.well_expected_count:
+        return
+    gel = confirmed_gel()
+    if gel is not None:
+        accept_well_event(
+            st.session_state.get(f"well_overlay_{st.session_state.well_token}"), gel,
+        )
+    st.session_state.well_expected_count = count
+    reset_wells(editing=gel is not None, preserve_points=True)
+
+
+def show_expected_lane_count() -> None:
+    # Keep this preference independently of widget state: the field is hidden
+    # while orientation is pending, and Streamlit removes hidden widget keys.
+    st.session_state.expected_lane_count = st.session_state.well_expected_count
+    st.number_input(
+        "Expected number of lanes (optional)", min_value=1, value=None, step=1,
+        placeholder="Automatic", key="expected_lane_count",
+        on_change=change_expected_lane_count,
+        help="Count the lanes crossed by the guide. Leave blank to detect automatically.",
+    )
+
+
 def show_well_selection(gel: GelImage) -> None:
     result = st.session_state.well_result
     st.subheader("Wells and lanes")
@@ -139,6 +171,7 @@ def show_well_selection(gel: GelImage) -> None:
                 "Adjust lane borders", key="adjust_lane_borders", type="primary",
                 on_click=start_lane_adjustment,
             )
+        st.button("Add lane", key="add_lane", on_click=start_lane_addition)
         if st.session_state.lane_error:
             st.warning(st.session_state.lane_error)
         st.button(
@@ -147,6 +180,7 @@ def show_well_selection(gel: GelImage) -> None:
         )
     if st.session_state.well_error:
         st.warning(st.session_state.well_error)
+    show_expected_lane_count()
     if st.session_state.well_editing:
         valid = False
         try:
@@ -169,10 +203,12 @@ def reset_orientation() -> None:
     st.session_state.orientation_preview = None
     st.session_state.orientation_requested = False
     st.session_state.orientation_error = None
+    st.session_state.well_expected_count = None
     reset_wells()
 
 
 def request_orientation() -> None:
+    st.session_state.well_expected_count = None
     reset_wells()
     st.session_state.orientation_requested = True
     st.session_state.orientation_error = None
@@ -219,6 +255,7 @@ def main() -> None:
     st.session_state.setdefault("orientation_preview", None)
     st.session_state.setdefault("orientation_requested", False)
     st.session_state.setdefault("orientation_error", None)
+    st.session_state.setdefault("well_expected_count", None)
     if "well_token" not in st.session_state:
         reset_wells()
     if "lane_stage" not in st.session_state:
@@ -275,8 +312,12 @@ def main() -> None:
     request = st.session_state.well_detection_request
     st.session_state.well_detection_request = None
     if request is not None and confirmed_gel() is not None:
-        token, points = request
-        if token == st.session_state.well_token and points == st.session_state.well_points:
+        token, points, expected_count = request
+        if (
+            token == st.session_state.well_token
+            and points == st.session_state.well_points
+            and expected_count == st.session_state.well_expected_count
+        ):
             gel = confirmed_gel()
             st.session_state.well_result = None
             st.session_state.well_error = None
@@ -284,7 +325,10 @@ def main() -> None:
             with st.spinner("Detecting wells and refining lane boundaries…"):
                 try:
                     with Image.open(BytesIO(gel.preview_png)) as analysis_source:
-                        result = detect_wells(analysis_source, points)
+                        result = (
+                            detect_wells(analysis_source, points, expected_count=expected_count)
+                            if expected_count is not None else detect_wells(analysis_source, points)
+                        )
                     st.session_state.well_result = result
                     st.session_state.well_editing = bool(result.warnings or not result.wells)
                 except (SelectionError, ValueError) as exc:
@@ -322,6 +366,7 @@ def main() -> None:
         else:
             st.caption("Gel boundary uncertain; showing the full image to preserve the gel.")
         if confirmed_gel() is not None and st.session_state.lane_stage is not None:
+            show_expected_lane_count()
             lane_review_ui.show_lane_review(current_gel)
             st.button(
                 "Edit well line", key="edit_well_line", on_click=reset_wells,
