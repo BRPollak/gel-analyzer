@@ -1,12 +1,13 @@
 """Load gel images without changing the uploaded source data."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 import warnings
 
 from PIL import Image
 
 from .auto_crop import find_gel_crop
+from .orientation import orient_gel
 
 
 class ImageValidationError(ValueError):
@@ -14,11 +15,20 @@ class ImageValidationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class GelImage:
-    """An original TIFF and a cropped, lossless PNG for browser display.
+class GelOrientation:
+    """Accepted transform geometry, relative to the initial cropped preview."""
 
-    Dimensions describe the decoded image, including TIFF orientation metadata.
-    The original bytes remain the source for future processing and export.
+    corners: tuple[tuple[float, float], ...]
+    counterclockwise_degrees: float
+    size: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class GelImage:
+    """An original TIFF and the current gel pixels in a lossless PNG.
+
+    Source dimensions include TIFF orientation metadata. The first crop copies
+    pixels exactly; orientation may resample them. The source stays unchanged.
     """
 
     source_bytes: bytes
@@ -28,18 +38,47 @@ class GelImage:
     mode: str
     preview_png: bytes
     crop_box: tuple[int, int, int, int]
+    orientation: GelOrientation | None = None
 
     @property
     def preview_width(self) -> int:
+        if self.orientation is not None:
+            return self.orientation.size[0]
         return self.crop_box[2] - self.crop_box[0]
 
     @property
     def preview_height(self) -> int:
+        if self.orientation is not None:
+            return self.orientation.size[1]
         return self.crop_box[3] - self.crop_box[1]
 
     @property
     def auto_cropped(self) -> bool:
         return self.crop_box != (0, 0, self.width, self.height)
+
+
+def orient_gel_image(gel: GelImage) -> GelImage:
+    """Stage a reoriented first crop without changing the current gel or TIFF.
+
+    The first preview is a lossless copy of the decoded TIFF crop, including its
+    bit depth. Repeated requests therefore never resample an earlier result.
+    """
+    if gel.orientation is not None:
+        return gel
+    with Image.open(BytesIO(gel.preview_png)) as cropped:
+        cropped.load()
+        result = orient_gel(cropped)
+    preview = BytesIO()
+    result.image.save(preview, format="PNG")
+    return replace(
+        gel,
+        preview_png=preview.getvalue(),
+        orientation=GelOrientation(
+            corners=result.rectangle.corners,
+            counterclockwise_degrees=result.counterclockwise_degrees,
+            size=result.image.size,
+        ),
+    )
 
 
 _PREVIEW_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B", "I;16L"}
