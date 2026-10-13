@@ -18,8 +18,9 @@ selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
 After cropping, annotate lanes and two independent sets of groups, then confirm
-and download the composed PNG. Individual band identification and ladder analysis
-remain later steps; band contrast already helps refine automatic lane coverage.
+and download the composed PNG. Optional manual ladder size labels can be placed
+above the gel. Automatic band identification and ladder analysis remain later
+steps; band contrast already helps refine automatic lane coverage.
 
 ## Run locally
 
@@ -60,7 +61,9 @@ terminal to stop the server.
    compact toolbar formats the selected label. Expand **Lane groups** to create
    groups in either set. Click
    **Confirm annotations** to compose the final image. **Edit annotations**
-   returns to the saved labels and groups; **Download annotated PNG** saves it.
+   returns to the saved labels and groups. Choose **Annotate ladder** to add
+   manual size labels, or **Skip** to continue. **Download annotated PNG** saves
+   the confirmed image, including any ladder labels.
 10. Use **Revise lanes and crop** to adjust the existing review, or **Edit well
    line** to detect again. **Reset points** starts a new guide on the same gel.
 11. Choose another TIFF to replace the image, even if it has the same filename.
@@ -229,6 +232,62 @@ unchanged. Arial must be installed on the browser's system for exact typography.
 All editing and composition stay local to the app/browser session, without an
 external service or font download.
 
+### Optional manual ladder annotations
+
+After **Confirm annotations**, choose **Annotate ladder** or **Skip**. Select a
+preset, click its horizontal lane (or use **Ladder lane**), and choose **Use this
+lane**. Choose a size marker, then click or tap its band in the highlighted lane.
+Place any subset of the available markers. Selecting a placed marker lets the
+next click move it; **Remove marker** makes that size available again. Clicks
+outside the selected lane do not change annotations.
+
+Labels appear above the gel, rotated 90° counterclockwise, at the exact clicked
+horizontal position. Their Arial size is half the calculated default lane-label
+size (80% of mean lane height, rounded, then halved), independent of manual lane
+font changes. Closely spaced labels use extra vertical tiers without moving
+horizontally. The top margin grows to keep labels visible, and guide lines begin
+six native pixels above the gel. The gel itself is never resized for annotation.
+
+**Back** keeps the draft. Changing preset or lane with placed markers asks before
+clearing those marker positions. **Cancel** returns to the previous confirmed
+image. **Skip ladder** uses the lane-only image; **Remove ladder** does the same
+when editing an existing ladder. **Confirm ladder annotations** saves the
+combined image, and **Edit ladder** reopens its placements. Lane/group text edits
+retain ladder positions on the same crop. Changed crop or lane geometry clears
+ladder positions for replacement while retaining normal lane/group annotations.
+
+Use the keyboard lane selector and marker buttons, then **Position with keyboard**
+to focus the placement cursor. Arrow keys move one native pixel; Shift moves ten.
+Enter places or moves the selected marker, and Escape leaves cursor interaction.
+Fit screen and percentage zoom change only the view. Touch scrolling does not
+place markers. Selection outlines, cursors, and controls are excluded from the
+confirmed PNG and download; both use the same clean canvas.
+
+#### Define your ladder presets
+
+Edit `gel_analyzer/ladder_presets.json` and reload the app. The included example is
+illustrative, not a manufacturer's ladder specification. Add entries like:
+
+```json
+[
+  {
+    "id": "my-ladder",
+    "name": "My ladder",
+    "labels": ["5.0 kb", "3.0 kb", "1.0 kb"]
+  }
+]
+```
+
+Keep IDs unique (letters, numbers, hyphens, underscores; at most 80 characters).
+Names and labels must be nonempty single lines of at most 200 characters; labels
+must be unique within a preset. Up to 100 presets and 200 markers per preset are
+supported. Labels appear in file order; their units and sizes are not interpreted.
+Missing or invalid configuration explains the problem and still allows skipping.
+An active annotation saves a preset snapshot, so editing this file does not
+silently rename markers already placed in that session. All data remains local
+and session-only. Automatic band detection, size inference, and calibration are
+not part of this feature.
+
 ### Rotate and orient
 
 The button starts from the first cropped image and fits a tilted rectangle to
@@ -364,7 +423,7 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **576 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **665 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
   lifecycle, manual review, lane insertion/deletion, annotation validation,
   confirmation/editing, and app workflow tests.
@@ -374,10 +433,13 @@ completed-preview rendering, and detection only once per upload.
   offset coordinates, edge clipping, endpoint order, handle sizing, constrained
   border/right-edge movement, independent targeting of narrow-lane handles,
   responsive trash buttons, and mouse/keyboard deletion events.
-- `node --test tests/test_annotation_layout.mjs`: **11 passed**, checking native
+- `node --test tests/test_annotation_layout.mjs`: **20 passed**, checking native
   lane alignment, both group sets, overlapping groups, changing memberships,
   bold/italic text metrics, lane-based font sizing, edge padding, dense lanes,
-  and clean composition.
+  clean composition, and rotated ladder geometry, collision tiers, and padding.
+- `node --test tests/test_ladder_component.mjs`: **9 passed**, checking manual
+  marker placement/correction, keyboard/touch behavior, guarded changes, exact
+  coordinate conversion, and responsive preview height.
 - `node --test tests/test_preview_fit.mjs`: **6 passed**, checking portrait and
   landscape fitting, viewport-height budgets, lane-control gutters, native
   pointer coordinates, and protection against iframe resize feedback.
@@ -389,6 +451,17 @@ completed-preview rendering, and detection only once per upload.
 - Browser verification covers TIFF upload and replacement, including previously
   rejected gels, plus the full-frame fallback when a reliable boundary is absent.
   No initial outer-crop controls are displayed.
+
+Manual ladder browser verification follows the four-lane fixture from upload
+through the optional offer, preset selection, direct lane selection, placement,
+and confirmation. Checks include coincident-x labels, keyboard movement and focus
+return, outside-lane rejection, guarded lane changes, removal/cancel restoration,
+lane-text reediting, Fit screen and percentage zoom, and emulated touch tap versus
+scroll. At 420 × 720, the editor has no horizontal page overflow and retains a
+usable image while the page scrolls. At 1200 × 900, markers sit beside the image.
+The 498 × 265 gel pixels match the browser-decoded crop exactly; the downloaded
+PNG's SHA-256 matches the confirmed canvas PNG. Screenshots are in ignored
+`output/playwright/ladder-desktop.png` and `output/playwright/ladder-mobile.png`.
 
 Annotation browser verification covers the actual upload → orientation → lane
 review → crop → annotation workflow on the generated four-lane fixture. Lane
@@ -535,11 +608,12 @@ gel files and generated previews are excluded from Git.
    height adjustment (implemented); lateral wall correction remains future work
 4. Shared right-edge selection and confirmed cropping around lanes (implemented)
 5. Ladder-band detection, with manual corrections
-6. Ladder presets and size markings
+6. Ladder presets and manual size markings (implemented; automatic inference
+   remains future work)
 7. Editable lane labels and two group sets (implemented after cropping)
 8. Annotated PNG export (implemented at native crop dimensions); selectable
    pixel dimensions and print-resolution metadata (DPI) remain future work
 
 Build and verify one version at a time. Detection versions will use separate
 tuning and validation gels. Named gel profiles will remain separate from ladder
-presets; those systems are not implemented in Version 1.
+presets; gel profiles remain unimplemented.

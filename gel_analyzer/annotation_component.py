@@ -11,10 +11,14 @@ _component = components.declare_component(
 )
 
 
-def render_annotation_component(crop, *, annotations, token, revision, error, key):
+def render_annotation_component(crop, *, annotations, token, revision, error, key,
+                                mode="lanes", ladder=None, presets=(),
+                                ladder_step="preset", confirmed_ladder=False):
     return _component(
         image_src="data:image/png;base64," + b64encode(crop.preview_png).decode("ascii"),
         width=crop.width, height=crop.height, lanes=[list(lane) for lane in crop.lanes],
         annotations=annotations, token=token, revision=revision, error=error,
+        mode=mode, ladder=ladder, presets=list(presets), ladder_step=ladder_step,
+        confirmed_ladder=confirmed_ladder,
         key=key, default=None,
     )

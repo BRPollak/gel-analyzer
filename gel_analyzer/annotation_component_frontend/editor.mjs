@@ -1,4 +1,6 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
+import {createLadderEditor} from "./ladder.mjs";
+import {annotationPreviewBudget} from "./ladder_geometry.mjs";
 
 // Streamlit's v1 component protocol keeps the editor self-contained and offline.
 const byId = id => document.getElementById(id);
@@ -22,6 +24,17 @@ let draft = {label: "", lanes: [0]};
 let previewError = "";
 let zoomFrame = null;
 let outerViewportListeners = [];
+
+const ladderEditor = createLadderEditor({getState: () => state, getLayout: () => layout,
+  canvas, onChange: changed, onAction: finishAction, status, repaint});
+
+function syncMode() {
+  const ladderMode = state?.mode === "ladder";
+  component.dataset.mode = state?.mode || "lanes";
+  document.querySelectorAll(".lane-only").forEach(node => { node.hidden = ladderMode; });
+  byId("confirm").hidden = ladderMode;
+  inputLayer.hidden = ladderMode;
+}
 
 function post(type, data = {}) {
   window.parent.postMessage({isStreamlitMessage: true, type, ...data}, "*");
@@ -183,6 +196,7 @@ function setLabelText(key, text) {
 }
 
 function updateInputs() {
+  if (state.mode === "ladder") return;
   const boxes = [
     ...layout.laneLabels.map(label => ({...label, key: `lane:${label.index}`, accessible: `Lane ${label.index + 1} label`})),
     ...layout.groupLabels.map(label => ({...label, key: `group:${label.id}`, accessible: `Group set ${label.set + 1} label: ${label.text || label.label || "untitled"}`})),
@@ -253,10 +267,17 @@ function updateZoom() {
   const paddingX = pixels("paddingLeft") + pixels("paddingRight");
   const insetY = pixels("paddingTop") + pixels("paddingBottom")
     + pixels("borderTopWidth") + pixels("borderBottomWidth");
-  const otherHeight = component.getBoundingClientRect().height - viewport.getBoundingClientRect().height;
   // Measure toolbar, hints, actions, groups and status as rendered; reserve
   // another 100px for the host header and breathing room around this component.
-  const budget = Math.max(insetY + 1, Math.floor(outerViewportHeight() - otherHeight - 100));
+  // Ladder controls stack on a phone. Let the page scroll rather than shrink
+  // the image to an unusable strip when those controls fill the screen.
+  const workspace = byId("ladder-workspace");
+  const budget = annotationPreviewBudget({viewportHeight: outerViewportHeight(),
+    componentHeight: component.getBoundingClientRect().height,
+    previewHeight: viewport.getBoundingClientRect().height,
+    workspaceHeight: workspace.getBoundingClientRect().height,
+    sidePanel: getComputedStyle(workspace).display === "grid", insetY,
+    ladderMode: state.mode === "ladder"});
   viewport.style.maxHeight = `${budget}px`;
   const availableWidth = Math.max(1, Math.floor(viewport.clientWidth - paddingX) - 1);
   const availableHeight = Math.max(1, Math.floor(budget - insetY) - 1);
@@ -275,6 +296,7 @@ function updateZoom() {
   const dense = layout.denseFallback
     ? " Closely spaced labels use extra columns." : "";
   byId("size-hint").textContent = `${layout.width} × ${layout.height} pixels · ${Math.round(scale * 100)}% view${dense}`;
+  ladderEditor.render();
   resizeFrame();
 }
 
@@ -318,26 +340,46 @@ function repaint() {
     drawAnnotations(canvas, image, next, state.annotations);
     layout = next;
     previewError = "";
+    syncMode();
     updateInputs();
+    ladderEditor.setDisabled(confirming, false);
     updateZoom();
     byId("confirm").disabled = confirming;
     return true;
   } catch (error) {
     previewError = error instanceof Error ? error.message : "The annotation preview could not be drawn.";
     byId("confirm").disabled = true;
+    ladderEditor.setDisabled(confirming, true);
     status(previewError, true);
     return false;
   }
 }
 
+function canvasSnapshot(target, geometry) {
+  const png = target.toDataURL("image/png");
+  if (!png.startsWith("data:image/png;base64,"))
+    throw new Error("The browser could not compose this image. Reduce annotation size and try again.");
+  return {png, width: geometry.width, height: geometry.height,
+    gel_x: geometry.gelX, gel_y: geometry.gelY};
+}
+
 function emit(action) {
-  if (!state || !layout || previewError) return;
-  const value = {kind: "annotations", action, token: state.token, revision,
-    annotations: state.annotations, width: layout.width, height: layout.height,
-    gel_x: layout.gelX, gel_y: layout.gelY};
+  if (!state) return;
+  if (action === "confirm" && (!layout || previewError)) return;
+  const value = {kind: state.mode === "ladder" ? "ladder" : "annotations",
+    action, token: state.token, revision};
+  if (state.mode === "ladder") {
+    value.ladder = state.ladder;
+    value.ladder_step = state.ladderStep;
+  } else value.annotations = state.annotations;
   if (action === "confirm") {
-    value.png = canvas.toDataURL("image/png");
-    if (!value.png.startsWith("data:image/png;base64,")) throw new Error("The browser could not compose this image. Reduce annotation size and try again.");
+    Object.assign(value, canvasSnapshot(canvas, layout));
+    if (state.mode === "lanes" && state.ladder) {
+      const baseCanvas = document.createElement("canvas");
+      const baseLayout = layoutAnnotations({...state, ladder: null});
+      drawAnnotations(baseCanvas, image, baseLayout, state.annotations);
+      value.base = canvasSnapshot(baseCanvas, baseLayout);
+    }
   }
   post("streamlit:setComponentValue", {dataType: "json", value});
 }
@@ -347,9 +389,11 @@ function changed() {
   revision = Math.max(revision + 1, Date.now() * 1000);
   component.dataset.revision = String(revision);
   status("");
-  refreshTargets();
-  syncToolbar();
-  syncGroupForm();
+  if (state.mode !== "ladder") {
+    refreshTargets();
+    syncToolbar();
+    syncGroupForm();
+  }
   repaint();
   // Bound the bridge delay even during continuous typing; each batch carries
   // the latest snapshot and revision, while the preview itself is immediate.
@@ -378,6 +422,7 @@ document.addEventListener("visibilitychange", () => {
 function setConfirming(value) {
   confirming = value;
   byId("editor").querySelectorAll("input, select, button").forEach(node => { node.disabled = value; });
+  ladderEditor.setDisabled(value, Boolean(previewError));
   byId("confirm").textContent = value ? "Composing annotations…" : "Confirm annotations";
   if (!value) {
     syncGroupForm();
@@ -469,27 +514,29 @@ byId("delete-group").addEventListener("click", () => {
   changed();
 });
 byId("zoom").addEventListener("change", updateZoom);
-byId("confirm").addEventListener("click", () => {
+function finishAction(action = "confirm") {
   if (confirming || !state) return;
   clearTimeout(pendingEdit);
   pendingEdit = null;
-  if (!repaint()) return;
+  if (action === "confirm" && !repaint()) return;
   try {
     revision = Math.max(revision + 1, Date.now() * 1000);
     component.dataset.revision = String(revision);
     setConfirming(true);
-    emit("confirm");
-    status("Composing the final image…");
+    emit(action);
+    status(action === "confirm" ? "Composing the final image…" : "Returning to your confirmed image…");
     clearTimeout(confirmationTimer);
     confirmationTimer = setTimeout(() => {
       setConfirming(false);
-      status("Confirmation has not completed. You can try Confirm annotations again.", true);
+      status("The action has not completed. Please try again.", true);
     }, 15000);
   } catch (error) {
     setConfirming(false);
     status(error instanceof Error ? error.message : "The image could not be composed. Please try again.", true);
   }
-});
+}
+byId("confirm").addEventListener("click", () => finishAction("confirm"));
+
 
 window.addEventListener("message", event => {
   if (event.source !== window.parent || event.data?.type !== "streamlit:render") return;
@@ -511,7 +558,13 @@ window.addEventListener("message", event => {
     revision = incomingRevision;
     state = {token: args.token, width: args.width, height: args.height,
       lanes: args.lanes.map(lane => [...lane]),
+      mode: args.mode === "ladder" ? "ladder" : "lanes",
+      ladder: args.ladder ? structuredClone(args.ladder) : null,
+      presets: structuredClone(args.presets || []),
+      ladderStep: args.ladder_step || "preset", confirmedLadder: Boolean(args.confirmed_ladder),
       annotations: readAnnotations(args.annotations, args.lanes, args.fontSize)};
+    ladderEditor.reset();
+    syncMode();
     component.dataset.token = args.token;
     component.dataset.revision = String(revision);
     inputLayer.replaceChildren();
@@ -549,6 +602,8 @@ window.addEventListener("message", event => {
     // message. A delayed server render therefore cannot erase unsent edits.
     revision = incomingRevision;
     state.annotations = readAnnotations(args.annotations, state.lanes, args.fontSize);
+    state.ladder = args.ladder ? structuredClone(args.ladder) : null;
+    state.ladderStep = args.ladder_step || "preset";
     refreshTargets();
     syncToolbar();
     syncGroupForm();

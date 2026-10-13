@@ -61,6 +61,34 @@
     #status { margin: 9px 0 0; min-height: 20px; font-size: 13px; overflow-wrap: anywhere; }
     #status[data-error="true"] { color: #b42318; }
     #loading { margin: 8px 0; }
+    #ladder-panel { margin-bottom: 10px; }
+    #ladder-panel h2 { font-size: 16px; margin: 0 0 10px; }
+    #ladder-panel button, #ladder-panel select, #ladder-actions button { min-height: 44px; }
+    #ladder-panel .field { min-width: 150px; }
+    #ladder-panel .row { align-items: center; }
+    #ladder-markers { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+    .ladder-marker { display: flex; gap: 8px; align-items: center; }
+    .ladder-marker-status { font-size: 12px; }
+    .ladder-marker[data-placed="true"] { border-style: solid; border-width: 2px; }
+    #ladder-guard { margin-top: 12px; padding: 10px; border: 1px solid #b7791f; border-radius: 5px; background: #fffbeb; color: #462f00; }
+    #ladder-guard p { margin-top: 0; }
+    #ladder-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    #ladder-confirm { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
+    #ladder-overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: auto; }
+    #ladder-overlay[data-step="lane"], #ladder-overlay[data-step="markers"] { cursor: crosshair; }
+    .ladder-lane-outline { fill: transparent; stroke: #2563eb; stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+    .ladder-lane-outline[data-selected="true"] { fill: #2563eb18; stroke-width: 2; stroke-dasharray: none; }
+    #ladder-cursor { outline: none; pointer-events: none; }
+    #ladder-cursor line { stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    #ladder-cursor circle { fill: white; stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    #ladder-cursor:focus circle { stroke: #111827; stroke-width: 3; }
+    #ladder-workspace { min-width: 0; }
+    @media (min-width: 900px) {
+      #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: start; gap: 14px; }
+      #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-panel { margin-bottom: 0; min-width: 0; }
+      #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-markers { flex-direction: column; flex-wrap: nowrap; max-height: 300px; overflow: auto; padding: 3px; }
+      #component[data-mode="ladder"][data-ladder-step="markers"] .ladder-marker { flex: 0 0 auto; justify-content: space-between; text-align: left; overflow-wrap: anywhere; }
+    }
     @media (max-width: 540px) { .panel { padding: 10px; } .grow { flex-basis: 100%; } .toolbar-end { margin-left: 0; } #selection-name { min-width: 0; } }
   </style>
 </head>
@@ -69,30 +97,83 @@
     <p id="loading" role="status">Loading cropped gel…</p>
     <div id="editor" hidden>
       <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
-        <strong id="selection-name">Lane 1</strong>
-        <div class="formatting" role="group" aria-label="Selected label formatting">
+        <strong id="selection-name" class="lane-only">Lane 1</strong>
+        <div class="formatting lane-only" role="group" aria-label="Selected label formatting">
           <span class="font-family">Arial</span>
           <button id="bold" type="button" aria-label="Bold" aria-pressed="false" title="Bold">B</button>
           <button id="italic" type="button" aria-label="Italic" aria-pressed="false" title="Italic">I</button>
           <input id="color" type="color" value="#000000" aria-label="Text color" title="Text color">
         </div>
-        <label class="field">Size<input id="font-size" type="number" min="1" max="4096" step="1" value="18" aria-label="Annotation font size" title="Font size for all annotations"></label>
-        <button id="auto-size" type="button" title="80% of average lane height">Auto size</button>
+        <label class="field lane-only">Size<input id="font-size" type="number" min="1" max="4096" step="1" value="18" aria-label="Annotation font size" title="Font size for all annotations"></label>
+        <button id="auto-size" class="lane-only" type="button" title="80% of average lane height">Auto size</button>
         <label class="field">Zoom<select id="zoom" aria-label="Preview zoom"><option value="fit">Fit screen</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option><option value="0.25">25%</option></select></label>
-        <div class="toolbar-end">
+        <div class="toolbar-end lane-only">
           <button id="edit-selected-group" type="button" hidden>Edit group</button>
           <button id="open-groups" type="button">Add group</button>
         </div>
       </div>
-      <p class="hint" id="editing-hint">Click a label to edit it. Use ↑ / ↓ to move between labels.</p>
+      <p class="hint lane-only" id="editing-hint">Click a label to edit it. Use ↑ / ↓ to move between labels.</p>
+      <div id="ladder-workspace">
+      <section id="ladder-panel" class="panel" aria-label="Ladder annotation steps" hidden>
+        <h2 id="ladder-heading" tabindex="-1">Choose a ladder preset</h2>
+        <div id="ladder-preset-step">
+          <div class="row">
+            <label class="field grow">Ladder preset<select id="ladder-preset" aria-label="Ladder preset"><option value="">Choose a preset…</option></select></label>
+            <button id="ladder-continue" type="button">Continue</button>
+          </div>
+          <p class="hint" id="ladder-preset-hint">Choose the ladder used in this gel.</p>
+        </div>
+        <div id="ladder-lane-step" hidden>
+          <p class="hint">Click the ladder lane on the image, or choose its number.</p>
+          <div class="row">
+            <label class="field">Ladder lane<select id="ladder-lane" aria-label="Ladder lane"><option value="">Choose a lane…</option></select></label>
+            <button id="ladder-use-lane" type="button">Use this lane</button>
+          </div>
+        </div>
+        <div id="ladder-marker-step" hidden>
+          <p class="hint" id="ladder-placement-hint">Choose a size, then click its band in the highlighted lane.</p>
+          <div id="ladder-markers" role="group" aria-label="Ladder size markers"></div>
+          <div class="row">
+            <button id="ladder-keyboard" type="button">Position with keyboard</button>
+            <button id="ladder-remove-marker" type="button" hidden>Remove marker</button>
+            <span class="hint" id="ladder-count"></span>
+          </div>
+          <p class="hint">Place any sizes you need. Select a placed size to move or remove it.</p>
+        </div>
+        <div class="row" id="ladder-navigation">
+          <button id="ladder-back" type="button" hidden>Back</button>
+          <button id="ladder-change-preset" type="button" hidden>Change preset</button>
+          <button id="ladder-change-lane" type="button" hidden>Change lane</button>
+        </div>
+        <div id="ladder-guard" role="group" aria-labelledby="ladder-guard-message" hidden>
+          <p id="ladder-guard-message"></p>
+          <div class="row">
+            <button id="ladder-accept-change" type="button">Change and clear markers</button>
+            <button id="ladder-keep-current" type="button">Keep current</button>
+          </div>
+        </div>
+      </section>
       <div id="preview-viewport" tabindex="0" aria-label="Annotation preview; scroll to inspect the full image">
         <div id="preview-space"><div id="preview-stage">
           <canvas id="preview" role="img" aria-label="Live cropped gel with lane labels and group brackets"></canvas>
           <div id="label-inputs"></div>
+          <svg id="ladder-overlay" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Select a ladder lane or place its size markers" aria-describedby="status" hidden>
+            <g id="ladder-lane-outlines" pointer-events="none"></g>
+            <g id="ladder-cursor" role="slider" aria-orientation="horizontal" tabindex="-1" visibility="hidden">
+              <line id="ladder-cursor-line"></line><circle id="ladder-cursor-dot"></circle>
+            </g>
+          </svg>
         </div></div>
       </div>
+      </div>
       <div class="row" id="actions"><button id="confirm" type="button">Confirm annotations</button><p id="size-hint" class="hint"></p></div>
-      <details id="group-panel" class="panel">
+      <div id="ladder-actions" hidden>
+        <button id="ladder-confirm" type="button" hidden>Confirm ladder annotations</button>
+        <button id="ladder-skip" type="button">Skip ladder</button>
+        <button id="ladder-cancel" type="button">Cancel ladder</button>
+        <button id="ladder-remove" type="button" hidden>Remove ladder</button>
+      </div>
+      <details id="group-panel" class="panel lane-only">
         <summary>Lane groups <span id="group-count">(0)</span></summary>
         <div class="row">
           <label class="field">Column<select id="group-set" aria-label="Group column"><option value="0">Set 1 · near lanes</option><option value="1">Set 2 · far left</option></select></label>
