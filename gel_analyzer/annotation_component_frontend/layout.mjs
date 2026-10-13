@@ -5,6 +5,10 @@ const IMAGE_GAP = 14;
 const BRACKET_DEPTH = 9;
 const LABEL_BRACKET_GAP = 10;
 const VERTICAL_GAP = 4;
+const LADDER_GEL_GAP = 6;
+const LADDER_LEADER = 12;
+const LADDER_TEXT_GAP = 4;
+const LADDER_INK_PADDING = 2;
 
 let measuringContext;
 
@@ -69,13 +73,73 @@ function oneLine(value) {
   return String(value ?? "").replace(/[\r\n\t]/g, " ");
 }
 
+/** Rotated ladder labels keep their ink centers at the clicked native x. */
+function layoutLadder(ladder, defaultFontSize, annotationTop, measure) {
+  if (!ladder) return {labels: [], guides: [], top: 0, tiers: 0};
+  const labels = ladder.preset?.labels;
+  if (!Array.isArray(labels) || !labels.length || labels.some(text => typeof text !== "string")) {
+    throw new Error("Choose a ladder preset with size labels.");
+  }
+  const fontSize = Math.min(4096, Math.max(1, defaultFontSize)) / 2;
+  const font = annotationFont({}, fontSize);
+  const specs = labels.map(value => {
+    const text = oneLine(value);
+    const metrics = measure(text, font);
+    const ascent = finite(metrics.actualBoundingBoxAscent, fontSize * 0.8);
+    const descent = finite(metrics.actualBoundingBoxDescent, fontSize * 0.2);
+    const inkLeft = finite(metrics.actualBoundingBoxLeft, 0);
+    const inkRight = finite(metrics.actualBoundingBoxRight, finite(metrics.width, 0));
+    return {text, font, fontSize, color: "#202020", rotation: -Math.PI / 2,
+      ascent, descent, textInkLeft: inkLeft,
+      inkWidth: Math.max(0, ascent + descent), inkHeight: Math.max(0, inkLeft + inkRight)};
+  });
+  const longest = Math.max(...specs.map(spec => spec.inkHeight));
+  // Reserve one full preset tier before the first placement. Keep its backing
+  // clear of any oversized existing lane/group label above the crop, too.
+  const firstBottom = Math.min(-LADDER_GEL_GAP - LADDER_LEADER - LADDER_TEXT_GAP,
+    annotationTop - LADDER_TEXT_GAP - LADDER_INK_PADDING);
+  const tierPitch = longest + 2 * LADDER_INK_PADDING + LADDER_TEXT_GAP;
+  const placed = (ladder.placements ?? []).map(placement => {
+    if (!Number.isInteger(placement.markerIndex) || !specs[placement.markerIndex]
+      || !Number.isFinite(placement.x) || !Number.isFinite(placement.y)) {
+      throw new Error("A ladder marker has invalid coordinates or a missing size label.");
+    }
+    const spec = specs[placement.markerIndex];
+    return {...spec, markerIndex: placement.markerIndex, cropX: placement.x, cropY: placement.y,
+      x: placement.x, left: placement.x - spec.inkWidth / 2 - LADDER_INK_PADDING,
+      right: placement.x + spec.inkWidth / 2 + LADDER_INK_PADDING};
+  });
+  const tierEnds = [];
+  for (const label of [...placed].sort((a, b) => a.left - b.left || a.markerIndex - b.markerIndex)) {
+    let tier = tierEnds.findIndex(end => end + LADDER_TEXT_GAP <= label.left);
+    if (tier === -1) tier = tierEnds.length;
+    tierEnds[tier] = label.right;
+    label.tier = tier;
+    label.inkBottom = firstBottom - tier * tierPitch;
+    label.inkTop = label.inkBottom - label.inkHeight;
+    label.inkLeft = label.x - label.inkWidth / 2;
+    label.inkRight = label.x + label.inkWidth / 2;
+    label.top = label.inkTop - LADDER_INK_PADDING;
+    label.bottom = label.inkBottom + LADDER_INK_PADDING;
+    // Rotation maps (u, v) to (v, -u). Account for real ink rather than
+    // aligning the alphabetic baseline, which would shift text to the left.
+    label.baselineX = label.x + (label.ascent - label.descent) / 2;
+    label.baselineY = label.inkBottom - label.textInkLeft;
+  }
+  const tiers = Math.max(1, tierEnds.length);
+  return {labels: placed, tiers,
+    top: firstBottom - (tiers - 1) * tierPitch - longest - LADDER_INK_PADDING,
+    guides: placed.map(label => ({markerIndex: label.markerIndex, x: label.x,
+      startY: -LADDER_GEL_GAP, endY: label.inkBottom + LADDER_TEXT_GAP, color: label.color}))};
+}
+
 /**
  * Labels use x as their right-aligned text anchor and y as their visual center.
  * An editor box fits at (x - width, y - boxHeight / 2). Coordinates already
  * include gelX/gelY, which are the original gel's offset in the final canvas.
  * measureText can be injected for tests; its signature is (text, font).
  */
-export function layoutAnnotations({width, height, lanes = [], annotations = {}}, measureText = browserMeasure) {
+export function layoutAnnotations({width, height, lanes = [], annotations = {}, ladder = null}, measureText = browserMeasure) {
   if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) {
     throw new Error("The cropped image must have positive integer dimensions.");
   }
@@ -150,8 +214,13 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}},
     }
   }
   const allLabels = [...laneLabels, ...groupLabels];
-  const minX = allLabels.length ? Math.min(...allLabels.map(label => label.x - label.width)) : 0;
-  const minY = Math.min(0, ...allLabels.map(label => label.start));
+  const annotationTop = Math.min(0, ...allLabels.map(label => label.start));
+  const ladderLayout = layoutLadder(ladder, defaultFontSize, annotationTop, measure);
+  const ladderLabels = ladderLayout.labels;
+  const guides = ladderLayout.guides;
+  const minX = Math.min(0, ...allLabels.map(label => label.x - label.width),
+    ...ladderLabels.map(label => label.left));
+  const minY = Math.min(annotationTop, ladderLayout.top);
   const maxY = Math.max(height, ...allLabels.map(label => label.end));
   const gelX = Math.ceil(OUTER - minX);
   const gelY = Math.ceil(OUTER - minY);
@@ -173,7 +242,16 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}},
     bracket.bottom += gelY;
     bracket.ticks = bracket.ticks.map(y => y + gelY);
   }
-  const outputWidth = gelX + width + OUTER;
+  for (const label of ladderLabels) {
+    for (const key of ["x", "left", "right", "inkLeft", "inkRight", "baselineX"]) label[key] += gelX;
+    for (const key of ["top", "bottom", "inkTop", "inkBottom", "baselineY"]) label[key] += gelY;
+  }
+  for (const guide of guides) {
+    guide.x += gelX;
+    guide.startY += gelY;
+    guide.endY += gelY;
+  }
+  const outputWidth = Math.ceil(Math.max(gelX + width, ...ladderLabels.map(label => label.right)) + OUTER);
   const outputHeight = Math.ceil(gelY + maxY + OUTER);
   if (outputWidth > 32767 || outputHeight > 32767 || outputWidth * outputHeight > 64_000_000) {
     throw new Error("The annotated image is too large to render. Shorten labels, reduce the font size or overlapping groups, or use a smaller cropped image.");
@@ -181,7 +259,8 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}},
   return {width: outputWidth, height: outputHeight,
     imageWidth: width, imageHeight: height, gelX, gelY, fontSize, requestedFontSize,
     denseFallback: laneTracks.length > 1, reducedFont: fontSize < requestedFontSize,
-    laneLabels, groupLabels, brackets, labels: allLabels};
+    laneLabels, groupLabels, brackets, labels: allLabels,
+    ladderLabels, guides, ladderTiers: ladderLayout.tiers};
 }
 
 /** Paint only exportable pixels: white margin, unchanged gel, labels, brackets. */
@@ -216,6 +295,30 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
     context.font = label.font;
     context.fillStyle = label.color;
     context.fillText(label.text, label.x, label.baseline);
+  }
+  // Paint all leaders before all label backings so a higher tier's leader
+  // cannot strike through a nearby lower label. Every leader retains its x.
+  for (const guide of layout.guides ?? []) {
+    context.strokeStyle = guide.color;
+    context.beginPath();
+    context.moveTo(guide.x, guide.startY);
+    context.lineTo(guide.x, guide.endY);
+    context.stroke();
+  }
+  context.fillStyle = "#ffffff";
+  for (const label of layout.ladderLabels ?? []) {
+    context.fillRect(label.left, label.top, label.right - label.left, label.bottom - label.top);
+  }
+  for (const label of layout.ladderLabels ?? []) {
+    context.save();
+    context.translate(label.baselineX, label.baselineY);
+    context.rotate(label.rotation);
+    context.font = label.font;
+    context.fillStyle = label.color;
+    context.textAlign = "left";
+    context.textBaseline = "alphabetic";
+    context.fillText(label.text, 0, 0);
+    context.restore();
   }
   return layout;
 }

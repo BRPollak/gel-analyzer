@@ -229,3 +229,167 @@ test("both formatting toggles combine and overlarge compositions fail before can
   assert.throws(() => layoutAnnotations({...input, annotations: {fontSize: 18, labels: [{text: "x".repeat(5000)}]}}, measure),
     /Shorten labels/);
 });
+
+const ladderPreset = {id: "example", name: "Example ladder", labels: ["5.0 kb", "3.0 kb", "1.0 kb"]};
+
+function ladderWith(placements = [], preset = ladderPreset) {
+  return {preset, laneIndex: 1, placements};
+}
+
+function assertLadderFits(layout) {
+  for (const label of layout.ladderLabels) {
+    assert.ok(label.left >= 12 && label.top >= 12);
+    assert.ok(label.right <= layout.width - 12);
+    assert.ok(label.bottom < layout.gelY);
+    assert.ok(Math.abs((label.inkLeft + label.inkRight) / 2 - label.x) < 1e-9);
+    assert.ok(Math.abs(label.x - layout.gelX - label.cropX) < 1e-9);
+  }
+  for (const guide of layout.guides) {
+    const label = layout.ladderLabels.find(label => label.markerIndex === guide.markerIndex);
+    assert.equal(guide.x, label.x);
+    assert.equal(guide.startY, layout.gelY - 6);
+    assert.equal(guide.endY, label.inkBottom + 4);
+    assert.ok(guide.endY < guide.startY && guide.startY < layout.gelY);
+  }
+  for (let index = 0; index < layout.ladderLabels.length; index++) {
+    const a = layout.ladderLabels[index];
+    for (const b of layout.ladderLabels.slice(index + 1)) {
+      assert.equal(a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom, false);
+    }
+  }
+}
+
+test("no ladder retains existing layout and has no extra labels or guides", () => {
+  const layout = layoutAnnotations(input, measure);
+  assert.deepEqual(layoutAnnotations({...input, ladder: null}, measure), layout);
+  assert.deepEqual(layout.ladderLabels, []);
+  assert.deepEqual(layout.guides, []);
+  assert.equal(layout.ladderTiers, 0);
+  assert.equal(layout.width, layout.gelX + input.width + 12);
+});
+
+test("ladder labels keep fractional clicked x and half the default font independently of edited lane font", () => {
+  const specification = {...input, annotations: {...input.annotations, fontSize: 72},
+    ladder: ladderWith([{markerIndex: 2, x: 173.375, y: 45.25}])};
+  const before = structuredClone(specification);
+  const layout = layoutAnnotations(specification, measure);
+  const label = layout.ladderLabels[0];
+  assert.equal(label.fontSize, 4.5, "default lane size is 9, even though edited lane size is 72");
+  assert.equal(label.font, "4.5px Arial");
+  assert.equal(label.text, "1.0 kb");
+  assert.equal(label.color, "#202020");
+  assert.equal(label.cropX, 173.375);
+  assert.equal(label.cropY, 45.25);
+  assert.equal(label.rotation, -Math.PI / 2);
+  assert.equal(layout.ladderLabels.length, 1, "a preset subset is sufficient");
+  assert.equal(layout.fontSize, 72);
+  assertLadderFits(layout);
+  assertLabelsFit(layout);
+  assert.deepEqual(specification, before, "layout must not mutate placement data");
+});
+
+test("ladder font halves the bounded default including half-pixel and maximum sizes", () => {
+  for (const [height, expected] of [[1, 0.5], [39, 15.5], [6000, 2048]]) {
+    const layout = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
+      annotations: {fontSize: 1, labels: [{text: "A"}]},
+      ladder: ladderWith([{markerIndex: 0, x: 25, y: height / 2}], {labels: ["M"]})}, measure);
+    assert.equal(layout.ladderLabels[0].fontSize, expected);
+    assertLadderFits(layout);
+  }
+});
+
+test("preset reserves its longest label before placement, without resizing the native crop", () => {
+  const preset = {...ladderPreset, labels: ["M", "A longer size label"]};
+  const empty = layoutAnnotations({...input, ladder: {preset, laneIndex: null, placements: []}}, measure);
+  const short = layoutAnnotations({...input, ladder: ladderWith([{markerIndex: 0, x: 150, y: 45}], preset)}, measure);
+  const long = layoutAnnotations({...input, ladder: ladderWith([{markerIndex: 1, x: 150, y: 45}], preset)}, measure);
+  assert.ok(empty.gelY > layoutAnnotations(input, measure).gelY);
+  assert.equal(empty.gelY, short.gelY);
+  assert.equal(empty.gelY, long.gelY);
+  assert.equal(empty.ladderTiers, 1);
+  assert.equal(long.imageWidth, input.width);
+  assert.equal(long.imageHeight, input.height);
+  assertLadderFits(long);
+});
+
+test("close and coincident ladder labels use vertical tiers without shifting or shrinking", () => {
+  const placements = [{markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 120.125, y: 46},
+    {markerIndex: 2, x: 122.625, y: 47}];
+  const layout = layoutAnnotations({...input, ladder: ladderWith(placements)}, measure);
+  assert.equal(layout.ladderTiers, 3);
+  assert.deepEqual(layout.ladderLabels.map(label => label.tier), [0, 1, 2]);
+  assert.ok(layout.ladderLabels.every(label => label.fontSize === 4.5));
+  assert.ok(layout.gelY > layoutAnnotations({...input, ladder: ladderWith(placements.slice(0, 1))}, measure).gelY);
+  assertLadderFits(layout);
+  const reversed = layoutAnnotations({...input, ladder: ladderWith([...placements].reverse())}, measure);
+  assert.deepEqual(reversed.ladderLabels.map(label => label.tier), [2, 1, 0], "ties are stable by marker identity");
+  const separated = layoutAnnotations({...input, ladder: ladderWith([
+    {...placements[0], x: 10}, {...placements[1], x: 100}, {...placements[2], x: 300},
+  ])}, measure);
+  assert.equal(separated.ladderTiers, 1);
+  assertLadderFits(separated);
+});
+
+test("rotated ink and backings fit edge markers and do not cover tall lane or group labels", () => {
+  const layout = layoutAnnotations({width: 100, height: 100, lanes: [[0, 0, 100, 100]],
+    annotations: {fontSize: 160, labels: [{text: "Lane"}],
+      groups: [{id: "all", set: 0, label: "Group", lanes: [0]}]},
+    ladder: ladderWith([{markerIndex: 0, x: 0, y: 50}, {markerIndex: 1, x: 99.999, y: 50}])}, measure);
+  assert.ok(layout.width > layout.gelX + 100 + 12, "rightmost ink expands the right gutter");
+  const upperAnnotation = Math.min(...layout.labels.map(label => label.start));
+  assert.ok(layout.ladderLabels.every(label => label.bottom + 4 <= upperAnnotation));
+  assertLabelsFit(layout);
+  assertLadderFits(layout);
+});
+
+test("rotated baseline handles glyph overhang and unusual ascent/descent without changing x", () => {
+  for (const metrics of [
+    {actualBoundingBoxLeft: 3, actualBoundingBoxRight: 20, actualBoundingBoxAscent: 7, actualBoundingBoxDescent: 2},
+    {actualBoundingBoxLeft: -2, actualBoundingBoxRight: 20, actualBoundingBoxAscent: -2, actualBoundingBoxDescent: 4},
+  ]) {
+    const layout = layoutAnnotations({...input, ladder: ladderWith([{markerIndex: 0, x: 76.8125, y: 45}])},
+      (text, font) => ({...measure(text, font), ...metrics}));
+    const label = layout.ladderLabels[0];
+    assert.equal(label.baselineX - metrics.actualBoundingBoxAscent, label.inkLeft);
+    assert.equal(label.baselineX + metrics.actualBoundingBoxDescent, label.inkRight);
+    assert.equal(label.baselineY - metrics.actualBoundingBoxRight, label.inkTop);
+    assert.equal(label.baselineY + metrics.actualBoundingBoxLeft, label.inkBottom);
+    assertLadderFits(layout);
+  }
+});
+
+test("ladder composition draws all leaders behind white label backings and rotated text", () => {
+  const layout = layoutAnnotations({...input, ladder: ladderWith([
+    {markerIndex: 0, x: 120, y: 45}, {markerIndex: 1, x: 120, y: 46},
+  ])}, measure);
+  const calls = [];
+  const context = Object.fromEntries(["fillRect", "drawImage", "beginPath", "moveTo", "lineTo", "stroke",
+    "fillText", "save", "restore", "translate", "rotate"].map(method => [method, function (...args) {
+    calls.push({method, args, font: this.font, color: this.fillStyle, align: this.textAlign});
+  }]));
+  const image = {width: input.width, height: input.height};
+  drawAnnotations({getContext: () => context}, image, layout);
+  assert.deepEqual(calls.find(call => call.method === "drawImage").args, [image, layout.gelX, layout.gelY]);
+  const lastStroke = calls.findLastIndex(call => call.method === "stroke");
+  const backings = calls.map((call, index) => ({...call, index})).filter(call => call.method === "fillRect").slice(1);
+  assert.equal(backings.length, 2);
+  assert.ok(backings.every(call => call.index > lastStroke && call.color === "#ffffff"));
+  const firstRotation = calls.findIndex(call => call.method === "rotate");
+  assert.ok(backings.every(call => call.index < firstRotation));
+  assert.deepEqual(calls.filter(call => call.method === "rotate").map(call => call.args), [[-Math.PI / 2], [-Math.PI / 2]]);
+  assert.deepEqual(calls.filter(call => call.method === "translate").map(call => call.args),
+    layout.ladderLabels.map(label => [label.baselineX, label.baselineY]));
+  assert.equal(calls.filter(call => call.method === "save").length, 2);
+  assert.equal(calls.filter(call => call.method === "restore").length, 2);
+  const ladderText = calls.filter(call => call.method === "fillText").slice(input.lanes.length);
+  assert.ok(ladderText.every(call => call.args[1] === 0 && call.args[2] === 0 && call.align === "left"));
+});
+
+test("invalid ladder coordinates and oversized top gutters fail before canvas allocation", () => {
+  for (const placement of [{markerIndex: 0, x: NaN, y: 45}, {markerIndex: 0, x: 10, y: Infinity},
+    {markerIndex: 50, x: 10, y: 45}]) {
+    assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([placement])}, measure), /invalid coordinates/);
+  }
+  assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([], {labels: ["M".repeat(20000)]})}, measure),
+    /too large to render/);
+});
