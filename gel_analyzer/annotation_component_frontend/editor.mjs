@@ -1,6 +1,8 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
 import {createLadderEditor} from "./ladder.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
+import {cleanText, cleanStyle, labelRuns, textSnapshot, selectionStyle, formatSelection, editText,
+  readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
 
 // Streamlit's v1 component protocol keeps the editor self-contained and offline.
 const byId = id => document.getElementById(id);
@@ -24,9 +26,11 @@ let draft = {label: "", lanes: [0]};
 let previewError = "";
 let zoomFrame = null;
 let outerViewportListeners = [];
+let textSelection = null;
+const histories = new Map();
 
 const ladderEditor = createLadderEditor({getState: () => state, getLayout: () => layout,
-  canvas, onChange: changed, onAction: finishAction, status, repaint});
+  canvas, onChange: changed, onAction: finishAction, status, onLayout: scheduleZoom});
 
 function syncMode() {
   const ladderMode = state?.mode === "ladder";
@@ -54,10 +58,6 @@ function status(message = "", error = false) {
   resizeFrame();
 }
 
-const cleanText = value => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 500);
-const cleanStyle = value => ({bold: value?.bold === true, italic: value?.italic === true,
-  color: /^#[\da-f]{6}$/i.test(value?.color) ? value.color : "#000000"});
-
 function defaultFontSize(lanes) {
   const heights = lanes.map(lane => Number(lane[3]) - Number(lane[1]))
     .filter(height => Number.isFinite(height) && height > 0);
@@ -69,7 +69,7 @@ function defaultFontSize(lanes) {
 function readAnnotations(raw, laneBounds, fontSize) {
   const count = laneBounds.length;
   const labels = Array.from({length: count}, (_, index) => ({text: cleanText(raw?.labels?.[index]?.text),
-    ...cleanStyle(raw?.labels?.[index])}));
+    ...cleanStyle(raw?.labels?.[index]), runs: labelRuns(raw?.labels?.[index])}));
   const ids = new Set();
   const groups = (Array.isArray(raw?.groups) ? raw.groups : []).slice(0, 100).flatMap((value, index) => {
     const lanes = [...new Set((Array.isArray(value?.lanes) ? value.lanes : [])
@@ -79,7 +79,8 @@ function readAnnotations(raw, laneBounds, fontSize) {
     let suffix = 0;
     while (ids.has(id)) id = `group-${index}-${++suffix}`;
     ids.add(id);
-    return [{id, set: value?.set === 1 ? 1 : 0, label: cleanText(value?.label), ...cleanStyle(value), lanes}];
+    return [{id, set: value?.set === 1 ? 1 : 0, label: cleanText(value?.label), ...cleanStyle(value),
+      runs: labelRuns(value, "label"), lanes}];
   });
   const requestedSize = Number(raw?.fontSize ?? fontSize);
   return {labels, groups, fontSize: Number.isFinite(requestedSize)
@@ -103,11 +104,14 @@ function setValue(node, value) {
 function syncToolbar() {
   const value = selectedLabel();
   const isGroup = selected.startsWith("group:");
+  const range = textSelection?.key === selected ? textSelection : null;
+  const style = value ? selectionStyle(value, isGroup ? "label" : "text", range?.start, range?.end) : {};
   byId("selection-name").textContent = !value ? "Select a label"
     : isGroup ? `Group · set ${value.set + 1}` : `Lane ${Number(selected.slice(5)) + 1}`;
-  byId("bold").setAttribute("aria-pressed", String(value?.bold === true));
-  byId("italic").setAttribute("aria-pressed", String(value?.italic === true));
-  setValue(byId("color"), value?.color || "#000000");
+  byId("bold").setAttribute("aria-pressed", String(style.bold === true));
+  byId("italic").setAttribute("aria-pressed", String(style.italic === true));
+  setValue(byId("color"), style.color || "#000000");
+  byId("color").title = style.mixedColor ? "Mixed text colors; choose a color for the selection" : "Text color";
   setValue(byId("font-size"), state.annotations.fontSize);
   byId("edit-selected-group").hidden = !value || !isGroup;
   for (const name of ["bold", "italic", "color"]) byId(name).disabled = confirming || !value;
@@ -175,6 +179,7 @@ function buildMembership() {
 }
 
 function selectLabel(key, updateGroup = true) {
+  if (key !== selected) textSelection = null;
   selected = key;
   syncToolbar();
   if (updateGroup && key.startsWith("group:")) {
@@ -187,11 +192,32 @@ function selectLabel(key, updateGroup = true) {
   }
 }
 
-function setLabelText(key, text) {
-  const value = key.startsWith("lane:") ? state.annotations.labels[Number(key.slice(5))]
+function labelForKey(key) {
+  return key.startsWith("lane:") ? state.annotations.labels[Number(key.slice(5))]
     : state.annotations.groups.find(group => `group:${group.id}` === key);
+}
+
+function rememberEdit(key) {
+  const value = labelForKey(key);
+  const history = histories.get(key) ?? {undo: [], redo: []};
+  history.undo.push(textSnapshot(value, key.startsWith("lane:") ? "text" : "label"));
+  if (history.undo.length > 100) history.undo.shift();
+  history.redo = [];
+  histories.set(key, history);
+}
+
+function captureSelection() {
+  const node = inputNodes.get(selected);
+  const range = node && readSelection(node);
+  if (range) textSelection = {key: selected, ...range};
+  syncToolbar();
+}
+
+function setLabelText(key, text, range) {
+  const value = labelForKey(key);
   if (!value) return;
-  value[key.startsWith("lane:") ? "text" : "label"] = cleanText(text);
+  rememberEdit(key);
+  editText(value, key.startsWith("lane:") ? "text" : "label", text, range);
   changed();
 }
 
@@ -208,31 +234,81 @@ function updateInputs() {
   boxes.forEach(box => {
     let node = inputNodes.get(box.key);
     if (!node) {
-      node = document.createElement("input");
-      node.type = "text";
-      node.maxLength = 500;
-      node.autocomplete = "off";
+      node = document.createElement("div");
+      node.contentEditable = "true";
+      node.setAttribute("role", "textbox");
+      node.setAttribute("aria-multiline", "false");
       node.spellcheck = false;
       node.className = "image-label";
       node.dataset.label = box.key;
       node.addEventListener("focus", () => selectLabel(box.key));
-      node.addEventListener("input", () => setLabelText(box.key, node.value));
+      let beforeEdit = null;
+      let composing = false;
+      const commitInput = () => {
+        setLabelText(box.key, node.textContent, beforeEdit);
+        beforeEdit = null;
+        captureSelection();
+      };
+      node.addEventListener("beforeinput", event => {
+        if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
+          event.preventDefault(); return;
+        }
+        beforeEdit = readSelection(node);
+        if (beforeEdit && beforeEdit.start === beforeEdit.end) {
+          if (event.inputType === "deleteContentBackward") beforeEdit.start = Math.max(0, beforeEdit.start - 1);
+          if (event.inputType === "deleteContentForward") beforeEdit.end = Math.min(node.textContent.length, beforeEdit.end + 1);
+        }
+      });
+      node.addEventListener("input", () => { if (!composing) commitInput(); });
+      node.addEventListener("compositionstart", () => { composing = true; });
+      node.addEventListener("compositionend", () => { composing = false; commitInput(); });
+      node.addEventListener("paste", event => {
+        event.preventDefault();
+        const range = readSelection(node);
+        if (!range) return;
+        const text = node.textContent;
+        const inserted = cleanText(event.clipboardData.getData("text/plain"))
+          .slice(0, 500 - (text.length - range.end + range.start));
+        setLabelText(box.key, text.slice(0, range.start) + inserted + text.slice(range.end), range);
+        restoreSelection(node, {start: range.start + inserted.length, end: range.start + inserted.length});
+        captureSelection();
+      });
+      node.addEventListener("drop", event => event.preventDefault());
       node.addEventListener("keydown", event => {
+        if ((event.ctrlKey || event.metaKey) && ["b", "i"].includes(event.key.toLowerCase())) {
+          event.preventDefault(); applyFormat(event.key.toLowerCase() === "b" ? "bold" : "italic"); return;
+        }
+        if ((event.ctrlKey || event.metaKey) && ["z", "y"].includes(event.key.toLowerCase())) {
+          event.preventDefault();
+          const redo = event.shiftKey || event.key.toLowerCase() === "y";
+          const history = histories.get(box.key);
+          const from = history?.[redo ? "redo" : "undo"];
+          if (from?.length) {
+            const value = labelForKey(box.key);
+            history[redo ? "undo" : "redo"].push(textSnapshot(value, box.key.startsWith("lane:") ? "text" : "label"));
+            delete value.runs;
+            Object.assign(value, from.pop());
+            if (!value.runs) value.runs = labelRuns(value, box.key.startsWith("lane:") ? "text" : "label");
+            textSelection = null; changed();
+          }
+          return;
+        }
         if (event.key === "Enter") { event.preventDefault(); node.blur(); }
         if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.altKey && !event.ctrlKey && !event.metaKey) {
-          const nodes = [...inputLayer.querySelectorAll("input")];
+          const nodes = [...inputLayer.querySelectorAll(".image-label")];
           const next = nodes[nodes.indexOf(node) + (event.key === "ArrowUp" ? -1 : 1)];
-          if (next) { event.preventDefault(); next.focus(); next.select(); }
+          if (next) { event.preventDefault(); next.focus(); restoreSelection(next, {start: 0, end: next.textContent.length}); }
         }
       });
       inputLayer.appendChild(node);
       inputNodes.set(box.key, node);
     }
-    setValue(node, box.text ?? box.label ?? "");
+    renderRuns(node, labelForKey(box.key), box.key.startsWith("lane:") ? "text" : "label");
     node.setAttribute("aria-label", box.accessible);
-    node.placeholder = box.key.startsWith("lane:") ? `Lane ${box.index + 1}` : "Group";
+    node.dataset.placeholder = box.key.startsWith("lane:") ? `Lane ${box.index + 1}` : "Group";
     node.dataset.selected = String(box.key === selected);
-    node.disabled = confirming;
+    node.contentEditable = String(!confirming);
+    node.setAttribute("aria-disabled", String(confirming));
     node.style.left = `${box.x - box.width - 1}px`;
     node.style.top = `${box.y - box.boxHeight / 2 - 1}px`;
     node.style.width = `${box.width}px`;
@@ -272,11 +348,12 @@ function updateZoom() {
   // Ladder controls stack on a phone. Let the page scroll rather than shrink
   // the image to an unusable strip when those controls fill the screen.
   const workspace = byId("ladder-workspace");
+  component.style.setProperty("--workspace-budget", `${Math.max(300, outerViewportHeight() - 180)}px`);
   const budget = annotationPreviewBudget({viewportHeight: outerViewportHeight(),
     componentHeight: component.getBoundingClientRect().height,
     previewHeight: viewport.getBoundingClientRect().height,
     workspaceHeight: workspace.getBoundingClientRect().height,
-    sidePanel: getComputedStyle(workspace).display === "grid", insetY,
+    sidePanel: window.matchMedia("(min-width: 400px)").matches, insetY,
     ladderMode: state.mode === "ladder"});
   viewport.style.maxHeight = `${budget}px`;
   const availableWidth = Math.max(1, Math.floor(viewport.clientWidth - paddingX) - 1);
@@ -422,6 +499,7 @@ document.addEventListener("visibilitychange", () => {
 function setConfirming(value) {
   confirming = value;
   byId("editor").querySelectorAll("input, select, button").forEach(node => { node.disabled = value; });
+  inputNodes.forEach(node => { node.contentEditable = String(!value); });
   ladderEditor.setDisabled(value, Boolean(previewError));
   byId("confirm").textContent = value ? "Composing annotations…" : "Confirm annotations";
   if (!value) {
@@ -431,19 +509,33 @@ function setConfirming(value) {
   }
 }
 
+document.addEventListener("selectionchange", () => { if (state) captureSelection(); });
+
+function applyFormat(name, explicitValue) {
+  const label = selectedLabel();
+  if (!label || confirming) return;
+  const key = selected.startsWith("lane:") ? "text" : "label";
+  const range = textSelection?.key === selected ? textSelection : null;
+  rememberEdit(selected);
+  formatSelection(label, key, range, name, explicitValue);
+  changed();
+  // Keep the range through toolbar focus and color-picker events. Keyboard
+  // users can tab back to the label without losing the formatted substring.
+  const node = inputNodes.get(selected);
+  if (node && document.activeElement === node) restoreSelection(node, range);
+}
+
 for (const name of ["bold", "italic"]) {
   byId(name).addEventListener("pointerdown", event => {
     // Keep the text caret and selection when using the mouse to format a label.
     if (inputLayer.contains(document.activeElement)) event.preventDefault();
   });
   byId(name).addEventListener("click", () => {
-    const label = selectedLabel();
-    if (label) { label[name] = !label[name]; changed(); }
+    applyFormat(name);
   });
 }
 byId("color").addEventListener("input", event => {
-  const label = selectedLabel();
-  if (label) { label.color = event.target.value; changed(); }
+  applyFormat("color", event.target.value);
 });
 byId("font-size").addEventListener("change", event => {
   state.annotations.fontSize = Math.max(1, Math.min(4096,
@@ -490,7 +582,7 @@ byId("group-select").addEventListener("change", event => {
 });
 byId("group-text").addEventListener("input", event => {
   const group = currentGroup();
-  if (group) { group.label = cleanText(event.target.value); changed(); }
+  if (group) { setLabelText(`group:${group.id}`, event.target.value); }
   else { draft.label = cleanText(event.target.value); syncGroupForm(); }
 });
 byId("add-group").addEventListener("click", () => {
@@ -569,6 +661,8 @@ window.addEventListener("message", event => {
     component.dataset.revision = String(revision);
     inputLayer.replaceChildren();
     inputNodes.clear();
+    histories.clear();
+    textSelection = null;
     selected = "lane:0";
     groupSet = 0;
     selectedGroupId = "";

@@ -44,10 +44,12 @@ def assert_empty(app):
     assert not app.error
     assert not app.get("image")
     assert not app.text
-    assert app.info[0].value == "Your gel preview will appear here."
+    assert not app.info
+    assert not app.expander
+    assert app.file_uploader[0].label == "Open a gel image"
     assert app.file_uploader[0].value is None
     assert app.session_state["gel_image"] is None
-    assert app.button[0].disabled
+    assert not app.button
 
 
 def test_upload_same_name_replacement_clear_and_same_file_reupload(app):

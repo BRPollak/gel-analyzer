@@ -1,7 +1,7 @@
 import {cursorForMarker, ladderImagePoint, laneAtPoint, moveLadderCursor, movedPastTap, placeLadderMarker} from "./ladder_geometry.mjs";
 
 /** Local interaction state lives outside the clean, exportable canvas. */
-export function createLadderEditor({getState, getLayout, canvas, onChange, onAction, status}) {
+export function createLadderEditor({getState, getLayout, canvas, onChange, onAction, status, onLayout = () => {}}) {
   const byId = id => document.getElementById(id);
   const overlay = byId("ladder-overlay");
   const cursorNode = byId("ladder-cursor");
@@ -16,6 +16,9 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   let presetSignature = "";
   let laneSignature = "";
   let markerSignature = "";
+  let referenceSignature = "";
+  let referenceVisible = true;
+  let referenceFailed = false;
 
   const active = () => getState()?.mode === "ladder";
   const editable = () => active() && !disabled && !pendingChange;
@@ -38,7 +41,9 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
 
   function setPreset(preset) {
     const state = getState();
-    state.ladder = {preset: {id: preset.id, name: preset.name, labels: [...preset.labels]},
+    state.ladder = {preset: {id: preset.id, name: preset.name, labels: [...preset.labels],
+      ...(preset.referenceImage ? {referenceImage: preset.referenceImage} : {}),
+      ...(preset.referenceNote ? {referenceNote: preset.referenceNote} : {})},
       laneIndex: state.ladder?.laneIndex ?? null, placements: []};
     selectedMarker = null;
     cursor = null;
@@ -142,6 +147,47 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     byId("ladder-remove-marker").hidden = selectedMarker === null || !isPlaced(selectedMarker);
   }
 
+  function renderReference(state) {
+    const preset = state?.ladder?.preset;
+    // Old snapshots can use a configured photo only if the sizes still match.
+    const reference = preset?.referenceImage ? preset : (state?.presets ?? []).find(item =>
+      item.id === preset?.id && JSON.stringify(item.labels) === JSON.stringify(preset.labels));
+    const available = active() && Boolean(reference?.referenceImage
+      && /^ladder_references\/[a-zA-Z0-9_-]+\.(?:webp|gif|png|jpe?g)$/.test(reference.referenceImage));
+    const signature = available ? JSON.stringify([preset.id, preset.name, preset.labels,
+      reference.referenceImage, reference.referenceNote]) : "";
+    if (signature !== referenceSignature) {
+      referenceSignature = signature;
+      referenceVisible = true;
+      referenceFailed = false;
+      if (byId("ladder-reference-dialog").open) byId("ladder-reference-dialog").close();
+      if (available) {
+        byId("ladder-reference-name").textContent = preset.name;
+        byId("ladder-reference-dialog-title").textContent = preset.name;
+        const alt = `${preset.name} band reference. Sizes from top to bottom: ${preset.labels.join(", ")}.`;
+        for (const id of ["ladder-reference-image", "ladder-reference-large"]) {
+          byId(id).alt = alt;
+          byId(id).src = reference.referenceImage;
+        }
+        byId("ladder-reference-note").textContent = reference.referenceNote ?? "";
+        byId("ladder-reference-note").hidden = !reference.referenceNote;
+      } else {
+        for (const id of ["ladder-reference-image", "ladder-reference-large"]) byId(id).removeAttribute("src");
+      }
+    }
+    const visible = available && referenceVisible;
+    byId("component").dataset.referenceOpen = String(visible);
+    byId("ladder-reference").hidden = !visible;
+    byId("ladder-reference-toggle").hidden = !available;
+    byId("ladder-reference-toggle").textContent = visible ? "Hide reference" : "Show reference";
+    byId("ladder-reference-toggle").setAttribute("aria-expanded", String(visible));
+    byId("ladder-reference-image").hidden = referenceFailed;
+    byId("ladder-reference-error").hidden = !referenceFailed;
+    byId("ladder-reference-enlarge").disabled = referenceFailed;
+    byId("ladder-reference-selected").textContent = selectedMarker === null ? ""
+      : `Selected: ${markerLabel()}${isPlaced(selectedMarker) ? " · Placed" : ""}`;
+  }
+
   function drawOverlay(state) {
     const layout = getLayout();
     const shown = active() && state.ladderStep !== "preset" && Boolean(layout);
@@ -185,6 +231,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     byId("component").dataset.ladderStep = active() ? state.ladderStep ?? "preset" : "";
     byId("ladder-panel").hidden = !active();
     byId("ladder-actions").hidden = !active();
+    renderReference(state);
     if (!active()) {
       overlay.removeAttribute("hidden");
       overlay.style.display = "none";
@@ -230,6 +277,22 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     byId("ladder-confirm").textContent = disabled ? "Composing ladder annotations…" : "Confirm ladder annotations";
     drawOverlay(state);
   }
+
+  byId("ladder-reference-toggle").addEventListener("click", () => {
+    referenceVisible = !referenceVisible;
+    renderReference(getState());
+    onLayout();
+  });
+  byId("ladder-reference-enlarge").addEventListener("click", () => {
+    if (!referenceFailed && !byId("ladder-reference").hidden) byId("ladder-reference-dialog").showModal();
+  });
+  byId("ladder-reference-close").addEventListener("click", () => byId("ladder-reference-dialog").close());
+  byId("ladder-reference-image").addEventListener("error", () => {
+    referenceFailed = true;
+    renderReference(getState());
+    onLayout();
+  });
+  byId("ladder-reference-image").addEventListener("load", onLayout);
 
   byId("ladder-preset").addEventListener("change", event => {
     if (!editable()) return;
@@ -330,6 +393,8 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     suppressClick = false;
     disabled = false;
     previewError = false;
+    referenceVisible = true;
+    if (byId("ladder-reference-dialog").open) byId("ladder-reference-dialog").close();
   }
 
   return {render, reset, setDisabled(value, error = false) {

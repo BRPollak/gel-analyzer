@@ -133,70 +133,71 @@ def show_expected_lane_count() -> None:
     )
 
 
-def show_well_selection(gel: GelImage) -> None:
+def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
     result = st.session_state.well_result
-    st.subheader("Wells and lanes")
-    st.caption(
-        "Click the top of the first selected well and the bottom of the last selected well, "
-        "with the line passing through their centers. Either click order works. "
-        "Drag the dots to adjust the dotted line."
-    )
-    event = render_well_component(
-        gel.preview_png, gel.preview_width, gel.preview_height,
-        points=st.session_state.well_points,
-        wells=[{"bounds": well.bounds, "center": well.center} for well in result.wells] if result else [],
-        lanes=result.lanes if result else [],
-        editable=st.session_state.well_editing,
-        token=st.session_state.well_token,
-        key=f"well_overlay_{st.session_state.well_token}",
-    )
-    accept_well_event(event, gel)
-    if result is not None and st.session_state.well_result is None:
-        # The event arrived after this component render. Refresh its arguments
-        # so an edited candidate cannot leave obsolete outlines on screen.
-        st.rerun()
-    result = st.session_state.well_result
-    if result is not None:
-        count = len(result.wells)
-        if result.warnings:
-            st.write(f"{count} well candidate{'s' if count != 1 else ''} detected; review required.")
-            for warning in result.warnings:
-                st.warning(warning)
-        elif count:
-            st.success(f"Detected {count} well{'s' if count != 1 else ''} and {count} horizontal lane{'s' if count != 1 else ''}.")
-        else:
-            st.warning("No wells found. Move the line through the visible well centers and retry.")
-        st.caption("Visible wells do not establish whether a sample was loaded. Numbers run from top to bottom.")
-        if count:
+    with image_panel:
+        event = render_well_component(
+            gel.preview_png, gel.preview_width, gel.preview_height,
+            points=st.session_state.well_points,
+            wells=[{"bounds": well.bounds, "center": well.center} for well in result.wells] if result else [],
+            lanes=result.lanes if result else [],
+            editable=st.session_state.well_editing,
+            token=st.session_state.well_token,
+            key=f"well_overlay_{st.session_state.well_token}",
+        )
+        accept_well_event(event, gel)
+        if result is not None and st.session_state.well_result is None:
+            # The event arrived after this component render. Refresh its arguments
+            # so an edited candidate cannot leave obsolete outlines on screen.
+            st.rerun()
+    with controls_panel:
+        st.subheader("Define wells")
+        st.caption(
+            "Click the top of the first well and the bottom of the last well, "
+            "passing through their centers. Drag either dot to adjust the line."
+        )
+        result = st.session_state.well_result
+        if result is not None:
+            count = len(result.wells)
+            if result.warnings:
+                st.write(f"{count} well candidate{'s' if count != 1 else ''} detected; review required.")
+                for warning in result.warnings:
+                    st.warning(warning)
+            elif count:
+                st.success(f"Detected {count} well{'s' if count != 1 else ''} and {count} horizontal lane{'s' if count != 1 else ''}.")
+            else:
+                st.warning("No wells found. Move the line through the visible well centers and retry.")
+            st.caption("Visible wells do not establish whether a sample was loaded. Numbers run from top to bottom.")
+            if count:
+                st.button(
+                    "Adjust lane borders", key="adjust_lane_borders", type="primary",
+                    on_click=start_lane_adjustment,
+                )
+            st.button("Add lane", key="add_lane", on_click=start_lane_addition)
+            if st.session_state.lane_error:
+                st.warning(st.session_state.lane_error)
             st.button(
-                "Adjust lane borders", key="adjust_lane_borders", type="primary",
-                on_click=start_lane_adjustment,
+                "Edit well line", key="edit_well_line", on_click=reset_wells,
+                kwargs={"editing": True, "preserve_points": True},
             )
-        st.button("Add lane", key="add_lane", on_click=start_lane_addition)
-        if st.session_state.lane_error:
-            st.warning(st.session_state.lane_error)
-        st.button(
-            "Edit well line", key="edit_well_line", on_click=reset_wells,
-            kwargs={"editing": True, "preserve_points": True},
-        )
-    if st.session_state.well_error:
-        st.warning(st.session_state.well_error)
-    show_expected_lane_count()
-    if st.session_state.well_editing:
-        valid = False
-        try:
-            validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
-            valid = True
-        except SelectionError as exc:
-            st.info(str(exc))
-        st.button(
-            "Confirm line and detect lanes", key="confirm_well_line", type="primary",
-            disabled=not valid, on_click=request_well_detection,
-        )
-        st.button(
-            "Reset points", key="reset_well_line", on_click=reset_wells,
-            kwargs={"editing": True},
-        )
+        if st.session_state.well_error:
+            st.warning(st.session_state.well_error)
+        show_expected_lane_count()
+        if st.session_state.well_editing:
+            valid = False
+            try:
+                validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
+                valid = True
+            except SelectionError as exc:
+                st.info(str(exc))
+            st.button(
+                "Confirm line and detect lanes", key="confirm_well_line", type="primary",
+                disabled=not valid, on_click=request_well_detection,
+            )
+            st.button(
+                "Reset points", key="reset_well_line", on_click=reset_wells,
+                kwargs={"editing": True},
+            )
 
 
 def reset_orientation() -> None:
@@ -267,9 +268,11 @@ def main() -> None:
     st.caption("Orient your gel, define lanes, crop, and annotate.")
 
     uploader_key = f"gel_upload_{st.session_state.uploader_generation}"
-    with st.expander("Gel image", expanded=st.session_state.gel_image is None):
+    has_image = st.session_state.gel_image is not None or st.session_state.pending_upload is not None
+    upload_panel = st.popover("Change image") if has_image else st.container(key="gel_upload_start")
+    with upload_panel:
         st.file_uploader(
-            "Choose a gel image",
+            "Open a gel image",
             type=["tif", "tiff"],
             accept_multiple_files=False,
             key=uploader_key,
@@ -277,12 +280,9 @@ def main() -> None:
             args=(uploader_key,),
             help="Upload one single-image TIFF (.tif or .tiff). Choose another file to replace it.",
         )
-        st.button(
-            "Clear image",
-            on_click=clear_image,
-            disabled=st.session_state.get(uploader_key) is None,
-        )
-        st.caption("Images stay in this session only. Refreshing the page clears your image.")
+        if has_image:
+            st.button("Clear image", key="clear_image", on_click=clear_image)
+        st.caption("TIFF images · Images stay in this session only.")
 
     # Replace this same slot immediately, so neither the previous upload nor an
     # uncropped new image is shown while the new source is being processed.
@@ -341,70 +341,91 @@ def main() -> None:
 
         current_gel: GelImage | None = st.session_state.gel_image
         if current_gel is None:
-            st.info("Your gel preview will appear here.", icon="🖼️")
             return
 
         pending: GelImage | None = st.session_state.orientation_preview
         gel = pending if pending is not None else current_gel
-        st.divider()
         final_crop = st.session_state.lane_crop if st.session_state.lane_stage == "cropped" else None
-        if final_crop is None:
-            st.subheader("Gel preview")
         visible_width = final_crop.width if final_crop else gel.preview_width
         visible_height = final_crop.height if final_crop else gel.preview_height
         st.text(f"{gel.filename} · {visible_width:,} × {visible_height:,} pixels")
-        if gel.orientation is not None:
-            if pending is not None:
-                st.caption(
-                    "Rotated and straightened, flipped vertically, and cropped to the gel outline. "
-                    "The original left side is now at the top. Confirm to accept this image."
+        if final_crop is not None:
+            # The annotation editor owns its preview and controls, including
+            # its responsive in-component layout.
+            with st.expander("Revise analysis"):
+                st.button(
+                    "Revise lanes and crop", key="revise_lane_crop",
+                    on_click=lane_review_ui.back_to_lane_borders,
                 )
-            elif final_crop is None:
-                st.caption("Orientation confirmed. The original left side is at the top.")
-        elif gel.auto_cropped:
-            st.caption("Automatically cropped with a small margin around the gel.")
-        else:
-            st.caption("Gel boundary uncertain; showing the full image to preserve the gel.")
-        if confirmed_gel() is not None and st.session_state.lane_stage is not None:
-            with st.expander("Lane detection settings"):
                 show_expected_lane_count()
+                st.button(
+                    "Edit well line", key="edit_well_line", on_click=reset_wells,
+                    kwargs={"editing": True, "preserve_points": True},
+                )
             lane_review_ui.show_lane_review(current_gel)
-            st.button(
-                "Edit well line", key="edit_well_line", on_click=reset_wells,
-                kwargs={"editing": True, "preserve_points": True},
-            )
-        elif confirmed_gel() is not None and (
-            st.session_state.well_editing or st.session_state.well_result is not None
-        ):
-            show_well_selection(current_gel)
-        else:
-            st.image(
-                BytesIO(gel.preview_png),
-                # Preserve preview pixels; the browser fits them to the container.
-                width=gel.preview_width,
-                output_format="PNG",
-            )
-            if confirmed_gel() is not None:
-                st.button(
-                    "Define wells", key="define_wells", on_click=reset_wells,
-                    kwargs={"editing": True},
+            return
+
+        with st.container(key="gel_workspace"):
+            image_panel, controls_column = st.columns([3.2, 1.15], gap="large")
+            with controls_column:
+                controls_panel = st.container(border=True, key="gel_workflow_controls")
+            if confirmed_gel() is not None and st.session_state.lane_stage is not None:
+                lane_review_ui.show_lane_review(
+                    current_gel, image_panel=image_panel, controls_panel=controls_panel,
                 )
-        if st.session_state.orientation_error:
-            st.error(st.session_state.orientation_error)
-        if current_gel.orientation is None:
-            st.button(
-                "Rotate and Orient",
-                key="rotate_and_orient",
-                on_click=request_orientation,
-                help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
-            )
-            if pending is not None:
-                st.button(
-                    "Confirm",
-                    key="confirm_orientation",
-                    type="primary",
-                    on_click=confirm_orientation,
-                )
+                with controls_panel:
+                    with st.expander("Lane detection settings"):
+                        show_expected_lane_count()
+                    st.button(
+                        "Edit well line", key="edit_well_line", on_click=reset_wells,
+                        kwargs={"editing": True, "preserve_points": True},
+                    )
+            elif confirmed_gel() is not None and (
+                st.session_state.well_editing or st.session_state.well_result is not None
+            ):
+                show_well_selection(current_gel, image_panel, controls_panel)
+            else:
+                with image_panel:
+                    st.image(
+                        BytesIO(gel.preview_png),
+                        # Preserve preview pixels; the browser fits them to the container.
+                        width=gel.preview_width,
+                        output_format="PNG",
+                    )
+                with controls_panel:
+                    st.subheader("Define wells" if confirmed_gel() is not None else "Rotate and orient")
+                    if gel.orientation is not None:
+                        if pending is not None:
+                            st.caption(
+                                "The gel has been straightened, rotated, flipped vertically, "
+                                "and cropped. The original left side is now at the top. "
+                                "Confirm this preview to continue."
+                            )
+                        else:
+                            st.caption("Orientation confirmed. Define the wells to detect your lanes.")
+                    elif gel.auto_cropped:
+                        st.caption("The gel has been cropped automatically. Orient it to begin defining lanes.")
+                    else:
+                        st.caption("Orient the image to begin. The full image is preserved until the gel boundary is found.")
+                    if confirmed_gel() is not None:
+                        st.button(
+                            "Define wells", key="define_wells", type="primary", on_click=reset_wells,
+                            kwargs={"editing": True},
+                        )
+                    if st.session_state.orientation_error:
+                        st.error(st.session_state.orientation_error)
+                    if current_gel.orientation is None:
+                        if pending is not None:
+                            st.button(
+                                "Confirm", key="confirm_orientation", type="primary",
+                                on_click=confirm_orientation,
+                            )
+                        st.button(
+                            "Rotate and Orient", key="rotate_and_orient",
+                            type="secondary" if pending is not None else "primary",
+                            on_click=request_orientation,
+                            help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
+                        )
 
 
 if __name__ == "__main__":

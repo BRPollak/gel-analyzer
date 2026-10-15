@@ -29,21 +29,32 @@ this project folder:
 
 ```sh
 uv sync --locked
-uv run streamlit run app.py
+./run_local.sh
 ```
 
 The project uses Python 3.12 in an isolated `.venv`. If needed, uv downloads the
-interpreter automatically. Open <http://127.0.0.1:8501>. Press Ctrl+C in the
-terminal to stop the server.
+interpreter automatically. The launcher always uses this checkout's `.venv` and
+`app.py`, even when invoked from another folder. Open
+<http://127.0.0.1:8502>. This checkout defaults to port 8502 because a separate
+test checkout uses port 8501; the launcher does not stop or replace that server.
+Press Ctrl+C in the terminal to stop this server.
+
+To use another port, run `./run_local.sh --port 8503` or
+`GEL_ANALYZER_PORT=8503 ./run_local.sh`. The `--port` option takes precedence.
+
+Use the served app URL for local testing. The files in
+`gel_analyzer/annotation_component_frontend/` are embedded Streamlit components;
+opening their HTML directly with a `file://` URL does not initialize the app.
 
 ## Use
 
-1. Browse for or drop one single-image TIFF into **Choose a gel image**.
+1. Browse for or drop one single-image TIFF into **Open a gel image** on the
+   startup screen. No image-type selection is needed.
 2. Wait for the automatic crop, then inspect the preview and its cropped pixel
    dimensions. Large images fit the screen's width and height; small images are
    not enlarged. New previews are brought into view automatically.
 3. Click **Rotate and Orient** to fit the gel outline and preview its orientation.
-4. Inspect the result, then click **Confirm** at the bottom left of the preview.
+4. Inspect the result, then click **Confirm** in the workflow panel beside the preview.
    Both orientation buttons disappear, and the confirmed image stays displayed.
 5. Click **Define wells**. Click at the top of the topmost selected well and the
    bottom of the bottommost selected well, with the line passing through the well
@@ -58,21 +69,28 @@ terminal to stop the server.
 8. Drag the shared right boundary to the farthest point you want to keep.
    Click **Confirm lanes and crop** to create the cropped gel preview.
 9. Click a lane label beside the crop and type directly on the preview. The
-   compact toolbar formats the selected label. Expand **Lane groups** to create
-   groups in either set. Click
+   formatting controls apply to selected text; with only a caret or no text
+   selected, they apply to the whole label. Expand **Lane groups** in the
+   workflow panel to create groups in either set. Click
    **Confirm annotations** to compose the final image. **Edit annotations**
    returns to the saved labels and groups. Choose **Annotate ladder** to add
    manual size labels, or **Skip** to continue. **Download annotated PNG** saves
    the confirmed image, including any ladder labels.
-10. Use **Revise lanes and crop** to adjust the existing review, or **Edit well
-   line** to detect again. **Reset points** starts a new guide on the same gel.
-11. Choose another TIFF to replace the image, even if it has the same filename.
-   Use **Clear image** or the uploader's remove button to start again.
+10. Expand **Revise analysis** to use **Revise lanes and crop** to adjust the
+   existing review, or **Edit well line** to detect again. **Reset points** starts
+   a new guide on the same gel.
+11. Open **Change image** to choose another TIFF, even if it has the same filename.
+   Use **Clear image** or the uploader's remove button there to start again.
 
 All previews adapt to the browser window without changing source pixels, lane
 coordinates, or download resolution. The annotation editor defaults to **Fit
 screen**; choose a percentage under **Zoom** to inspect it more closely with
-scrolling. Editing controls and the rest of the page remain accessible normally.
+scrolling. Each step's controls and continuation action stay to the right of the
+image, including in narrow desktop browser panels. Only very narrow phone
+screens stack the controls below the image. The annotation panel scrolls its
+optional controls while keeping the confirmation actions visible. Ladder photos
+use a separate column on wide screens and sit below the gel in compact panels,
+so they do not displace the menu on the right.
 
 ### Define wells and detect lanes
 
@@ -186,16 +204,19 @@ its final crop. Late events from earlier stages cannot restore old geometry.
 
 ### Lane annotations
 
-The app uses a wide workspace. Upload controls and optional detection settings
-can be expanded when needed, leaving more room for the gel.
+The app uses a wide workspace. **Change image** opens the replacement and clear
+controls; optional detection settings and analysis revisions can be expanded
+when needed, leaving more room for the gel.
 
 Crop confirmation opens an annotation editor using the crop's translated lane
 coordinates. Click a right-aligned Arial label beside the gel to edit its text
-in place. The compact toolbar formats the selected label with bold, italic
-(including both together), and color. There is no separate lane-text form.
+in place. Select a substring to change just its bold, italic (including both
+together), or color formatting. With no text range selected, those controls
+format the whole label. Mixed formatting is retained during text edits, layout
+changes, confirmation, and PNG export. There is no separate lane-text form.
 Formatting controls stay outside the final image; the selected label stays
 highlighted while you use them. Group creation and membership controls are in
-the collapsible **Lane groups** section below the preview.
+the collapsible **Lane groups** section in the workflow panel.
 
 The initial font size is 80% of the average cropped lane height, rounded to a
 whole pixel. It applies to lane and group labels, and can be adjusted from
@@ -206,7 +227,11 @@ crop revisions.
 Groups have editable labels and lane memberships. Set 1 appears immediately left
 of the lane labels; Set 2 appears farther left, and both remain visible. A bracket
 spans the selected lanes' outer bounds, with ticks at the selected lane centers.
-Ticks identify membership when the selected lanes are not consecutive. The group
+Ticks identify membership when the selected lanes are not consecutive. Brackets
+and ticks always remain black, independently of the group label's formatting.
+Each bracket moves as far right as the visible text in its span permits, with
+a consistent gap. Placement uses rendered glyph bounds, including font size,
+mixed styles, and italic overhang, rather than the width of an editing box. The group
 label sits to the bracket's left, right-aligned and vertically centered. Groups
 may be renamed, reformatted, or deleted. Overlapping groups
 within a set receive separate horizontal tracks so their labels and brackets
@@ -241,12 +266,27 @@ Place any subset of the available markers. Selecting a placed marker lets the
 next click move it; **Remove marker** makes that size available again. Clicks
 outside the selected lane do not change annotations.
 
+The app includes **100 bp DNA Ladder (NEB)**, **1 kb DNA Ladder (NEB)**, and
+**Supercoiled DNA Ladder (NEB)** presets. Selecting one opens its supplied photo
+in a collapsible reference panel beside the gel and annotation controls. Enlarge
+the photo for a closer look while matching bands to the available size markers.
+The reference panel stays separate from the exported annotation image.
+
 Labels appear above the gel, rotated 90° counterclockwise, at the exact clicked
-horizontal position. Their Arial size is half the calculated default lane-label
-size (80% of mean lane height, rounded, then halved), independent of manual lane
-font changes. Closely spaced labels use extra vertical tiers without moving
-horizontally. The top margin grows to keep labels visible, and guide lines begin
-six native pixels above the gel. The gel itself is never resized for annotation.
+horizontal position. Their normal Arial size is half the calculated default
+lane-label size (80% of mean lane height, rounded, then halved), independent of
+manual lane font changes. When nearby labels would overlap, all ladder labels
+shrink together while keeping their visible bottoms aligned at one level. Moving
+markers apart restores the normal size. Lane and group fonts stay unchanged.
+Coincident markers or positions too close to fit prompt you to move or remove a
+marker before confirming; every placement remains editable.
+
+The top margin reserves space for the preset's longest label at its normal size.
+Guide lines begin six native pixels above the gel and stop six native pixels
+below the visible label text. They all have the same length, normally 15 native
+pixels, with a stroke weight of 1.8 pixels. Oversized lane or group labels move
+the entire ladder row upward together and extend all guide lines equally. The
+gel itself is never resized for annotation.
 
 **Back** keeps the draft. Changing preset or lane with placed markers asks before
 clearing those marker positions. **Cancel** returns to the previous confirmed
@@ -265,15 +305,23 @@ confirmed PNG and download; both use the same clean canvas.
 
 #### Define your ladder presets
 
-Edit `gel_analyzer/ladder_presets.json` and reload the app. The included example is
-illustrative, not a manufacturer's ladder specification. Add entries like:
+Edit `gel_analyzer/ladder_presets.json` and reload the app. The bundled labels
+follow the supplied photos, verified against NEB's [100 bp DNA Ladder](https://www.neb.com/en-us/products/n3231-100-bp-dna-ladder),
+[1 kb DNA Ladder](https://www.neb.com/products/n3232-1-kb-dna-ladder), and
+[Supercoiled DNA Ladder](https://www.neb.com/en-us/products/n0472-supercoiled-dna-ladder)
+references. The 100 bp preset includes the combined **500/517 bp** band; the kb
+presets use the rounded sizes printed in their photos. The supercoiled preset
+matches the supplied original N0472 ladder, not its later replacement. Add
+entries like:
 
 ```json
 [
   {
     "id": "my-ladder",
     "name": "My ladder",
-    "labels": ["5.0 kb", "3.0 kb", "1.0 kb"]
+    "labels": ["5.0 kb", "3.0 kb", "1.0 kb"],
+    "referenceImage": "ladder_references/my-ladder.png",
+    "referenceNote": "Optional short guidance for reading the reference."
   }
 ]
 ```
@@ -282,9 +330,17 @@ Keep IDs unique (letters, numbers, hyphens, underscores; at most 80 characters).
 Names and labels must be nonempty single lines of at most 200 characters; labels
 must be unique within a preset. Up to 100 presets and 200 markers per preset are
 supported. Labels appear in file order; their units and sizes are not interpreted.
+The optional `referenceImage` points to an image in
+`gel_analyzer/annotation_component_frontend/ladder_references/`. Use a filename
+of 1–80 letters, numbers, hyphens, or underscores followed by `.webp`, `.gif`,
+`.png`, `.jpg`, or `.jpeg`; URLs and nested paths are not supported. Optional
+`referenceNote` text must be a nonempty single line of at most 500 characters.
+Presets without reference metadata remain supported. The three supplied images
+are bundled unchanged, so viewing them requires no external image request.
 Missing or invalid configuration explains the problem and still allows skipping.
-An active annotation saves a preset snapshot, so editing this file does not
-silently rename markers already placed in that session. All data remains local
+An active annotation saves a preset snapshot including its reference metadata,
+so editing this file does not silently rename markers already placed in that
+session. All data remains local
 and session-only. Automatic band detection, size inference, and calibration are
 not part of this feature.
 
@@ -423,7 +479,7 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **665 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **710 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
   lifecycle, manual review, lane insertion/deletion, annotation validation,
   confirmation/editing, and app workflow tests.
@@ -433,16 +489,22 @@ completed-preview rendering, and detection only once per upload.
   offset coordinates, edge clipping, endpoint order, handle sizing, constrained
   border/right-edge movement, independent targeting of narrow-lane handles,
   responsive trash buttons, and mouse/keyboard deletion events.
-- `node --test tests/test_annotation_layout.mjs`: **20 passed**, checking native
+- `node --test tests/test_annotation_layout.mjs`: **28 passed**, checking native
   lane alignment, both group sets, overlapping groups, changing memberships,
   bold/italic text metrics, lane-based font sizing, edge padding, dense lanes,
-  clean composition, and rotated ladder geometry, collision tiers, and padding.
-- `node --test tests/test_ladder_component.mjs`: **9 passed**, checking manual
+  clean composition, and rotated ladder geometry, font sizing to prevent collisions,
+  and padding.
+- `node --test tests/test_ladder_component.mjs`: **14 passed**, checking manual
   marker placement/correction, keyboard/touch behavior, guarded changes, exact
-  coordinate conversion, and responsive preview height.
+  coordinate conversion, responsive preview height, and ladder reference photos.
 - `node --test tests/test_preview_fit.mjs`: **6 passed**, checking portrait and
   landscape fitting, viewport-height budgets, lane-control gutters, native
   pointer coordinates, and protection against iframe resize feedback.
+- `node --test tests/test_rich_text.mjs`: **7 passed**, checking selection
+  formatting, text edits, undo snapshots, and compatibility with plain labels.
+- `node --test tests/test_workspace_viewport.mjs`: **1 passed**, checking that
+  expanded controls are brought into view without resetting scroll on edits.
+- `node --test tests/*.mjs`: **65 passed** across the JavaScript suites.
 - All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
   five). Four were used for tuning; one was reserved for validation and
   retained its previously accepted bounds. Visual review confirms the visible
@@ -475,9 +537,10 @@ its rendered pixels match the browser-decoded crop exactly. The confirmed PNG
 matches the clean preview pixel for pixel and contains no editing controls.
 Screenshots and a downloaded example are in ignored `output/playwright/annotations-*`.
 
-The simplified editor was also checked in a 1200-pixel desktop viewport: the
+The earlier simplified editor was checked in a 1200-pixel desktop viewport: the
 workspace is 1029 pixels wide (previously about 704), and formatting fits in a
-single 52-pixel toolbar above the preview. Direct typing, combined styles,
+single 52-pixel toolbar above the preview (the current layout moves these controls
+into the right workflow panel). Direct typing, combined styles,
 caret retention, arrow navigation, in-preview group renaming, collapsed group
 creation/membership editing, and **Auto size** were exercised in Chrome.
 The four-lane fixture averages 25 pixels per lane and uses a 20-pixel font;
@@ -496,9 +559,9 @@ Orientation tests cover both tilt directions, fitted boundaries, distinctive
 side markers, unsigned 16-bit values, color channels, and uncertain outlines.
 App tests cover staged previews, repeated rotation, confirmation, and resetting
 the orientation workflow on upload replacement or clearing.
-The browser flow was also checked through Rotate and Orient and Confirm: the
-confirmation control appears below the image at the left, and both orientation
-buttons disappear after acceptance while the result stays visible. All five
+The browser flow was also checked through Rotate and Orient and Confirm. Both
+orientation buttons disappear after acceptance while the result stays visible;
+the current layout places confirmation in the right workflow panel. All five
 local gel crops produce successful orientation previews.
 
 Well detection adds 51 independent detector cases and 37 app workflow cases.

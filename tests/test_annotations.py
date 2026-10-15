@@ -25,6 +25,23 @@ def styled_annotations():
     return data
 
 
+def rich_annotations():
+    data = styled_annotations()
+    data["labels"][0]["runs"] = [
+        {"text": "α", "bold": True, "italic": False, "color": "#AA11ee"},
+        {"text": " control", "bold": False, "italic": True, "color": "#202020"},
+    ]
+    data["labels"][1]["runs"] = [
+        {"text": "Treat", "bold": False, "italic": False, "color": "#202020"},
+        {"text": "ed", "bold": True, "italic": True, "color": "#1357ab"},
+    ]
+    data["groups"][0]["runs"] = [
+        {"text": "Exper", "bold": True, "italic": True, "color": "#1357ab"},
+        {"text": "iment", "bold": False, "italic": False, "color": "#AA11ee"},
+    ]
+    return data
+
+
 def composition(crop, *, mode="RGB", image_format="PNG", gutter=180):
     image = Image.new(mode, (crop.width + gutter, crop.height + 24), "white")
     if hasattr(crop, "preview_png"):
@@ -89,6 +106,62 @@ def test_both_styles_and_independent_group_sets_survive_detached_snapshot():
     source["groups"][0]["lanes"].clear()
     assert checked["labels"][0]["text"] == "α control"
     assert checked["groups"][0]["lanes"] == [0, 1]
+
+
+def test_mixed_formatting_survives_detached_snapshot_for_labels_and_groups():
+    source = rich_annotations()
+    checked = validate_annotations(source, 2)
+    assert checked["labels"] == source["labels"]
+    assert checked["groups"][0]["runs"] == source["groups"][0]["runs"]
+    source["labels"][0]["runs"][0]["color"] = "#000000"
+    source["groups"][0]["runs"][1]["text"] = "Late edit"
+    assert checked["labels"][0]["runs"][0]["color"] == "#AA11ee"
+    assert checked["groups"][0]["runs"][1]["text"] == "iment"
+
+
+@pytest.mark.parametrize("collection,text_key", [("labels", "text"), ("groups", "label")])
+def test_adjacent_matching_runs_merge_without_changing_text_or_source(collection, text_key):
+    data = styled_annotations()
+    label = data[collection][0]
+    style = {key: label[key] for key in ("bold", "italic", "color")}
+    label["runs"] = [{"text": char, **style} for char in label[text_key]]
+    checked = validate_annotations(data, 2)
+    assert checked[collection][0]["runs"] == [{"text": label[text_key], **style}]
+    assert len(label["runs"]) == len(label[text_key])
+
+
+@pytest.mark.parametrize("runs", [
+    None, {}, "Lane 1", [],
+    [{"text": "Lane 1", "bold": 1, "italic": False, "color": "#202020"}],
+    [{"text": "Lane 1", "bold": False, "italic": "false", "color": "#202020"}],
+    [{"text": "Lane 1", "bold": False, "italic": False, "color": "red"}],
+    [{"text": "Lane 1", "bold": False, "color": "#202020"}],
+    [{"text": "Lane\n1", "bold": False, "italic": False, "color": "#202020"}],
+    [{"text": "", "bold": False, "italic": False, "color": "#202020"}],
+    [{"text": "Lane", "bold": False, "italic": False, "color": "#202020"}],
+    [{"text": "Different", "bold": False, "italic": False, "color": "#202020"}],
+    [{"text": "x" * 501, "bold": False, "italic": False, "color": "#202020"}],
+    [None],
+])
+def test_invalid_or_incomplete_rich_text_is_rejected(runs):
+    data = default_annotations(1)
+    data["labels"][0]["runs"] = runs
+    with pytest.raises(AnnotationError):
+        validate_annotations(data, 1)
+
+
+def test_rich_text_supports_empty_labels_and_bounded_character_level_formatting():
+    data = default_annotations(1)
+    data["labels"][0].update(text="", runs=[])
+    assert validate_annotations(data, 1) == data
+    data["labels"][0].update(text="x" * 500, runs=[
+        {"text": "x", "bold": bool(index % 2), "italic": False, "color": "#202020"}
+        for index in range(500)
+    ])
+    assert validate_annotations(data, 1) == data
+    data["labels"][0]["runs"].append(data["labels"][0]["runs"][0])
+    with pytest.raises(AnnotationError):
+        validate_annotations(data, 1)
 
 
 @pytest.mark.parametrize("changes", [

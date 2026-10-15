@@ -197,23 +197,26 @@ def show_annotations(crop, filename: str) -> None:
         st.info(st.session_state.ladder_notice)
     if stage in ("ladder_offer", "final"):
         width, height = st.session_state.annotation_dimensions
-        st.image(BytesIO(st.session_state.annotation_png), width=width, output_format="PNG")
-        st.success(f"Annotations confirmed · {width:,} × {height:,} pixels")
-        if stage == "ladder_offer":
-            st.write("Would you like to annotate a ladder?")
-            left, right = st.columns([1, 1])
-            left.button("Annotate ladder", key="annotate_ladder", type="primary", on_click=start_ladder)
-            right.button("Skip", key="skip_ladder", on_click=skip_ladder)
-        else:
-            st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
-                      key="edit_ladder", on_click=start_ladder)
-            st.download_button(
-                "Download annotated PNG", data=st.session_state.annotation_png,
-                file_name=f"{Path(filename).stem}-annotated.png", mime="image/png",
-                key="download_annotations",
-            )
-            st.caption("The annotated PNG uses browser display colors. Your original TIFF and lossless crop remain in this session.")
-        st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
+        with st.container(key="gel_workspace"):
+            image_panel, controls_column = st.columns([3.2, 1.15], gap="large")
+            with image_panel:
+                st.image(BytesIO(st.session_state.annotation_png), width=width, output_format="PNG")
+            with controls_column, st.container(border=True, key="gel_workflow_controls"):
+                st.success(f"Annotations confirmed · {width:,} × {height:,} pixels")
+                if stage == "ladder_offer":
+                    st.write("Would you like to annotate a ladder?")
+                    st.button("Annotate ladder", key="annotate_ladder", type="primary", on_click=start_ladder)
+                    st.button("Skip", key="skip_ladder", on_click=skip_ladder)
+                else:
+                    st.download_button(
+                        "Download annotated PNG", data=st.session_state.annotation_png,
+                        file_name=f"{Path(filename).stem}-annotated.png", mime="image/png",
+                        key="download_annotations", type="primary",
+                    )
+                    st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
+                              key="edit_ladder", on_click=start_ladder)
+                    st.caption("The annotated PNG uses browser display colors. Your original TIFF and lossless crop remain in this session.")
+                st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
         return
     presets = []
     if stage == "ladder":
@@ -222,7 +225,7 @@ def show_annotations(crop, filename: str) -> None:
         except AnnotationError as exc:
             st.warning(str(exc))
     else:
-        st.caption("Click a label on the preview to edit it. Use the toolbar to format the selected label.")
+        st.caption("Click a label to edit it. Select text within a label to format just that selection.")
     event = render_annotation_component(
         crop, annotations=st.session_state.annotation_data,
         token=st.session_state.annotation_token, revision=st.session_state.annotation_revision,

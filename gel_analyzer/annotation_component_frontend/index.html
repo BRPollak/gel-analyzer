@@ -50,11 +50,12 @@
     #preview-stage { position: absolute; left: 0; top: 0; transform-origin: top left; background: white; }
     #preview { position: absolute; left: 0; top: 0; display: block; }
     #label-inputs { position: absolute; inset: 0; }
-    .image-label { position: absolute; margin: 0; padding: 0; border: 1px dashed #94a3b8a8; border-radius: 2px; background: transparent; color: transparent; caret-color: var(--label-color, #000); text-align: right; box-sizing: content-box; cursor: text; }
+    .image-label { position: absolute; margin: 0; padding: 0; border: 1px dashed #94a3b8a8; border-radius: 2px; background: transparent; color: transparent; caret-color: var(--label-color, #000); text-align: right; box-sizing: content-box; cursor: text; white-space: pre; }
     .image-label:hover { border-color: #2563eb; outline: 1px solid #2563eb; }
     .image-label[data-selected="true"] { outline: 2px solid #2563eb; outline-offset: 1px; }
-    .image-label:focus { color: var(--label-color, #000); background: white; outline: 2px solid #2563eb; outline-offset: 1px; }
-    .image-label::placeholder { color: #64748b; font-style: italic; }
+    .image-label:focus { color: var(--label-color, #000); outline: 2px solid #2563eb; outline-offset: 1px; }
+    .image-label:focus span { color: var(--run-color, #000); background: white; }
+    .image-label:empty::before { content: attr(data-placeholder); color: #64748b; font-style: italic; }
     #confirm { color: white; background: #2563eb; border-color: #2563eb; font-weight: bold; }
     #actions { margin-top: 10px; align-items: center; justify-content: space-between; }
     #size-hint { margin: 0; }
@@ -66,7 +67,7 @@
     #ladder-panel button, #ladder-panel select, #ladder-actions button { min-height: 44px; }
     #ladder-panel .field { min-width: 150px; }
     #ladder-panel .row { align-items: center; }
-    #ladder-markers { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+    #ladder-markers { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; max-height: 300px; overflow-y: auto; padding: 3px; }
     .ladder-marker { display: flex; gap: 8px; align-items: center; }
     .ladder-marker-status { font-size: 12px; }
     .ladder-marker[data-placed="true"] { border-style: solid; border-width: 2px; }
@@ -83,11 +84,57 @@
     #ladder-cursor circle { fill: white; stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; }
     #ladder-cursor:focus circle { stroke: #111827; stroke-width: 3; }
     #ladder-workspace { min-width: 0; }
-    @media (min-width: 900px) {
-      #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-workspace { display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: start; gap: 14px; }
-      #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-panel { margin-bottom: 0; min-width: 0; }
+    #workflow-panel { min-width: 0; }
+    #workflow-scroll { min-width: 0; }
+    #workflow-actions { padding-top: 6px; }
+    #ladder-reference { min-width: 0; background: #fff; color: #31333f; }
+    #ladder-reference h2 { font-size: 14px; margin: 0 0 4px; }
+    #ladder-reference-name { font-size: 12px; margin: 0 0 10px; }
+    #ladder-reference-image { display: block; width: auto; height: auto; max-width: 100%; max-height: min(500px, calc(var(--workspace-budget, 620px) - 170px)); margin: 0 auto; background: #fff; }
+    #ladder-reference-selected { font-weight: bold; color: #1d4ed8; }
+    #ladder-reference-enlarge { width: 100%; margin-top: 8px; }
+    #ladder-reference-toggle { margin-bottom: 10px; }
+    #ladder-reference-dialog { padding: 14px; border: 1px solid var(--border); border-radius: 8px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); background: #fff; color: #31333f; }
+    #ladder-reference-dialog::backdrop { background: #172b3a70; }
+    #ladder-reference-dialog .row { align-items: center; justify-content: space-between; gap: 16px; }
+    #ladder-reference-dialog h2 { font-size: 16px; margin: 0; }
+    #ladder-reference-large { display: block; max-width: 100%; width: auto; height: min(850px, calc(var(--workspace-budget, 620px) - 30px)); max-height: calc(100vh - 130px); object-fit: contain; margin: 12px auto 0; background: #fff; }
+    @media (min-width: 400px) {
+      #ladder-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(180px, 30vw, 300px); align-items: start; gap: 14px; }
+      #preview-viewport { grid-column: 1; grid-row: 1; }
+      #ladder-reference { grid-column: 1; grid-row: 2; max-height: var(--workspace-budget, 620px); overflow-y: auto; }
+      #ladder-reference-image { max-height: 240px; }
+      #workflow-panel { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; max-height: var(--workspace-budget, 620px); }
+      #workflow-scroll { overflow-y: auto; min-height: 0; padding: 2px; }
+      #workflow-actions { flex-shrink: 0; }
+      #workflow-actions button { flex: 1 1 auto; }
+      #toolbar { align-items: start; }
+      #toolbar .toolbar-end { margin-left: 0; }
+      #ladder-panel { margin-bottom: 0; min-width: 0; }
+      #ladder-panel .field { min-width: 0; }
+      #ladder-panel button { max-width: 100%; overflow-wrap: anywhere; }
       #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-markers { flex-direction: column; flex-wrap: nowrap; max-height: 300px; overflow: auto; padding: 3px; }
       #component[data-mode="ladder"][data-ladder-step="markers"] .ladder-marker { flex: 0 0 auto; justify-content: space-between; text-align: left; overflow-wrap: anywhere; }
+    }
+    @media (min-width: 1100px) {
+      #component[data-reference-open="true"] #ladder-workspace { grid-template-columns: minmax(0, 1fr) 300px 190px; }
+      #ladder-reference { grid-column: 3; grid-row: 1; }
+      #ladder-reference-image { max-height: min(500px, calc(var(--workspace-budget, 620px) - 170px)); }
+    }
+    @media (max-width: 399px) {
+      #workflow-panel { margin-top: 10px; }
+      #ladder-reference { margin-top: 10px; }
+      #ladder-reference-image { max-height: 240px; }
+      #ladder-panel .field { min-width: 0; }
+      #ladder-panel button { max-width: 100%; overflow-wrap: anywhere; }
+      #component[data-reference-open="true"] #ladder-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 32%); gap: 10px; align-items: start; }
+      #component[data-reference-open="true"] #preview-viewport { grid-column: 1 / -1; }
+      #component[data-reference-open="true"] #workflow-panel { grid-column: 1; grid-row: 2; }
+      #component[data-reference-open="true"] #ladder-reference { grid-column: 2; grid-row: 2; padding: 10px 8px; }
+    }
+    @media (max-width: 359px) {
+      #component[data-reference-open="true"] #ladder-workspace { display: block; }
+      #ladder-reference-image { max-height: 240px; }
     }
     @media (max-width: 540px) { .panel { padding: 10px; } .grow { flex-basis: 100%; } .toolbar-end { margin-left: 0; } #selection-name { min-width: 0; } }
   </style>
@@ -96,6 +143,30 @@
   <main id="component" data-preview-fit="screen">
     <p id="loading" role="status">Loading cropped gel…</p>
     <div id="editor" hidden>
+      <div id="ladder-workspace">
+      <div id="preview-viewport" tabindex="0" aria-label="Annotation preview; scroll to inspect the full image">
+        <div id="preview-space"><div id="preview-stage">
+          <canvas id="preview" role="img" aria-label="Live cropped gel with lane labels and group brackets"></canvas>
+          <div id="label-inputs"></div>
+          <svg id="ladder-overlay" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Select a ladder lane or place its size markers" aria-describedby="status" hidden>
+            <g id="ladder-lane-outlines" pointer-events="none"></g>
+            <g id="ladder-cursor" role="slider" aria-orientation="horizontal" tabindex="-1" visibility="hidden">
+              <line id="ladder-cursor-line"></line><circle id="ladder-cursor-dot"></circle>
+            </g>
+          </svg>
+        </div></div>
+      </div>
+      <aside id="ladder-reference" class="panel" aria-labelledby="ladder-reference-heading" hidden>
+        <h2 id="ladder-reference-heading">Ladder reference</h2>
+        <p id="ladder-reference-name"></p>
+        <img id="ladder-reference-image" alt="">
+        <p id="ladder-reference-error" class="hint" hidden>Photo unavailable. Use the size buttons to annotate this ladder.</p>
+        <button id="ladder-reference-enlarge" type="button" aria-haspopup="dialog">Enlarge photo</button>
+        <p id="ladder-reference-selected" class="hint" aria-live="polite"></p>
+        <p id="ladder-reference-note" class="hint" hidden></p>
+      </aside>
+      <aside id="workflow-panel" aria-label="Current annotation step">
+      <div id="workflow-scroll">
       <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
         <strong id="selection-name" class="lane-only">Lane 1</strong>
         <div class="formatting lane-only" role="group" aria-label="Selected label formatting">
@@ -112,10 +183,10 @@
           <button id="open-groups" type="button">Add group</button>
         </div>
       </div>
-      <p class="hint lane-only" id="editing-hint">Click a label to edit it. Use ↑ / ↓ to move between labels.</p>
-      <div id="ladder-workspace">
+      <p class="hint lane-only" id="editing-hint">Click a label to edit. Select text to format just that part; with no text selected, formatting applies to the whole label. Use ↑ / ↓ to move between labels.</p>
       <section id="ladder-panel" class="panel" aria-label="Ladder annotation steps" hidden>
         <h2 id="ladder-heading" tabindex="-1">Choose a ladder preset</h2>
+        <button id="ladder-reference-toggle" type="button" aria-controls="ladder-reference" aria-expanded="true" hidden>Hide reference</button>
         <div id="ladder-preset-step">
           <div class="row">
             <label class="field grow">Ladder preset<select id="ladder-preset" aria-label="Ladder preset"><option value="">Choose a preset…</option></select></label>
@@ -153,26 +224,6 @@
           </div>
         </div>
       </section>
-      <div id="preview-viewport" tabindex="0" aria-label="Annotation preview; scroll to inspect the full image">
-        <div id="preview-space"><div id="preview-stage">
-          <canvas id="preview" role="img" aria-label="Live cropped gel with lane labels and group brackets"></canvas>
-          <div id="label-inputs"></div>
-          <svg id="ladder-overlay" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Select a ladder lane or place its size markers" aria-describedby="status" hidden>
-            <g id="ladder-lane-outlines" pointer-events="none"></g>
-            <g id="ladder-cursor" role="slider" aria-orientation="horizontal" tabindex="-1" visibility="hidden">
-              <line id="ladder-cursor-line"></line><circle id="ladder-cursor-dot"></circle>
-            </g>
-          </svg>
-        </div></div>
-      </div>
-      </div>
-      <div class="row" id="actions"><button id="confirm" type="button">Confirm annotations</button><p id="size-hint" class="hint"></p></div>
-      <div id="ladder-actions" hidden>
-        <button id="ladder-confirm" type="button" hidden>Confirm ladder annotations</button>
-        <button id="ladder-skip" type="button">Skip ladder</button>
-        <button id="ladder-cancel" type="button">Cancel ladder</button>
-        <button id="ladder-remove" type="button" hidden>Remove ladder</button>
-      </div>
       <details id="group-panel" class="panel lane-only">
         <summary>Lane groups <span id="group-count">(0)</span></summary>
         <div class="row">
@@ -185,9 +236,35 @@
         <fieldset><legend>Lanes in this group</legend><div id="group-members"></div></fieldset>
         <p class="hint" id="group-hint">Choose a column, name the group, and select its lanes.</p>
       </details>
+      </div>
+      <div id="workflow-actions">
+      <div class="row" id="actions"><button id="confirm" type="button">Confirm annotations</button><p id="size-hint" class="hint"></p></div>
+      <div id="ladder-actions" hidden>
+        <button id="ladder-confirm" type="button" hidden>Confirm ladder annotations</button>
+        <button id="ladder-skip" type="button">Skip ladder</button>
+        <button id="ladder-cancel" type="button">Cancel ladder</button>
+        <button id="ladder-remove" type="button" hidden>Remove ladder</button>
+      </div>
+      </div>
+      </aside>
+      </div>
     </div>
     <p id="status" role="status" aria-live="polite"></p>
+  <dialog id="ladder-reference-dialog" aria-labelledby="ladder-reference-dialog-title">
+    <div class="row"><h2 id="ladder-reference-dialog-title">Ladder reference</h2><button id="ladder-reference-close" type="button" autofocus>Close photo</button></div>
+    <img id="ladder-reference-large" alt="">
+  </dialog>
   </main>
+  <script>
+    if (window.parent === window) {
+      const loading = document.getElementById("loading");
+      loading.textContent = "Open the running Gel Analyzer to load a gel and annotate it. ";
+      const link = document.createElement("a");
+      link.href = "http://127.0.0.1:8502/";
+      link.textContent = "Open local app";
+      loading.appendChild(link);
+    }
+  </script>
   <script type="module" src="editor.mjs"></script>
 </body>
 </html>

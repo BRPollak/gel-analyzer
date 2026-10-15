@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from gel_analyzer.annotations import default_annotations
-from test_annotations import composition, styled_annotations
+from test_annotations import composition, rich_annotations, styled_annotations
 from test_lane_app import bounds, finish_review, keys, lane_event, start_review, upload, workflow
 
 
@@ -65,15 +65,19 @@ def test_crop_automatically_opens_editor_with_translated_lane_coordinates(annota
     assert "revise_lane_crop" in keys(annotated.app)
 
 
-def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated):
+@pytest.mark.parametrize("rich_text", [False, True])
+def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated, rich_text):
     crop = crop_gel(annotated)
     original_bytes = crop.preview_png
     original_source = annotated.app.session_state["gel_image"].source_bytes
-    annotation_event(annotated)
+    data = rich_annotations() if rich_text else styled_annotations()
+    annotation_event(annotated, data=data)
     app = annotated.app
     draft = deepcopy(app.session_state["annotation_data"])
     assert draft["labels"][0]["bold"] and draft["labels"][0]["italic"]
     assert {group["set"] for group in draft["groups"]} == {0, 1}
+    assert draft["labels"] == data["labels"]
+    assert draft["groups"][0] == {**data["groups"][0], "lanes": [0, 1]}
     assert app.session_state["annotation_png"] is None
     assert annotated.renders[-1][1]["annotations"] == draft
     image_event, expected_png = composition(crop)
@@ -89,9 +93,11 @@ def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated):
     assert app.session_state["gel_image"].source_bytes == original_source
 
 
-def test_return_to_editing_preserves_complete_snapshot_and_rejects_old_confirmation(annotated):
+@pytest.mark.parametrize("rich_text", [False, True])
+def test_return_to_editing_preserves_complete_snapshot_and_rejects_old_confirmation(annotated, rich_text):
     crop_gel(annotated)
-    old_event = annotation_event(annotated, action="confirm")
+    data = rich_annotations() if rich_text else styled_annotations()
+    old_event = annotation_event(annotated, data=data, action="confirm")
     app = annotated.app
     confirmed = deepcopy(app.session_state["annotation_data"])
     old_token = app.session_state["annotation_token"]
@@ -177,6 +183,19 @@ def test_invalid_or_out_of_order_edit_cannot_replace_last_valid_draft(annotated)
     assert app.error
 
 
+def test_incomplete_rich_text_event_cannot_replace_last_valid_draft(annotated):
+    crop_gel(annotated)
+    annotation_event(annotated, data=rich_annotations())
+    app = annotated.app
+    accepted = deepcopy(app.session_state["annotation_data"])
+    invalid = deepcopy(accepted)
+    invalid["groups"][0]["runs"].pop()
+    annotation_event(annotated, data=invalid, revision=2, action="confirm")
+    assert app.session_state["annotation_data"] == accepted
+    assert app.session_state["annotation_png"] is None
+    assert "Formatted text must match" in app.session_state["annotation_error"]
+
+
 @pytest.mark.parametrize("overrides", [
     {"token": "previous-crop"}, {"revision": 0}, {"revision": True},
     {"kind": "lane_review"}, {"action": "delete"},
@@ -222,7 +241,7 @@ def test_revise_crop_consumes_pending_annotation_edit_and_preserves_it(annotated
 
 def test_lane_deletion_and_addition_remap_labels_and_both_group_sets(annotated):
     crop_gel(annotated)
-    data = styled_annotations()
+    data = rich_annotations()
     data["groups"].append({**data["groups"][0], "id": "deleted-only", "lanes": [0]})
     annotation_event(annotated, data=data, action="confirm")
     app = annotated.app

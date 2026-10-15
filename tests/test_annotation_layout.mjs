@@ -19,9 +19,8 @@ const input = {width: 400, height: 100, lanes,
   ], groups: []}};
 
 function rectanglesIntersect(a, b) {
-  return a.x - a.width < b.x && b.x - b.width < a.x &&
-    a.y - a.boxHeight / 2 < b.y + b.boxHeight / 2 &&
-    b.y - b.boxHeight / 2 < a.y + a.boxHeight / 2;
+  return a.hasInk && b.hasInk && a.inkLeft < b.inkRight && b.inkLeft < a.inkRight &&
+    a.inkTop < b.inkBottom && b.inkTop < a.inkBottom;
 }
 
 function assertLabelsFit(layout) {
@@ -38,7 +37,7 @@ function assertLabelsFit(layout) {
   for (let index = 0; index < layout.labels.length; index++) {
     for (const other of layout.labels.slice(index + 1)) {
       assert.equal(rectanglesIntersect(layout.labels[index], other), false,
-        `Text boxes overlap: ${layout.labels[index].text}, ${other.text}`);
+        `Visible text overlaps: ${layout.labels[index].text}, ${other.text}`);
     }
   }
 }
@@ -79,7 +78,10 @@ test("both group sets coexist, use independent columns, and retain sparse member
     const bracket = layout.brackets.find(candidate => candidate.id === group.id);
     assert.equal(group.y, (bracket.top + bracket.bottom) / 2);
     assert.ok(group.x + group.overhangRight < bracket.x);
-    assert.ok(bracket.x + bracket.depth < Math.min(...layout.laneLabels.map(label => label.x - label.width)));
+    const covered = layout.laneLabels.filter(label =>
+      label.inkTop < bracket.bottom + 4 && label.inkBottom > bracket.top - 4);
+    assert.ok(bracket.x + bracket.depth <= Math.min(...covered.map(label => label.inkLeft)) - 10);
+    assert.equal(bracket.color, "#000000");
   }
   assert.equal(layout.groupLabels[2].font, "italic bold 18px Arial");
   assertLabelsFit(layout);
@@ -115,6 +117,98 @@ test("long, bold italic labels expand the margin using ink bounds without resizi
   assert.equal(layout.width - layout.gelX, short.width - short.gelX);
   assert.equal(layout.imageWidth, 400);
   assertLabelsFit(layout);
+});
+
+test("group brackets follow visible ink, ignoring editor padding and unrelated longer labels", () => {
+  const specification = {width: 400, height: 260,
+    lanes: [[0, 0, 400, 30], [0, 100, 400, 130], [0, 210, 400, 240]],
+    annotations: {fontSize: 20, labels: [{text: "A"}, {text: "Very long unrelated lane"}, {text: "BC"}],
+      groups: [{id: "top", set: 0, label: "Top", lanes: [0]},
+        {id: "bottom", set: 0, label: "Bottom", lanes: [2]}]}};
+  const layout = layoutAnnotations(specification, measure);
+  for (const [index, laneIndex] of [0, 2].entries()) {
+    const bracket = layout.brackets[index];
+    const lane = layout.laneLabels[laneIndex];
+    assert.equal(bracket.x + bracket.depth, lane.inkLeft - 10);
+    assert.ok(bracket.x > lane.x - lane.width,
+      "the bracket can use empty editor-box padding beside a short label");
+  }
+  assert.notEqual(layout.brackets[0].x, layout.brackets[1].x,
+    "each disjoint group fits the visible labels in its own span");
+  assertLabelsFit(layout);
+});
+
+test("group placement measures mixed fonts and whitespace from visible glyph bounds", () => {
+  const measureVisible = (text, font) => {
+    const metrics = measure(text, font);
+    const characterWidth = metrics.width / text.length;
+    const leading = text.length - text.trimStart().length;
+    const trailing = text.length - text.trimEnd().length;
+    return {...metrics, actualBoundingBoxLeft: metrics.actualBoundingBoxLeft - leading * characterWidth,
+      actualBoundingBoxRight: metrics.actualBoundingBoxRight - trailing * characterWidth};
+  };
+  for (const fontSize of [12, 48]) {
+    const layout = layoutAnnotations({width: 400, height: 120, lanes: [[0, 20, 400, 100]],
+      annotations: {fontSize, labels: [{text: "    A bold tail  ", runs: [
+        {text: "    A ", color: "#cc0000"}, {text: "bold", bold: true}, {text: " tail  ", italic: true},
+      ]}], groups: [{id: "a", set: 0, label: "Group", lanes: [0], color: "#ff0000"}]}}, measureVisible);
+    const label = layout.laneLabels[0];
+    const bracket = layout.brackets[0];
+    assert.ok(Math.abs(bracket.x + bracket.depth - (label.inkLeft - 10)) < 1e-9);
+    assert.ok(Math.abs(label.inkLeft - (label.x - label.advance + 4 * fontSize * 0.6)) < 1e-9);
+    assert.equal(label.runs[1].font, `bold ${fontSize}px Arial`);
+    assert.equal(label.runs[2].font, `italic ${fontSize}px Arial`);
+    assert.equal(bracket.color, "#000000");
+    assertLabelsFit(layout);
+  }
+});
+
+test("nested group brackets stop at inner visible group text and retain black strokes", () => {
+  const layout = layoutAnnotations({...input, annotations: {...input.annotations, groups: [
+    {id: "inner", set: 0, label: "A", lanes: [0, 1, 2], color: "#ff0000"},
+    {id: "outer", set: 1, label: "BC", lanes: [0, 1, 2], runs: [
+      {text: "B", bold: true, color: "#00ff00"}, {text: "C", italic: true, color: "#0000ff"},
+    ]},
+  ]}}, measure);
+  const inner = layout.groupLabels[0];
+  const outerBracket = layout.brackets.find(bracket => bracket.id === "outer");
+  assert.ok(Math.abs(outerBracket.x + outerBracket.depth - (inner.inkLeft - 10)) < 1e-9);
+  assert.ok(layout.brackets.every(bracket => bracket.color === "#000000"));
+  assertLabelsFit(layout);
+});
+
+test("mixed runs render at measured offsets and preserve each segment's font and color", () => {
+  const layout = layoutAnnotations({width: 400, height: 100, lanes: [[0, 0, 400, 100]],
+    annotations: {fontSize: 20, labels: [{text: "Red bold italic", color: "#123456", runs: [
+      {text: "Red ", color: "#ff0000"}, {text: "bold", bold: true}, {text: " italic", italic: true},
+    ]}]}}, measure);
+  const label = layout.laneLabels[0];
+  assert.equal(label.advance, 4 * 20 * 0.6 + 4 * 20 * 0.66 + 7 * 20 * 0.6);
+  assert.equal(label.overhangRight, 5);
+  const painted = [];
+  const context = {fillRect() {}, drawImage() {}, fillText(text, x, y) {
+    painted.push({text, x, y, font: this.font, color: this.fillStyle, align: this.textAlign});
+  }};
+  drawAnnotations({getContext: () => context}, {}, layout);
+  assert.deepEqual(painted.map(run => run.text), ["Red ", "bold", " italic"]);
+  assert.deepEqual(painted.map(run => run.font), ["20px Arial", "bold 20px Arial", "italic 20px Arial"]);
+  assert.deepEqual(painted.map(run => run.color), ["#ff0000", "#123456", "#123456"]);
+  for (const [index, run] of painted.entries()) {
+    assert.equal(run.align, "left");
+    assert.equal(run.y, label.baseline);
+    assert.equal(run.x, label.x - label.advance + label.runs[index].offset);
+  }
+  assertLabelsFit(layout);
+});
+
+test("stale runs cannot replace edited plain text and blank labels do not obstruct brackets", () => {
+  const layout = layoutAnnotations({width: 400, height: 100, lanes: [[0, 0, 400, 100]],
+    annotations: {fontSize: 20, labels: [{text: " ".repeat(80), runs: [{text: "old", color: "#ff0000"}]}],
+      groups: [{id: "a", set: 0, label: "Group", lanes: [0]}]}}, measure);
+  assert.equal(layout.laneLabels[0].hasInk, false);
+  assert.equal(layout.laneLabels[0].runs[0].text, " ".repeat(80));
+  assert.equal(layout.laneLabels[0].runs[0].color, "#000000");
+  assert.equal(layout.brackets[0].x + layout.brackets[0].depth, layout.gelX - 14 - 10);
 });
 
 test("dense and coincident lane centers preserve the chosen font and never overlap", () => {
@@ -217,7 +311,7 @@ test("composed canvas contains only native image pixels, text, and group strokes
     assert.equal(call.baseline, "alphabetic");
   }
   assert.deepEqual(calls.filter(call => call.method === "stroke").map(call => call.strokeColor),
-    ["#336699", "#008800"]);
+    ["#000000", "#000000"]);
   assert.equal(calls.filter(call => call.method === "fillRect").length, 1,
     "only the canvas background is filled; editor borders and selections are absent");
 });
@@ -248,7 +342,8 @@ function assertLadderFits(layout) {
     const label = layout.ladderLabels.find(label => label.markerIndex === guide.markerIndex);
     assert.equal(guide.x, label.x);
     assert.equal(guide.startY, layout.gelY - 6);
-    assert.equal(guide.endY, label.inkBottom + 4);
+    assert.ok(Math.abs(guide.endY - label.inkBottom - 6) < 1e-9,
+      "leader clearance is measured from visible ink, not the white backing");
     assert.ok(guide.endY < guide.startY && guide.startY < layout.gelY);
   }
   for (let index = 0; index < layout.ladderLabels.length; index++) {
@@ -266,6 +361,14 @@ test("no ladder retains existing layout and has no extra labels or guides", () =
   assert.deepEqual(layout.guides, []);
   assert.equal(layout.ladderTiers, 0);
   assert.equal(layout.width, layout.gelX + input.width + 12);
+});
+
+test("unobstructed ladder leaders use the subtly lengthened fifteen-pixel line", () => {
+  const layout = layoutAnnotations({width: 400, height: 100,
+    lanes: [[0, 20, 400, 80]], annotations: {fontSize: 20, labels: [{text: "Lane"}]},
+    ladder: ladderWith([{markerIndex: 0, x: 100, y: 50}])}, measure);
+  assert.equal(layout.guides[0].startY - layout.guides[0].endY, 15);
+  assertLadderFits(layout);
 });
 
 test("ladder labels keep fractional clicked x and half the default font independently of edited lane font", () => {
@@ -312,22 +415,76 @@ test("preset reserves its longest label before placement, without resizing the n
   assertLadderFits(long);
 });
 
-test("close and coincident ladder labels use vertical tiers without shifting or shrinking", () => {
-  const placements = [{markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 120.125, y: 46},
-    {markerIndex: 2, x: 122.625, y: 47}];
-  const layout = layoutAnnotations({...input, ladder: ladderWith(placements)}, measure);
-  assert.equal(layout.ladderTiers, 3);
-  assert.deepEqual(layout.ladderLabels.map(label => label.tier), [0, 1, 2]);
-  assert.ok(layout.ladderLabels.every(label => label.fontSize === 4.5));
-  assert.ok(layout.gelY > layoutAnnotations({...input, ladder: ladderWith(placements.slice(0, 1))}, measure).gelY);
+test("nearby ladder labels shrink together at one level without moving markers or growing the gutter", () => {
+  const placements = [{markerIndex: 0, x: 120.125, y: 45.25}, {markerIndex: 1, x: 122.625, y: 46.5},
+    {markerIndex: 2, x: 300.875, y: 47.125}];
+  const specification = {...input, annotations: {...input.annotations, fontSize: 72,
+    groups: [{id: "all", set: 0, label: "Group", lanes: [0, 1, 2]}]},
+    ladder: ladderWith(placements)};
+  const before = structuredClone(specification);
+  const layout = layoutAnnotations(specification, measure);
+  const single = layoutAnnotations({...specification, ladder: ladderWith(placements.slice(0, 1))}, measure);
+  assert.equal(layout.ladderTiers, 1);
+  assert.ok(layout.ladderLabels[0].fontSize > 0 && layout.ladderLabels[0].fontSize < 4.5);
+  assert.equal(new Set(layout.ladderLabels.map(label => label.fontSize)).size, 1);
+  assert.equal(new Set(layout.ladderLabels.map(label => label.inkBottom)).size, 1);
+  assert.equal(new Set(layout.guides.map(guide => guide.startY - guide.endY)).size, 1);
+  assert.equal(layout.gelY, single.gelY, "fitting text does not add another vertical tier");
+  assert.deepEqual(layout.ladderLabels.map(label => [label.cropX, label.cropY]),
+    placements.map(placement => [placement.x, placement.y]));
+  assert.equal(layout.fontSize, 72);
+  assert.ok(layout.labels.every(label => label.fontSize === 72), "lane and group fonts stay unchanged");
   assertLadderFits(layout);
-  const reversed = layoutAnnotations({...input, ladder: ladderWith([...placements].reverse())}, measure);
-  assert.deepEqual(reversed.ladderLabels.map(label => label.tier), [2, 1, 0], "ties are stable by marker identity");
-  const separated = layoutAnnotations({...input, ladder: ladderWith([
+  assertLabelsFit(layout);
+  const reversed = layoutAnnotations({...specification, ladder: ladderWith([...placements].reverse())}, measure);
+  const byMarker = labels => [...labels].sort((a, b) => a.markerIndex - b.markerIndex);
+  assert.deepEqual(byMarker(reversed.ladderLabels), byMarker(layout.ladderLabels),
+    "the fitted result is independent of placement order");
+  const separated = layoutAnnotations({...specification, ladder: ladderWith([
     {...placements[0], x: 10}, {...placements[1], x: 100}, {...placements[2], x: 300},
   ])}, measure);
   assert.equal(separated.ladderTiers, 1);
+  assert.ok(separated.ladderLabels.every(label => label.fontSize === 4.5),
+    "moving close markers apart restores the normal ladder font");
+  assert.equal(single.ladderLabels[0].fontSize, 4.5, "removing the collision restores the normal font");
+  assert.equal(separated.gelY, layout.gelY);
   assertLadderFits(separated);
+  assert.deepEqual(specification, before, "fitting must not modify saved markers, labels, or fonts");
+});
+
+test("coincident and unresolvably close markers request correction instead of hiding or raising labels", () => {
+  for (const delta of [0, 0.001]) {
+    const specification = {...input, ladder: ladderWith([
+      {markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 120.125 + delta, y: 46},
+    ])};
+    const before = structuredClone(specification);
+    assert.throws(() => layoutAnnotations(specification, measure), /move|remove/i);
+    assert.deepEqual(specification, before, "a recoverable preview error preserves both placements");
+  }
+});
+
+test("ladder fitting remeasures quantized glyph ink instead of assuming proportional metrics", () => {
+  const quantizedMeasure = (text, font) => {
+    const metrics = measure(text, font);
+    return {...metrics, actualBoundingBoxAscent: Math.ceil(metrics.actualBoundingBoxAscent),
+      actualBoundingBoxDescent: Math.ceil(metrics.actualBoundingBoxDescent)};
+  };
+  const specification = {...input, ladder: ladderWith([
+    {markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 123.25, y: 46},
+  ])};
+  const layout = layoutAnnotations(specification, quantizedMeasure);
+  assert.ok(layout.ladderLabels.every(label => label.fontSize < 1),
+    "pixel-rounded ink requires a smaller font than a proportional estimate");
+  for (const label of layout.ladderLabels) {
+    const metrics = quantizedMeasure(label.text, label.font);
+    assert.equal(label.inkWidth, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent);
+    assert.equal(label.inkWidth, 2, "actual glyph ink can stay wider than the requested font size");
+  }
+  assertLadderFits(layout);
+  const inseparable = {...specification, ladder: ladderWith([
+    {markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 121.625, y: 46},
+  ])};
+  assert.throws(() => layoutAnnotations(inseparable, quantizedMeasure), /move|remove/i);
 });
 
 test("rotated ink and backings fit edge markers and do not cover tall lane or group labels", () => {
@@ -360,17 +517,19 @@ test("rotated baseline handles glyph overhang and unusual ascent/descent without
 
 test("ladder composition draws all leaders behind white label backings and rotated text", () => {
   const layout = layoutAnnotations({...input, ladder: ladderWith([
-    {markerIndex: 0, x: 120, y: 45}, {markerIndex: 1, x: 120, y: 46},
+    {markerIndex: 0, x: 120, y: 45}, {markerIndex: 1, x: 123, y: 46},
   ])}, measure);
   const calls = [];
   const context = Object.fromEntries(["fillRect", "drawImage", "beginPath", "moveTo", "lineTo", "stroke",
     "fillText", "save", "restore", "translate", "rotate"].map(method => [method, function (...args) {
-    calls.push({method, args, font: this.font, color: this.fillStyle, align: this.textAlign});
+    calls.push({method, args, font: this.font, color: this.fillStyle, align: this.textAlign,
+      lineWidth: this.lineWidth});
   }]));
   const image = {width: input.width, height: input.height};
   drawAnnotations({getContext: () => context}, image, layout);
   assert.deepEqual(calls.find(call => call.method === "drawImage").args, [image, layout.gelX, layout.gelY]);
   const lastStroke = calls.findLastIndex(call => call.method === "stroke");
+  assert.ok(calls.filter(call => call.method === "stroke").every(call => call.lineWidth === 1.8));
   const backings = calls.map((call, index) => ({...call, index})).filter(call => call.method === "fillRect").slice(1);
   assert.equal(backings.length, 2);
   assert.ok(backings.every(call => call.index > lastStroke && call.color === "#ffffff"));
@@ -383,6 +542,10 @@ test("ladder composition draws all leaders behind white label backings and rotat
   assert.equal(calls.filter(call => call.method === "restore").length, 2);
   const ladderText = calls.filter(call => call.method === "fillText").slice(input.lanes.length);
   assert.ok(ladderText.every(call => call.args[1] === 0 && call.args[2] === 0 && call.align === "left"));
+  assert.ok(layout.ladderLabels.every(label => label.fontSize < 4.5));
+  assert.deepEqual(ladderText.map(call => call.font), layout.ladderLabels.map(label => label.font),
+    "export draws the fitted fonts used to calculate collision-free geometry");
+  assert.equal(new Set(layout.guides.map(guide => guide.startY - guide.endY)).size, 1);
 });
 
 test("invalid ladder coordinates and oversized top gutters fail before canvas allocation", () => {

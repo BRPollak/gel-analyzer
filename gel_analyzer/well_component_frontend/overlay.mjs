@@ -128,7 +128,7 @@ function drawGuide() {
   wrap.dataset.reviewMode = state.reviewMode || "";
   svg.dataset.pointCount = String(state.points.length);
   const instructions = state.reviewMode === "borders"
-    ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane below to insert one at the bottom of the detection line."
+    ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane to insert one at the bottom of the detection line."
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
     : !state.editable
@@ -137,7 +137,7 @@ function drawGuide() {
       ? "Click the top edge of the first well and the bottom edge of the last well, in either order."
       : state.points.length === 1
         ? "Click the other end of the well range. Drag either dot to adjust its position."
-        : "Drag the dots so the dotted line passes through the well centers, then confirm below. Arrow keys also adjust a focused dot.";
+        : "Drag the dots so the dotted line passes through the well centers, then confirm the line. Arrow keys also adjust a focused dot.";
   if (status.textContent !== instructions) {
     status.textContent = instructions;
     scheduleFit();
@@ -256,6 +256,7 @@ window.addEventListener("message", event => {
   const args = event.data.args;
   if (!args || typeof args.token !== "string" || !(args.width > 0 && args.height > 0)) return;
   if (event.data.theme?.textColor) document.documentElement.style.setProperty("--text-color", event.data.theme.textColor);
+  if (event.data.theme?.backgroundColor) document.body.style.backgroundColor = event.data.theme.backgroundColor;
   if (!state || args.token !== state.token) {
     if (seenTokens.has(args.token)) return; // Delayed renders cannot revive old geometry.
     seenTokens.add(args.token);
