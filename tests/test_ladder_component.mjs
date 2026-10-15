@@ -11,6 +11,8 @@ test("desktop side panels do not shrink previews and stacked phone controls leav
   assert.equal(annotationPreviewBudget({...input, previewHeight: 390}), 620);
   assert.equal(annotationPreviewBudget({...input, viewportHeight: 720,
     componentHeight: 800, previewHeight: 220, sidePanel: false}), 238);
+  assert.equal(annotationPreviewBudget({...input, viewportHeight: 720,
+    componentHeight: 950, previewHeight: 220, sidePanel: false, ladderMode: false}), 238);
 });
 
 test("pointer coordinates invert composition offsets, zoom and scrolling without rounding or clamping", () => {
@@ -57,6 +59,7 @@ class Node {
     this.events = {};
     this.disabled = false;
     this.hidden = false;
+    this.open = false;
     this.value = "";
   }
   setAttribute(key, value) {
@@ -64,6 +67,10 @@ class Node {
     if (key.startsWith("data-")) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = String(value);
   }
   removeAttribute(key) { delete this.attributes[key]; }
+  get src() { return this.attributes.src ?? ""; }
+  set src(value) { this.setAttribute("src", value); }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   appendChild(child) { this.children.push(child); child.parent = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   replaceChildren(...children) { this.children = []; this.append(...children); }
@@ -85,6 +92,10 @@ class Node {
 
 const presets = [{id: "example", name: "Example", labels: ["5.0 kb", "3.0 kb", "1.0 kb"]},
   {id: "other", name: "Other", labels: ["10 kb", "1 kb"]}];
+const referencePresets = [
+  {...presets[0], referenceImage: "ladder_references/first.webp", referenceNote: "Supercoiled plasmid sizes."},
+  {...presets[1], referenceImage: "ladder_references/second.gif"},
+];
 
 function harness(run, overrides = {}) {
   const previousDocument = globalThis.document;
@@ -92,6 +103,7 @@ function harness(run, overrides = {}) {
   const nodes = Object.fromEntries([...html.matchAll(/<([a-z]+)[^>]*\bid="([^"]+)"/g)]
     .map(match => [match[2], new Node(match[1])]));
   const panelIds = [...Object.keys(nodes)].filter(id => id.startsWith("ladder-")
+    && (!id.startsWith("ladder-reference") || id === "ladder-reference-toggle")
     && !["ladder-panel", "ladder-actions", "ladder-confirm", "ladder-skip", "ladder-cancel", "ladder-remove"].includes(id));
   panelIds.forEach(id => nodes["ladder-panel"].appendChild(nodes[id]));
   for (const id of ["ladder-confirm", "ladder-skip", "ladder-cancel", "ladder-remove"]) nodes["ladder-actions"].appendChild(nodes[id]);
@@ -102,9 +114,11 @@ function harness(run, overrides = {}) {
   const actions = [];
   const edits = [];
   const messages = [];
+  const layoutChanges = [];
   const controller = createLadderEditor({getState: () => state, getLayout: () => layout, canvas: nodes.preview,
     onChange() { edits.push(structuredClone(state)); controller.render(); },
-    onAction(action) { actions.push(action); }, status(...message) { messages.push(message); }});
+    onAction(action) { actions.push(action); }, status(...message) { messages.push(message); },
+    onLayout() { layoutChanges.push(true); }});
   function select(id, value) { nodes[id].value = value; nodes[id].dispatch("change"); }
   function clickImage(x, y) {
     nodes["ladder-overlay"].dispatch("click", {clientX: 20 + (80 + x) / 2, clientY: 30 + (70 + y) / 2});
@@ -116,7 +130,7 @@ function harness(run, overrides = {}) {
     clickImage(40, 20);
     nodes["ladder-use-lane"].dispatch("click");
   }
-  try { controller.render(); run({state, nodes, actions, edits, messages, controller, select, clickImage, marker, enterMarkers}); }
+  try { controller.render(); run({state, nodes, actions, edits, messages, layoutChanges, controller, select, clickImage, marker, enterMarkers}); }
   finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
@@ -228,3 +242,113 @@ test("empty and failed previews remain escapable; confirmation locks interaction
   h.nodes["ladder-accept-change"].dispatch("click");
   assert.deepEqual(h.actions, ["cancel", "remove"]);
 }));
+
+test("reference selection preserves snapshot metadata and shows the photo with the current marker status", () => harness(h => {
+  assert.equal(h.nodes["ladder-reference"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-toggle"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-image"].src, "");
+  h.enterMarkers();
+  assert.deepEqual(h.state.ladder.preset, referencePresets[0]);
+  assert.notEqual(h.state.ladder.preset, referencePresets[0]);
+  assert.notEqual(h.state.ladder.preset.labels, referencePresets[0].labels);
+  assert.deepEqual(h.edits.at(-1).ladder.preset, referencePresets[0]);
+  assert.equal(h.nodes["ladder-reference"].hidden, false);
+  assert.equal(h.nodes["ladder-reference-name"].textContent, "Example");
+  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[0].referenceImage);
+  assert.equal(h.nodes["ladder-reference-large"].src, referencePresets[0].referenceImage);
+  assert.match(h.nodes["ladder-reference-image"].alt, /5\.0 kb, 3\.0 kb, 1\.0 kb/);
+  assert.equal(h.nodes["ladder-reference-note"].textContent, referencePresets[0].referenceNote);
+  assert.equal(h.nodes["ladder-reference-note"].hidden, false);
+  assert.equal(h.nodes["ladder-reference-selected"].textContent, "");
+  h.marker(1).dispatch("click");
+  assert.equal(h.nodes["ladder-reference-selected"].textContent, "Selected: 3.0 kb");
+  h.clickImage(50, 20);
+  assert.equal(h.nodes["ladder-reference-selected"].textContent, "Selected: 3.0 kb · Placed");
+  assert.deepEqual(h.edits.at(-1).ladder.preset, referencePresets[0]);
+}, {presets: referencePresets}));
+
+test("hiding, showing and enlarging the reference never edits marker placements", () => harness(h => {
+  h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
+  const snapshot = structuredClone(h.state.ladder);
+  const editCount = h.edits.length;
+  const toggle = h.nodes["ladder-reference-toggle"];
+  toggle.dispatch("click");
+  assert.equal(h.nodes["ladder-reference"].hidden, true);
+  assert.equal(toggle.textContent, "Show reference");
+  assert.equal(toggle.attributes["aria-expanded"], "false");
+  assert.equal(h.nodes.component.dataset.referenceOpen, "false");
+  toggle.dispatch("click");
+  assert.equal(h.nodes["ladder-reference"].hidden, false);
+  assert.equal(toggle.textContent, "Hide reference");
+  assert.equal(toggle.attributes["aria-expanded"], "true");
+  assert.equal(h.nodes.component.dataset.referenceOpen, "true");
+  assert.equal(h.layoutChanges.length, 2);
+  h.nodes["ladder-reference-enlarge"].dispatch("click");
+  assert.equal(h.nodes["ladder-reference-dialog"].open, true);
+  assert.equal(h.nodes["ladder-reference-dialog-title"].textContent, "Example");
+  h.nodes["ladder-reference-close"].dispatch("click");
+  assert.equal(h.nodes["ladder-reference-dialog"].open, false);
+  assert.deepEqual(h.state.ladder, snapshot);
+  assert.equal(h.edits.length, editCount);
+  assert.deepEqual(h.actions, []);
+}, {presets: referencePresets}));
+
+test("accepting a preset change updates the reference and closes the previous enlarged photo", () => harness(h => {
+  h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
+  h.nodes["ladder-reference-enlarge"].dispatch("click");
+  h.nodes["ladder-change-preset"].dispatch("click");
+  h.select("ladder-preset", "other");
+  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[0].referenceImage);
+  assert.equal(h.nodes["ladder-reference-dialog"].open, true);
+  h.nodes["ladder-accept-change"].dispatch("click");
+  assert.equal(h.nodes["ladder-reference-dialog"].open, false);
+  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[1].referenceImage);
+  assert.equal(h.nodes["ladder-reference-large"].src, referencePresets[1].referenceImage);
+  assert.equal(h.nodes["ladder-reference-name"].textContent, "Other");
+  assert.equal(h.nodes["ladder-reference-note"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-selected"].textContent, "");
+  assert.deepEqual(h.state.ladder.preset, referencePresets[1]);
+  assert.deepEqual(h.state.ladder.placements, []);
+}, {presets: referencePresets}));
+
+test("a missing reference photo leaves markers and confirmation usable", () => harness(h => {
+  h.enterMarkers();
+  const editCount = h.edits.length;
+  h.nodes["ladder-reference-image"].dispatch("error");
+  h.controller.render();
+  assert.equal(h.edits.length, editCount);
+  assert.equal(h.nodes["ladder-reference-error"].hidden, false);
+  assert.equal(h.nodes["ladder-reference-image"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-enlarge"].disabled, true);
+  h.nodes["ladder-reference-enlarge"].dispatch("click");
+  assert.equal(h.nodes["ladder-reference-dialog"].open, false);
+  h.marker(2).dispatch("click"); h.clickImage(90, 20);
+  assert.equal(h.nodes["ladder-confirm"].disabled, false);
+  h.nodes["ladder-confirm"].dispatch("click");
+  assert.deepEqual(h.actions, ["confirm"]);
+  assert.deepEqual(h.state.ladder.placements, [{markerIndex: 2, x: 90, y: 20}]);
+  h.nodes["ladder-change-preset"].dispatch("click"); h.select("ladder-preset", "other");
+  h.nodes["ladder-accept-change"].dispatch("click");
+  assert.equal(h.nodes["ladder-reference-error"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-image"].hidden, false);
+  assert.equal(h.nodes["ladder-reference-enlarge"].disabled, false);
+}, {presets: referencePresets}));
+
+test("legacy snapshots use a configured photo only for matching identity and labels, and explicit snapshot photos win", () => {
+  const cases = [
+    {preset: presets[0], expected: referencePresets[0].referenceImage},
+    {preset: {...presets[0], id: "custom"}, expected: ""},
+    {preset: {...presets[0], labels: ["8 kb", "2 kb"]}, expected: ""},
+    {preset: {...presets[0], labels: [...presets[0].labels].reverse()}, expected: ""},
+    {preset: {...referencePresets[0], referenceImage: "ladder_references/saved.png"}, expected: "ladder_references/saved.png"},
+    {preset: {...referencePresets[0], referenceImage: "https://example.com/photo.png"}, expected: ""},
+    {preset: {...referencePresets[0], referenceImage: "ladder_references/../photo.png"}, expected: ""},
+  ];
+  for (const {preset, expected} of cases) harness(h => {
+    assert.equal(h.nodes["ladder-reference-image"].src, expected);
+    assert.equal(h.nodes["ladder-reference"].hidden, !expected);
+    assert.equal(h.nodes["ladder-reference-toggle"].hidden, !expected);
+    assert.deepEqual(h.state.ladder.preset, preset, "reading a legacy reference does not alter the snapshot");
+    assert.equal(h.edits.length, 0);
+  }, {presets: referencePresets, ladder: {preset, laneIndex: 0, placements: []}, ladderStep: "markers"});
+});

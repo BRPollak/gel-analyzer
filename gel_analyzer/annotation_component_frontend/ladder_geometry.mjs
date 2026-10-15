@@ -49,5 +49,5 @@ export function movedPastTap(start, event) {
 export function annotationPreviewBudget({viewportHeight, componentHeight, previewHeight,
   workspaceHeight, sidePanel, insetY, ladderMode}) {
   const otherHeight = componentHeight - (sidePanel ? workspaceHeight : previewHeight);
-  return Math.max(insetY + (ladderMode ? 220 : 1), Math.floor(viewportHeight - otherHeight - 100));
+  return Math.max(insetY + (ladderMode || !sidePanel ? 220 : 1), Math.floor(viewportHeight - otherHeight - 100));
 }

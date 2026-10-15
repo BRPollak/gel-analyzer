@@ -1,5 +1,32 @@
 <style>
   [data-testid="stElementContainer"]:has(#gel-viewport-controller) { display: none; }
+  .stMainBlockContainer { padding-top: 3.5rem; padding-bottom: 1.5rem; }
+  [data-testid="stHeadingWithActionElements"] h1 { font-size: 2rem; padding-top: 0; }
+  .st-key-gel_upload_start { max-width: 760px; }
+  .st-key-gel_workflow_controls [data-testid="stHeadingWithActionElements"] h3 {
+    font-size: 1.2rem; padding-top: 0;
+  }
+  .st-key-gel_workflow_controls [data-testid="stButton"] button,
+  .st-key-gel_workflow_controls [data-testid="stDownloadButton"] button { width: 100%; }
+  .st-key-gel_workflow_controls [data-testid="stElementContainer"]:has([data-testid="stButton"]),
+  .st-key-gel_workflow_controls [data-testid="stElementContainer"]:has([data-testid="stDownloadButton"]) { width: 100%; }
+  @media (min-width: 400px) {
+    :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] {
+      align-items: flex-start; flex-wrap: nowrap;
+    }
+    :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+      flex: 1 1 0; min-width: 0;
+    }
+    :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+      flex: 0 0 clamp(180px, 26vw, 360px); min-width: 0; position: sticky; top: 4rem;
+    }
+  }
+  @media (max-width: 399px) {
+    :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] { flex-direction: column; gap: 1rem; }
+    :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+      width: 100%; flex: 1 1 100%; min-width: 0;
+    }
+  }
   [data-testid="stImage"] { max-width: 100%; }
   [data-testid="stImage"] img {
     max-width: 100%;
@@ -44,7 +71,8 @@
       img.style.width = `${img.naturalWidth * scale}px`;
       img.style.height = `${img.naturalHeight * scale}px`;
       img.dataset.previewScale = String(scale);
-      revealOnce(img, img.currentSrc || img.src, img.getBoundingClientRect());
+      const workspace = img.closest(".st-key-gel_workspace");
+      revealOnce(img, img.currentSrc || img.src, img.getBoundingClientRect(), workspace || img);
     });
 
     document.querySelectorAll('iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"]').forEach(frame => {
@@ -52,15 +80,18 @@
         const doc = frame.contentDocument;
         const component = doc?.getElementById("component");
         const target = doc?.getElementById("preview-viewport") || doc?.getElementById("gel");
-        const identity = component?.dataset.token || target?.dataset.token;
-        if (!identity || !target || !component) return;
+        const token = component?.dataset.token || target?.dataset.token;
+        if (!token || !target || !component) return;
+        const identity = `${token}:${component.dataset.ladderStep || ""}:${Boolean(doc.getElementById("group-panel")?.open)}`;
         const frameRect = frame.getBoundingClientRect();
-        const localRect = target.getBoundingClientRect();
+        // Include the current step's controls and next action. Ladder and group
+        // panels can grow while the image stays the same size.
+        const localRect = component.getBoundingClientRect();
         // Wait for Streamlit to acknowledge the iframe's measured height.
         if (frameRect.height < component.getBoundingClientRect().height - 2 || !isVisible(localRect)) return;
         const rect = {width: localRect.width, height: localRect.height,
           top: frameRect.top + localRect.top, bottom: frameRect.top + localRect.bottom};
-        revealOnce(frame, identity, rect);
+        revealOnce(frame, identity, rect, frame.closest(".st-key-gel_workspace") || frame);
       } catch { /* Cross-origin components handle their own preview sizing. */ }
     });
   }

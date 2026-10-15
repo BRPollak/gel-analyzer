@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from gel_analyzer.ladders import LadderError
+from gel_analyzer.ladders import LadderError, load_presets
 from test_annotation_app import annotated, annotation_event, crop_gel
 from test_annotations import composition
 from test_lane_app import keys, lane_event, upload, workflow
@@ -12,8 +12,7 @@ from test_lane_app import keys, lane_event, upload, workflow
 
 def ladder_snapshot(x=143.625):
     return {
-        "preset": {"id": "example", "name": "Example ladder (edit presets file)",
-                   "labels": ["5.0 kb", "3.0 kb", "1.0 kb"]},
+        "preset": load_presets()[0],
         "laneIndex": 0,
         "placements": [{"markerIndex": 0, "x": x, "y": 28.25}],
     }
@@ -85,10 +84,21 @@ def test_opening_ladder_keeps_existing_annotations_and_starts_without_implicit_p
     assert args["ladder"] is None
     assert args["ladder_step"] == "preset"
     assert args["confirmed_ladder"] is False
-    assert args["presets"][0]["id"] == "example"
+    assert args["presets"] == load_presets()
     assert args["annotations"] == app.session_state["annotation_data"]
     assert app.session_state["annotation_stage"] == "ladder"
     assert app.session_state["annotation_png"] == app.session_state["annotation_base_png"]
+
+
+@pytest.mark.parametrize("preset_index", [0, 1, 2])
+def test_selected_reference_metadata_survives_confirmation_and_reopening(annotated, preset_index):
+    open_ladder(annotated)
+    data = {**ladder_snapshot(), "preset": load_presets()[preset_index]}
+    ladder_event(annotated, data=data, action="confirm")
+    assert annotated.app.session_state["ladder_data"] == data
+    annotated.app.button(key="edit_ladder").click().run()
+    assert not annotated.app.exception
+    assert annotated.renders[-1][1]["ladder"] == data
 
 
 def test_draft_and_step_survive_navigation_without_changing_committed_output(annotated):

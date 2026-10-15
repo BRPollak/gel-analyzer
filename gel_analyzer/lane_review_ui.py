@@ -188,7 +188,7 @@ def confirm_lane_crop() -> None:
     st.session_state.lane_crop = crop
 
 
-def show_lane_review(gel) -> None:
+def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
     # Streamlit can reload a component module independently of this UI module.
     # Resolve the callable on each render so a running app uses its current API.
     from .well_component import render_well_component
@@ -202,63 +202,59 @@ def show_lane_review(gel) -> None:
         count = len(crop.lanes)
         st.caption(f"Crop confirmed · {count} lane{'s' if count != 1 else ''}")
         annotation_ui.show_annotations(crop, gel.filename)
-        st.button(
-            "Revise lanes and crop", key="revise_lane_crop", on_click=back_to_lane_borders,
-        )
         return
 
-    if stage == "borders":
-        st.subheader("1. Adjust lane borders")
-        st.caption(
-            "Drag the top and bottom borders of each numbered lane up or down. "
-            "Use the trash button to the right of a lane to delete it, or Add lane to insert "
-            "one at the bottom of the guide, below any existing lanes. Neighboring lanes cannot overlap. "
-            "Arrow keys adjust a focused handle by one pixel; Shift moves ten pixels."
+    with image_panel:
+        wells = st.session_state.lane_wells
+        event = render_well_component(
+            gel.preview_png, gel.preview_width, gel.preview_height,
+            points=(), wells=[{"bounds": well.bounds, "center": well.center} for well in wells],
+            lanes=_lanes(), editable=True,
+            token=st.session_state.lane_token, key=f"lane_overlay_{st.session_state.lane_token}",
+            review_mode=stage, right_edge=st.session_state.lane_right,
         )
-        for warning in st.session_state.well_result.warnings:
-            st.warning(warning)
-        count = len(st.session_state.lane_wells)
-        st.write(f"{count} lane{'s' if count != 1 else ''} in review")
-        if not count:
-            st.info("No lanes remain. Choose Add lane, then adjust its borders over the well and bands.")
-    else:
-        st.subheader("2. Set the right edge")
-        st.caption(
-            "Drag the right boundary left or right to choose how much of the gel to keep. "
-            "The shaded area will be removed. All wells stay inside the crop."
-        )
-    wells = st.session_state.lane_wells
-    event = render_well_component(
-        gel.preview_png, gel.preview_width, gel.preview_height,
-        points=(), wells=[{"bounds": well.bounds, "center": well.center} for well in wells],
-        lanes=_lanes(), editable=True,
-        token=st.session_state.lane_token, key=f"lane_overlay_{st.session_state.lane_token}",
-        review_mode=stage, right_edge=st.session_state.lane_right,
-    )
-    token = st.session_state.lane_token
-    accept_lane_event(event)
-    if token != st.session_state.lane_token:
-        st.rerun()
-    if st.session_state.lane_error:
-        st.warning(st.session_state.lane_error)
-    if stage == "borders":
-        st.button("Add lane", key="add_lane", on_click=add_lane)
-        st.button(
-            "Confirm lane borders", key="confirm_lane_borders", type="primary",
-            on_click=confirm_lane_borders, disabled=not st.session_state.lane_wells,
-        )
-    else:
-        margin = max(3, round(gel.preview_width * 0.01))
-        vertical_margin = max(3, round(gel.preview_height * 0.01))
-        st.caption(
-            f"Right edge: {st.session_state.lane_right:,} pixels. The crop will run from the "
-            f"top lane to the bottom lane, with up to {vertical_margin:,} pixels of buffer "
-            f"above and below and {margin:,} pixels left of the wells."
-        )
-        st.button(
-            "Confirm lanes and crop", key="confirm_lane_crop", type="primary",
-            on_click=confirm_lane_crop,
-        )
-        st.button(
-            "Back to lane borders", key="back_to_lane_borders", on_click=back_to_lane_borders,
-        )
+        token = st.session_state.lane_token
+        accept_lane_event(event)
+        if token != st.session_state.lane_token:
+            st.rerun()
+
+    with controls_panel:
+        if stage == "borders":
+            st.subheader("Adjust lane borders")
+            st.caption(
+                "Drag each lane’s top and bottom borders. Use its trash button to delete it, "
+                "or Add lane to insert one below the guide. Neighboring lanes cannot overlap."
+            )
+            count = len(st.session_state.lane_wells)
+            st.write(f"{count} lane{'s' if count != 1 else ''} in review")
+            if not count:
+                st.info("No lanes remain. Choose Add lane, then adjust its borders over the well and bands.")
+            st.button(
+                "Confirm lane borders", key="confirm_lane_borders", type="primary",
+                on_click=confirm_lane_borders, disabled=not st.session_state.lane_wells,
+            )
+            st.button("Add lane", key="add_lane", on_click=add_lane)
+            for warning in st.session_state.well_result.warnings:
+                st.warning(warning)
+            st.caption("Arrow keys move a focused handle one pixel; Shift moves ten.")
+        else:
+            st.subheader("Set the right edge")
+            st.caption(
+                "Drag the right boundary to choose how much gel to keep. "
+                "The shaded area will be removed. All wells stay inside the crop."
+            )
+            margin = max(3, round(gel.preview_width * 0.01))
+            vertical_margin = max(3, round(gel.preview_height * 0.01))
+            st.caption(
+                f"Right edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
+                f"{vertical_margin:,} pixels above and below the lanes and {margin:,} pixels left of the wells."
+            )
+            st.button(
+                "Confirm lanes and crop", key="confirm_lane_crop", type="primary",
+                on_click=confirm_lane_crop,
+            )
+            st.button(
+                "Back to lane borders", key="back_to_lane_borders", on_click=back_to_lane_borders,
+            )
+        if st.session_state.lane_error:
+            st.warning(st.session_state.lane_error)

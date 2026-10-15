@@ -42,7 +42,20 @@ def _preset(value: object) -> dict:
     checked_labels = [_text(label, "Each ladder size label", 200) for label in labels]
     if len({label.strip() for label in checked_labels}) != len(checked_labels):
         raise LadderError("Size labels within a ladder preset must be unique.")
-    return {"id": identifier, "name": name, "labels": checked_labels}
+    checked = {"id": identifier, "name": name, "labels": checked_labels}
+    if "referenceImage" in value:
+        reference_image = value["referenceImage"]
+        if (
+            not isinstance(reference_image, str)
+            or re.fullmatch(
+                r"ladder_references/[a-zA-Z0-9_-]{1,80}\.(?:webp|gif|png|jpe?g)", reference_image,
+            ) is None
+        ):
+            raise LadderError("The ladder reference image must be a local image in ladder_references/.")
+        checked["referenceImage"] = reference_image
+    if "referenceNote" in value:
+        checked["referenceNote"] = _text(value["referenceNote"], "The ladder reference note", 500)
+    return checked
 
 
 def load_presets(path: str | Path | None = None) -> list[dict]:

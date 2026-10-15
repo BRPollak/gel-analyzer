@@ -1,7 +1,21 @@
 [
   {
-    "id": "example",
-    "name": "Example ladder (edit presets file)",
-    "labels": ["5.0 kb", "3.0 kb", "1.0 kb"]
+    "id": "neb-100-bp",
+    "name": "100 bp DNA Ladder (NEB)",
+    "labels": ["1,517 bp", "1,200 bp", "1,000 bp", "900 bp", "800 bp", "700 bp", "600 bp", "500/517 bp", "400 bp", "300 bp", "200 bp", "100 bp"],
+    "referenceImage": "ladder_references/neb-100-bp.webp"
+  },
+  {
+    "id": "neb-1-kb",
+    "name": "1 kb DNA Ladder (NEB)",
+    "labels": ["10.0 kb", "8.0 kb", "6.0 kb", "5.0 kb", "4.0 kb", "3.0 kb", "2.0 kb", "1.5 kb", "1.0 kb", "0.5 kb"],
+    "referenceImage": "ladder_references/neb-1-kb.webp"
+  },
+  {
+    "id": "neb-supercoiled",
+    "name": "Supercoiled DNA Ladder (NEB)",
+    "labels": ["10.0 kb", "8.0 kb", "6.0 kb", "5.0 kb", "4.0 kb", "3.5 kb", "3.0 kb", "2.5 kb", "2.0 kb"],
+    "referenceImage": "ladder_references/neb-supercoiled.gif",
+    "referenceNote": "Supercoiled plasmid sizes; migration depends on gel and running conditions."
   }
 ]

@@ -36,7 +36,7 @@ def default_annotations(count: int, lanes=()) -> dict:
     }
 
 
-def _style(value: object, text_key: str) -> dict:
+def _text_style(value: object, text_key: str) -> dict:
     if not isinstance(value, dict):
         raise AnnotationError("Each label must include text and formatting.")
     text = value.get(text_key)
@@ -51,6 +51,31 @@ def _style(value: object, text_key: str) -> dict:
     if not isinstance(color, str) or re.fullmatch(r"#[0-9a-fA-F]{6}", color) is None:
         raise AnnotationError("Choose a valid text color.")
     return {text_key: text, "bold": value["bold"], "italic": value["italic"], "color": color}
+
+
+def _style(value: object, text_key: str) -> dict:
+    """Preserve optional rich text while accepting existing plain labels."""
+    style = _text_style(value, text_key)
+    if "runs" not in value:
+        return style
+    runs = value["runs"]
+    if not isinstance(runs, list) or len(runs) > 500:
+        raise AnnotationError("Use at most 500 formatted text sections in each label.")
+    checked_runs = []
+    for run in runs:
+        checked = _text_style(run, "text")
+        if not checked["text"]:
+            raise AnnotationError("Each formatted text section must contain text.")
+        if checked_runs and all(
+            checked_runs[-1][key] == checked[key] for key in ("bold", "italic", "color")
+        ):
+            checked_runs[-1]["text"] += checked["text"]
+        else:
+            checked_runs.append(checked)
+    if "".join(run["text"] for run in checked_runs) != style[text_key]:
+        raise AnnotationError("Formatted text must match the complete label.")
+    style["runs"] = checked_runs
+    return style
 
 
 def validate_annotations(value: object, count: int) -> dict:

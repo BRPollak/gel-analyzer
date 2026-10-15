@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,12 +28,64 @@ def test_ladder_errors_follow_existing_annotation_error_handling():
     assert issubclass(LadderError, AnnotationError)
 
 
-def test_bundled_example_is_explicit_and_loads_independent_snapshots():
+def test_bundled_neb_presets_match_reference_band_labels_and_load_independent_snapshots():
     presets = load_presets()
-    assert presets[0]["name"] == "Example ladder (edit presets file)"
-    assert presets[0]["labels"] == ["5.0 kb", "3.0 kb", "1.0 kb"]
+    assert [item["name"] for item in presets] == [
+        "100 bp DNA Ladder (NEB)", "1 kb DNA Ladder (NEB)", "Supercoiled DNA Ladder (NEB)",
+    ]
+    assert [item["labels"] for item in presets] == [
+        ["1,517 bp", "1,200 bp", "1,000 bp", "900 bp", "800 bp", "700 bp", "600 bp",
+         "500/517 bp", "400 bp", "300 bp", "200 bp", "100 bp"],
+        ["10.0 kb", "8.0 kb", "6.0 kb", "5.0 kb", "4.0 kb", "3.0 kb", "2.0 kb",
+         "1.5 kb", "1.0 kb", "0.5 kb"],
+        ["10.0 kb", "8.0 kb", "6.0 kb", "5.0 kb", "4.0 kb", "3.5 kb", "3.0 kb",
+         "2.5 kb", "2.0 kb"],
+    ]
+    frontend = Path(__file__).resolve().parents[1] / "gel_analyzer" / "annotation_component_frontend"
+    for item in presets:
+        assert (frontend / item["referenceImage"]).is_file()
+    original = deepcopy(presets)
     presets[0]["labels"].clear()
-    assert load_presets()[0]["labels"] == ["5.0 kb", "3.0 kb", "1.0 kb"]
+    presets[0]["referenceImage"] = "ladder_references/changed.png"
+    assert load_presets() == original
+
+
+def test_optional_reference_metadata_survives_configuration_and_snapshot(tmp_path, crop):
+    configured = {
+        **preset(), "referenceImage": "ladder_references/test-image.webp",
+        "referenceNote": "Match the visible bands to this reference.",
+    }
+    path = tmp_path / "presets.json"
+    path.write_text(json.dumps([configured]))
+    assert load_presets(path) == [configured]
+    snapshot = {**ladder(), "preset": configured}
+    checked = validate_ladder(snapshot, crop, complete=True)
+    assert checked == snapshot
+    snapshot["preset"]["referenceNote"] = "Changed note"
+    assert checked["preset"]["referenceNote"] == "Match the visible bands to this reference."
+
+
+@pytest.mark.parametrize("reference_image", [
+    None, 123, "", "https://example.com/ladder.png", "//example.com/ladder.png",
+    "/ladder_references/test.png", "ladder_references/../test.png",
+    "ladder_references/folder/test.png", "ladder_references/test.svg",
+    "ladder_references/test.png?query=1", "ladder_references/test.png#fragment",
+    "ladder_references/test\\image.png", "ladder_references/%2e%2e.png",
+    "ladder_references/" + "a" * 81 + ".png",
+])
+def test_reference_images_reject_remote_unsafe_or_unsupported_paths(crop, reference_image):
+    data = ladder()
+    data["preset"]["referenceImage"] = reference_image
+    with pytest.raises(LadderError, match="reference image"):
+        validate_ladder(data, crop)
+
+
+@pytest.mark.parametrize("note", [None, "", "  ", "two\nlines", "two\u2028lines", "x" * 501])
+def test_reference_notes_are_bounded_nonempty_single_lines(crop, note):
+    data = ladder()
+    data["preset"]["referenceNote"] = note
+    with pytest.raises(LadderError, match="reference note"):
+        validate_ladder(data, crop)
 
 
 def test_configured_order_and_labels_are_preserved_without_size_inference(tmp_path):

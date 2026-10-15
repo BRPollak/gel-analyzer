@@ -6,8 +6,10 @@ const BRACKET_DEPTH = 9;
 const LABEL_BRACKET_GAP = 10;
 const VERTICAL_GAP = 4;
 const LADDER_GEL_GAP = 6;
-const LADDER_LEADER = 12;
-const LADDER_TEXT_GAP = 4;
+const LADDER_LEADER = 15;
+const LADDER_STROKE = 1.8;
+const LADDER_TEXT_GAP = 6;
+const LADDER_LABEL_GAP = 2;
 const LADDER_INK_PADDING = 2;
 
 let measuringContext;
@@ -32,24 +34,72 @@ export function annotationFont(style, fontSize) {
   return `${style.italic ? "italic " : ""}${style.bold ? "bold " : ""}${fontSize}px Arial`;
 }
 
+function textStyle(value, fallback = {}) {
+  return {bold: Boolean(value?.bold ?? fallback.bold), italic: Boolean(value?.italic ?? fallback.italic),
+    color: /^#[\da-f]{6}$/i.test(value?.color ?? "") ? value.color : fallback.color ?? "#000000"};
+}
+
 function textSpec(value, text, fontSize, measure) {
-  const style = {bold: Boolean(value?.bold), italic: Boolean(value?.italic),
-    color: /^#[\da-f]{6}$/i.test(value?.color ?? "") ? value.color : "#000000"};
+  const style = textStyle(value);
   const font = annotationFont(style, fontSize);
-  const metrics = measure(text || "Mg", font);
-  const advance = text ? Math.max(0, finite(metrics.width, 0)) : 0;
-  // Canvas metrics include italic overhang and ascenders/descenders. Reserve
-  // both, and center the actual glyph ink rather than its alphabetic baseline.
-  // Either value can legitimately be negative for punctuation lying entirely
-  // above or below the baseline (for example an underscore or apostrophe).
-  const ascent = finite(metrics.actualBoundingBoxAscent, fontSize * 0.8);
-  const descent = finite(metrics.actualBoundingBoxDescent, fontSize * 0.2);
-  const overhangLeft = text ? Math.max(0, finite(metrics.actualBoundingBoxLeft, 0)) : 0;
-  const overhangRight = text ? Math.max(0, finite(metrics.actualBoundingBoxRight, advance) - advance) : 0;
+  // Plain text remains the canonical label. Ignore stale run data instead of
+  // silently rendering a different string from the label being edited.
+  const sourceRuns = Array.isArray(value?.runs) && value.runs.length
+    && value.runs.every(run => run && typeof run.text === "string")
+    && value.runs.map(run => oneLine(run.text)).join("") === text
+    ? value.runs : [{text, ...style}];
+  let advance = 0;
+  let inkOffsetLeft = Infinity;
+  let inkOffsetRight = -Infinity;
+  let ascent = -Infinity;
+  let descent = -Infinity;
+  const runs = sourceRuns.map(value => {
+    const runText = oneLine(value.text);
+    const runStyle = textStyle(value, style);
+    const runFont = annotationFont(runStyle, fontSize);
+    const metrics = measure(runText || "Mg", runFont);
+    const width = runText ? Math.max(0, finite(metrics.width, 0)) : 0;
+    const left = finite(metrics.actualBoundingBoxLeft, 0);
+    const right = finite(metrics.actualBoundingBoxRight, width);
+    const runAscent = finite(metrics.actualBoundingBoxAscent, fontSize * 0.8);
+    const runDescent = finite(metrics.actualBoundingBoxDescent, fontSize * 0.2);
+    const hasInk = Boolean(runText.trim()) && left + right > 0;
+    if (hasInk) {
+      inkOffsetLeft = Math.min(inkOffsetLeft, advance - left);
+      inkOffsetRight = Math.max(inkOffsetRight, advance + right);
+      ascent = Math.max(ascent, runAscent);
+      descent = Math.max(descent, runDescent);
+    }
+    const run = {text: runText, ...runStyle, font: runFont, offset: advance, advance: width};
+    advance += width;
+    return run;
+  });
+  const hasInk = Number.isFinite(inkOffsetLeft);
+  if (!hasInk) {
+    inkOffsetLeft = inkOffsetRight = 0;
+    const metrics = measure("Mg", font);
+    ascent = finite(metrics.actualBoundingBoxAscent, fontSize * 0.8);
+    descent = finite(metrics.actualBoundingBoxDescent, fontSize * 0.2);
+  }
+  // Reserve italic overhang and use the union of each run's actual glyph ink.
+  // Negative ascent/descent is meaningful for punctuation above/below baseline.
+  const overhangLeft = Math.max(0, -inkOffsetLeft);
+  const overhangRight = Math.max(0, inkOffsetRight - advance);
   const boxHeight = Math.ceil(Math.max(8, fontSize * 1.05, ascent + descent + 4));
-  return {text, ...style, font, fontSize, ascent, descent, advance,
-    overhangLeft, overhangRight, boxHeight,
+  return {text, ...style, font, fontSize, runs, ascent, descent, advance, hasInk,
+    inkOffsetLeft, inkOffsetRight, overhangLeft, overhangRight, boxHeight,
     measuredWidth: Math.ceil(Math.max(80, advance + overhangLeft + overhangRight + 10))};
+}
+
+function inkBounds(label) {
+  const start = label.x - label.advance;
+  const halfHeight = (label.ascent + label.descent) / 2;
+  return {left: start + label.inkOffsetLeft, right: start + label.inkOffsetRight,
+    top: label.y - halfHeight, bottom: label.y + halfHeight};
+}
+
+function overlapsVertically(top, bottom, otherTop, otherBottom) {
+  return top < otherBottom + VERTICAL_GAP && bottom > otherTop - VERTICAL_GAP;
 }
 
 /** Greedy interval partitioning keeps overlapping groups in separate columns. */
@@ -80,9 +130,9 @@ function layoutLadder(ladder, defaultFontSize, annotationTop, measure) {
   if (!Array.isArray(labels) || !labels.length || labels.some(text => typeof text !== "string")) {
     throw new Error("Choose a ladder preset with size labels.");
   }
-  const fontSize = Math.min(4096, Math.max(1, defaultFontSize)) / 2;
-  const font = annotationFont({}, fontSize);
-  const specs = labels.map(value => {
+  const preferredFontSize = Math.min(4096, Math.max(1, defaultFontSize)) / 2;
+  function labelSpec(value, fontSize) {
+    const font = annotationFont({}, fontSize);
     const text = oneLine(value);
     const metrics = measure(text, font);
     const ascent = finite(metrics.actualBoundingBoxAscent, fontSize * 0.8);
@@ -92,30 +142,59 @@ function layoutLadder(ladder, defaultFontSize, annotationTop, measure) {
     return {text, font, fontSize, color: "#202020", rotation: -Math.PI / 2,
       ascent, descent, textInkLeft: inkLeft,
       inkWidth: Math.max(0, ascent + descent), inkHeight: Math.max(0, inkLeft + inkRight)};
-  });
+  }
+  const specs = labels.map(value => labelSpec(value, preferredFontSize));
   const longest = Math.max(...specs.map(spec => spec.inkHeight));
-  // Reserve one full preset tier before the first placement. Keep its backing
-  // clear of any oversized existing lane/group label above the crop, too.
+  // Reserve the preferred-size preset gutter even when text shrinks, so placing
+  // a close marker never moves the gel or raises the shared label row.
   const firstBottom = Math.min(-LADDER_GEL_GAP - LADDER_LEADER - LADDER_TEXT_GAP,
     annotationTop - LADDER_TEXT_GAP - LADDER_INK_PADDING);
-  const tierPitch = longest + 2 * LADDER_INK_PADDING + LADDER_TEXT_GAP;
-  const placed = (ladder.placements ?? []).map(placement => {
+  const placements = ladder.placements ?? [];
+  for (const placement of placements) {
     if (!Number.isInteger(placement.markerIndex) || !specs[placement.markerIndex]
       || !Number.isFinite(placement.x) || !Number.isFinite(placement.y)) {
       throw new Error("A ladder marker has invalid coordinates or a missing size label.");
     }
-    const spec = specs[placement.markerIndex];
-    return {...spec, markerIndex: placement.markerIndex, cropX: placement.x, cropY: placement.y,
-      x: placement.x, left: placement.x - spec.inkWidth / 2 - LADDER_INK_PADDING,
-      right: placement.x + spec.inkWidth / 2 + LADDER_INK_PADDING};
-  });
-  const tierEnds = [];
-  for (const label of [...placed].sort((a, b) => a.left - b.left || a.markerIndex - b.markerIndex)) {
-    let tier = tierEnds.findIndex(end => end + LADDER_TEXT_GAP <= label.left);
-    if (tier === -1) tier = tierEnds.length;
-    tierEnds[tier] = label.right;
-    label.tier = tier;
-    label.inkBottom = firstBottom - tier * tierPitch;
+  }
+  const ordered = [...placements].sort((a, b) => a.x - b.x || a.markerIndex - b.markerIndex);
+  if (ordered.some((placement, index) => index > 0 && placement.x === ordered[index - 1].x)) {
+    throw new Error("Two ladder markers share the same horizontal position. Move or remove one marker to keep labels at the same height.");
+  }
+  function atSize(fontSize) {
+    const scale = fontSize / preferredFontSize;
+    const padding = LADDER_INK_PADDING * scale;
+    const placed = placements.map(placement => {
+      const spec = fontSize === preferredFontSize ? specs[placement.markerIndex]
+        : labelSpec(labels[placement.markerIndex], fontSize);
+      return {...spec, markerIndex: placement.markerIndex, cropX: placement.x, cropY: placement.y,
+        x: placement.x, left: placement.x - spec.inkWidth / 2 - padding,
+        right: placement.x + spec.inkWidth / 2 + padding};
+    });
+    const sorted = [...placed].sort((a, b) => a.x - b.x || a.markerIndex - b.markerIndex);
+    return {placed, fits: sorted.every((label, index) => index === 0
+      || sorted[index - 1].right + LADDER_LABEL_GAP * scale <= label.left)};
+  }
+  let fitted = atSize(preferredFontSize);
+  if (!fitted.fits) {
+    // Remeasure actual glyph ink at each size: browser font metrics need not
+    // scale linearly, especially for small text. Backing padding scales too.
+    let lower = Math.min(0.01, preferredFontSize);
+    let upper = preferredFontSize;
+    fitted = atSize(lower);
+    if (!fitted.fits) {
+      throw new Error("These ladder markers are too close to label at the same height. Move or remove one marker.");
+    }
+    for (let step = 0; step < 24; step++) {
+      const middle = (lower + upper) / 2;
+      const candidate = atSize(middle);
+      if (candidate.fits) { lower = middle; fitted = candidate; }
+      else upper = middle;
+    }
+  }
+  const placed = fitted.placed;
+  for (const label of placed) {
+    label.tier = 0;
+    label.inkBottom = firstBottom;
     label.inkTop = label.inkBottom - label.inkHeight;
     label.inkLeft = label.x - label.inkWidth / 2;
     label.inkRight = label.x + label.inkWidth / 2;
@@ -126,9 +205,8 @@ function layoutLadder(ladder, defaultFontSize, annotationTop, measure) {
     label.baselineX = label.x + (label.ascent - label.descent) / 2;
     label.baselineY = label.inkBottom - label.textInkLeft;
   }
-  const tiers = Math.max(1, tierEnds.length);
-  return {labels: placed, tiers,
-    top: firstBottom - (tiers - 1) * tierPitch - longest - LADDER_INK_PADDING,
+  return {labels: placed, tiers: 1,
+    top: firstBottom - longest - LADDER_INK_PADDING,
     guides: placed.map(label => ({markerIndex: label.markerIndex, x: label.x,
       startY: -LADDER_GEL_GAP, endY: label.inkBottom + LADDER_TEXT_GAP, color: label.color}))};
 }
@@ -200,17 +278,35 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     left -= track.width + COLUMN_GAP;
   }
   const brackets = [];
+  const placedLabels = [...laneLabels];
   for (const tracks of groupTracks) {
     for (const track of tracks) {
-      const bracketX = left - BRACKET_DEPTH;
       for (const label of track.items) {
+        // Move each bracket right up to the nearest visible ink in its span.
+        // Editor minimum widths and unrelated labels must not push it left.
+        const top = Math.min(label.top, label.y - (label.ascent + label.descent) / 2);
+        const bottom = Math.max(label.bottom, label.y + (label.ascent + label.descent) / 2);
+        let boundary = -IMAGE_GAP;
+        for (const other of placedLabels) {
+          if (!other.hasInk) continue;
+          const ink = inkBounds(other);
+          if (overlapsVertically(top, bottom, ink.top, ink.bottom)) {
+            boundary = Math.min(boundary, ink.left);
+          }
+        }
+        for (const other of brackets) {
+          if (overlapsVertically(top, bottom, other.top, other.bottom)) {
+            boundary = Math.min(boundary, other.x);
+          }
+        }
+        const bracketX = boundary - LABEL_BRACKET_GAP - BRACKET_DEPTH;
         label.x = bracketX - LABEL_BRACKET_GAP - label.overhangRight;
-        label.width = track.width - label.overhangRight;
+        label.width = label.measuredWidth - label.overhangRight;
         brackets.push({id: label.id, set: label.set, track: label.track,
           x: bracketX, top: label.top, bottom: label.bottom, ticks: [...label.ticks],
-          depth: BRACKET_DEPTH, color: label.color});
+          depth: BRACKET_DEPTH, color: "#000000"});
+        placedLabels.push(label);
       }
-      left -= BRACKET_DEPTH + LABEL_BRACKET_GAP + track.width + COLUMN_GAP;
     }
   }
   const allLabels = [...laneLabels, ...groupLabels];
@@ -230,6 +326,11 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     label.start += gelY;
     label.end += gelY;
     label.baseline = label.y + (label.ascent - label.descent) / 2;
+    const ink = inkBounds(label);
+    label.inkLeft = ink.left;
+    label.inkRight = ink.right;
+    label.inkTop = ink.top;
+    label.inkBottom = ink.bottom;
     if (label.kind === "group") {
       label.top += gelY;
       label.bottom += gelY;
@@ -276,7 +377,7 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
   context.lineWidth = 1.5;
   context.lineCap = "butt";
   for (const bracket of layout.brackets) {
-    context.strokeStyle = bracket.color;
+    context.strokeStyle = "#000000";
     context.beginPath();
     context.moveTo(bracket.x + bracket.depth, bracket.top);
     context.lineTo(bracket.x, bracket.top);
@@ -292,12 +393,24 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
   context.textBaseline = "alphabetic";
   for (const label of layout.labels) {
     if (!label.text) continue;
-    context.font = label.font;
-    context.fillStyle = label.color;
-    context.fillText(label.text, label.x, label.baseline);
+    if (label.runs.length === 1) {
+      context.font = label.runs[0].font;
+      context.fillStyle = label.runs[0].color;
+      context.textAlign = "right";
+      context.fillText(label.text, label.x, label.baseline);
+    } else {
+      context.textAlign = "left";
+      for (const run of label.runs) {
+        if (!run.text) continue;
+        context.font = run.font;
+        context.fillStyle = run.color;
+        context.fillText(run.text, label.x - label.advance + run.offset, label.baseline);
+      }
+    }
   }
-  // Paint all leaders before all label backings so a higher tier's leader
-  // cannot strike through a nearby lower label. Every leader retains its x.
+  // All leaders share an endpoint height and retain their clicked x. Backings
+  // and text are drawn last, identically in the preview and exported image.
+  context.lineWidth = LADDER_STROKE;
   for (const guide of layout.guides ?? []) {
     context.strokeStyle = guide.color;
     context.beginPath();
