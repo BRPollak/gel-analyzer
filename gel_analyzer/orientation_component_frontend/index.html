@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manual gel orientation</title>
+  <style>
+    :root { color-scheme: light; font-family: sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: transparent; color: var(--text-color, #31333f); }
+    #component { padding: 6px 0 3px; }
+    #caption { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+    #toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    button, input { font: inherit; font-size: 14px; border: 1px solid #94a3b8; border-radius: 6px; }
+    button { color: inherit; padding: 7px 10px; background: transparent; cursor: pointer; }
+    button:hover { border-color: #d97706; }
+    button[aria-pressed="true"] { background: #fbbf2422; border-color: #d97706; }
+    button:disabled, input:disabled { opacity: .5; cursor: default; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+    #angle-label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    #angle { width: 82px; padding: 6px; background: transparent; color: inherit; }
+    #image-wrap { padding: 38px; max-width: 100%; }
+    #gel { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; cursor: crosshair; }
+    #selection { fill: #fbbf2418; stroke: #fbbf24; stroke-width: 2; cursor: move; outline: none; }
+    #selection:focus { stroke: #60a5fa; stroke-width: 3; }
+    #top-edge { stroke: #fbbf24; stroke-width: 5; }
+    #rotation-line { stroke: #fbbf24; stroke-width: 2; }
+    #top-label { fill: #fbbf24; stroke: #111; paint-order: stroke; font-weight: 700; pointer-events: none; }
+    .handle { outline: none; cursor: grab; }
+    .handle .dot { fill: #fbbf24; stroke: #111; stroke-width: 2; }
+    .handle:focus .dot { fill: white; stroke: #2563eb; stroke-width: 3; }
+    .rotation-symbol { fill: #111; pointer-events: none; font-weight: bold; }
+    #selection, #top-edge, #rotation-line, .dot { vector-effect: non-scaling-stroke; }
+    #gel[data-dragging="true"], #gel[data-dragging="true"] * { cursor: grabbing; }
+    #gel[data-draw-mode="true"] #selection { cursor: crosshair; }
+    #status { margin: 0 0 3px; font-size: 13px; line-height: 1.5; }
+    #feedback { margin: 5px 0 0; color: var(--text-color, #31333f); font-size: 13px; line-height: 1.4; }
+    #feedback:empty { display: none; }
+  </style>
+</head>
+<body>
+  <main id="component">
+    <p id="caption">Initial crop · manual orientation</p>
+    <div id="toolbar" role="group" aria-label="Rectangle controls">
+      <button type="button" id="draw-new">Draw new rectangle</button>
+      <label id="angle-label" for="angle">Angle <input id="angle" type="number" step="1" aria-label="Clockwise rectangle angle in degrees" disabled>°</label>
+      <button type="button" id="rotate-left" aria-label="Rotate rectangle counterclockwise 90 degrees" disabled>−90°</button>
+      <button type="button" id="rotate-right" aria-label="Rotate rectangle clockwise 90 degrees" disabled>+90°</button>
+    </div>
+    <div id="image-wrap">
+      <svg id="gel" xmlns="http://www.w3.org/2000/svg" role="group"
+          aria-label="Initial gel crop with manual orientation rectangle" aria-describedby="status"
+          data-testid="orientation-editor">
+        <image id="gel-image" x="0" y="0" preserveAspectRatio="none" />
+        <polygon id="selection" data-action="move" role="button" visibility="hidden" />
+        <line id="top-edge" visibility="hidden" pointer-events="none" />
+        <text id="top-label" visibility="hidden" text-anchor="middle" dominant-baseline="central">TOP</text>
+        <line id="rotation-line" visibility="hidden" pointer-events="none" />
+        <g id="corner-0" class="handle" data-action="resize" data-corner="0" role="button" visibility="hidden"><circle class="hit" fill="transparent" /><circle class="dot" pointer-events="none" /></g>
+        <g id="corner-1" class="handle" data-action="resize" data-corner="1" role="button" visibility="hidden"><circle class="hit" fill="transparent" /><circle class="dot" pointer-events="none" /></g>
+        <g id="corner-2" class="handle" data-action="resize" data-corner="2" role="button" visibility="hidden"><circle class="hit" fill="transparent" /><circle class="dot" pointer-events="none" /></g>
+        <g id="corner-3" class="handle" data-action="resize" data-corner="3" role="button" visibility="hidden"><circle class="hit" fill="transparent" /><circle class="dot" pointer-events="none" /></g>
+        <g id="rotation" class="handle" data-action="rotate" role="button" visibility="hidden">
+          <circle class="hit" fill="transparent" /><circle class="dot" pointer-events="none" />
+          <text class="rotation-symbol" text-anchor="middle" dominant-baseline="central">↻</text>
+        </g>
+      </svg>
+    </div>
+    <p id="status">Press and drag on the image to draw a rectangle. The marked edge becomes the top after orientation.</p>
+    <p id="feedback" role="status" aria-live="polite"></p>
+  </main>
+  <script type="module" src="editor.mjs"></script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import warnings
 from PIL import Image
 
 from .auto_crop import find_gel_crop
-from .orientation import orient_gel
+from .orientation import GelRectangle, OrientationError, orient_gel
 
 
 class ImageValidationError(ValueError):
@@ -57,17 +57,21 @@ class GelImage:
         return self.crop_box != (0, 0, self.width, self.height)
 
 
-def orient_gel_image(gel: GelImage) -> GelImage:
+def orient_gel_image(gel: GelImage, rectangle: GelRectangle | None = None) -> GelImage:
     """Stage a reoriented first crop without changing the current gel or TIFF.
 
     The first preview is a lossless copy of the decoded TIFF crop, including its
     bit depth. Repeated requests therefore never resample an earlier result.
     """
     if gel.orientation is not None:
+        if rectangle is not None:
+            raise OrientationError(
+                "Manual orientation must start from the original cropped image."
+            )
         return gel
     with Image.open(BytesIO(gel.preview_png)) as cropped:
         cropped.load()
-        result = orient_gel(cropped)
+        result = orient_gel(cropped) if rectangle is None else orient_gel(cropped, rectangle=rectangle)
     preview = BytesIO()
     result.image.save(preview, format="PNG")
     return replace(

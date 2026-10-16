@@ -53,6 +53,10 @@ def assert_orientation_reset(app):
     assert app.session_state["orientation_preview"] is None
     assert app.session_state["orientation_requested"] is False
     assert app.session_state["orientation_error"] is None
+    assert app.session_state["orientation_manual"] is False
+    assert app.session_state["orientation_selection"] is None
+    assert app.session_state["orientation_revision"] == 0
+    assert app.session_state["orientation_manual_error"] is None
     assert "confirm_orientation" not in button_keys(app)
 
 
@@ -75,6 +79,7 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     assert app.text[0].value == "gel.tif · 9 × 15 pixels"
     assert app.get("image")[0].proto != first_preview
     assert {"rotate_and_orient", "confirm_orientation"} <= button_keys(app)
+    assert "adjust_orientation_manually" in button_keys(app)
     assert len(orientation_calls) == 1
     staged_preview = app.get("image")[0].proto
 
@@ -112,7 +117,6 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
 ):
     upload(app)
     first_crop = app.session_state["gel_image"]
-    first_preview = app.get("image")[0].proto
     real_orient = image_io.orient_gel
     app.button(key="rotate_and_orient").click().run()
     assert app.session_state["orientation_preview"] is not None
@@ -124,11 +128,15 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
     app.button(key="rotate_and_orient").click().run()
 
     assert not app.exception
-    assert len(app.error) == 1
-    assert "outline" in app.error[0].value
+    assert not app.error
+    assert len(app.warning) == 1
+    assert "Draw the gel outline" in app.warning[0].value
     assert app.session_state["gel_image"] is first_crop
     assert app.session_state["orientation_preview"] is None
-    assert app.get("image")[0].proto == first_preview
+    assert app.session_state["orientation_manual"] is True
+    assert app.session_state["orientation_selection"] is None
+    assert not app.get("image")
+    assert app.button(key="preview_manual_orientation").disabled
     assert "rotate_and_orient" in button_keys(app)
     assert "confirm_orientation" not in button_keys(app)
 
@@ -138,6 +146,8 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
     assert not app.error
     assert app.session_state["orientation_preview"] is not None
     assert app.session_state["orientation_error"] is None
+    assert app.session_state["orientation_manual"] is False
+    assert not app.warning
     assert "confirm_orientation" in button_keys(app)
 
 

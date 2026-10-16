@@ -7,6 +7,7 @@ in that order; no intensity normalization is applied to the output image.
 
 from dataclasses import dataclass
 import math
+from numbers import Real
 
 import numpy as np
 from PIL import Image
@@ -15,7 +16,7 @@ from .auto_crop import _has_competing_outer_edge
 
 
 class OrientationError(ValueError):
-    """The image does not contain a sufficiently reliable rectangular outline."""
+    """The image or selected rectangle cannot be used for orientation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +49,81 @@ class _Side:
 
 _ANALYSIS_LIMIT = 768
 _UNCERTAIN = (
-    "The gel outline could not be estimated reliably. Choose an image with all "
-    "four gel edges visible and a small amount of surrounding background."
+    "The four gel edges could not be detected reliably."
 )
+
+
+def _cosine_sine(degrees: float) -> tuple[float, float]:
+    radians = math.radians(degrees)
+    cosine, sine = math.cos(radians), math.sin(radians)
+    if degrees % 90 == 0:
+        # Exact quarter turns need no interpolation between adjacent pixels.
+        # Tiny trig residuals otherwise round down some RGB channels in Pillow.
+        return float(round(cosine)), float(round(sine))
+    return cosine, sine
+
+
+def rectangle_from_selection(selection: object, size: tuple[int, int]) -> GelRectangle:
+    """Validate a manual rectangle in the initial crop's pixel coordinates.
+
+    The angle is clockwise around the rectangle center. Keeping its original
+    side identities across the full circle lets users correct any orientation,
+    including an upside-down selection, before the normal rotate/flip step.
+    """
+    fields = ("cx", "cy", "width", "height", "angle_degrees")
+    if not isinstance(selection, dict) or any(key not in selection for key in fields):
+        raise OrientationError("Draw a rectangle around the gel before applying it.")
+    values = [selection[key] for key in fields]
+    if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
+        raise OrientationError("The selected rectangle must contain finite numeric coordinates.")
+    try:
+        cx, cy, width, height, angle = map(float, values)
+    except (OverflowError, ValueError) as exc:
+        raise OrientationError(
+            "The selected rectangle must contain finite numeric coordinates."
+        ) from exc
+    if not all(math.isfinite(value) for value in (cx, cy, width, height, angle)):
+        raise OrientationError("The selected rectangle must contain finite numeric coordinates.")
+    if min(width, height) < 2:
+        raise OrientationError("The selected rectangle must be at least 2 pixels on each side.")
+    angle = (angle + 180) % 360 - 180
+    cosine, sine = _cosine_sine(angle)
+    u = np.asarray((cosine, sine))
+    v = np.asarray((-sine, cosine))
+    center = np.asarray((cx, cy))
+    # Multiplying each side by one half first avoids overflowing intermediate
+    # values in a malformed payload; the bounds check rejects oversized boxes.
+    horizontal, vertical = (width / 2) * u, (height / 2) * v
+    with np.errstate(over="ignore", invalid="ignore"):
+        corners = np.asarray([
+            center - horizontal - vertical,
+            center + horizontal - vertical,
+            center + horizontal + vertical,
+            center - horizontal + vertical,
+        ])
+    tolerance = 1e-6
+    if (
+        not np.isfinite(corners).all()
+        or (corners < -tolerance).any()
+        or (corners > np.asarray(size) + tolerance).any()
+    ):
+        raise OrientationError("Keep all four corners of the rectangle inside the image.")
+    return GelRectangle(
+        corners=tuple((float(x), float(y)) for x, y in corners),
+        width=width,
+        height=height,
+        angle_degrees=angle,
+    )
+
+
+def _validate_orientation_image(image: Image.Image) -> None:
+    """Apply the same source-pixel requirements to manual and detected outlines."""
+    if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16L", "I;16B"}:
+        raise OrientationError("This image's pixel format is not supported for orientation.")
+    if "A" in image.getbands() and image.getchannel("A").getextrema() != (255, 255):
+        raise OrientationError("Orientation requires a gel image without transparent areas.")
+    if image.mode == "P" and "transparency" in image.info:
+        raise OrientationError("Orientation requires a gel image without transparent areas.")
 
 
 def _step(profile: np.ndarray) -> np.ndarray:
@@ -189,12 +262,7 @@ def fit_gel_rectangle(image: Image.Image) -> GelRectangle:
     """
     if min(image.size) < 48:
         raise OrientationError(_UNCERTAIN)
-    if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16L", "I;16B"}:
-        raise OrientationError("This image's pixel format is not supported for orientation.")
-    if "A" in image.getbands() and image.getchannel("A").getextrema() != (255, 255):
-        raise OrientationError("Orientation requires a gel image without transparent areas.")
-    if image.mode == "P" and "transparency" in image.info:
-        raise OrientationError("Orientation requires a gel image without transparent areas.")
+    _validate_orientation_image(image)
     # F avoids clipping uint16 pixels at 255. This normalization is detection-only.
     gray = image.convert("F" if image.mode.startswith("I") else "L")
     gray.thumbnail((_ANALYSIS_LIMIT, _ANALYSIS_LIMIT), Image.Resampling.BILINEAR)
@@ -255,17 +323,22 @@ def fit_gel_rectangle(image: Image.Image) -> GelRectangle:
     )
 
 
-def orient_gel(image: Image.Image) -> OrientationResult:
-    """Rotate/straighten CCW, flip vertically, then crop to the fitted rectangle.
+def orient_gel(
+    image: Image.Image, rectangle: GelRectangle | None = None,
+) -> OrientationResult:
+    """Rotate/straighten CCW, flip vertically, then crop to the chosen rectangle.
 
     The geometry is composed before sampling, avoiding cumulative interpolation
     from three separate image operations. The same matrices transform both the
-    source image and its fitted rectangle. The source image is never mutated.
+    source image and its rectangle. With no manual rectangle, fit the source's
+    outline automatically. The source image is never mutated.
     """
-    rectangle = fit_gel_rectangle(image)
+    if rectangle is None:
+        rectangle = fit_gel_rectangle(image)
+    else:
+        _validate_orientation_image(image)
     degrees = 90.0 + rectangle.angle_degrees
-    radians = math.radians(degrees)
-    cosine, sine = math.cos(radians), math.sin(radians)
+    cosine, sine = _cosine_sine(degrees)
     rotation = np.asarray(((cosine, sine, 0), (-sine, cosine, 0), (0, 0, 1)))
     image_corners = np.asarray(((0, 0, 1), (image.width, 0, 1),
                                 (image.width, image.height, 1), (0, image.height, 1)))
@@ -297,9 +370,9 @@ def orient_gel(image: Image.Image) -> OrientationResult:
         )
         dtype = np.asarray(image).dtype
         values = np.clip(np.rint(np.asarray(sampled)), 0, 65535).astype(dtype)
-        result = Image.fromarray(values)
-        if result.mode != image.mode:
-            result = result.convert(image.mode)
+        # Preserve the original byte order explicitly; Pillow's I;16 -> I;16L
+        # conversion otherwise takes an 8-bit path and clips values above 255.
+        result = Image.frombytes(image.mode, output_size, values.tobytes())
     else:
         source = image.convert("RGB") if image.mode == "P" else image
         resampling = Image.Resampling.NEAREST if source.mode == "1" else Image.Resampling.BILINEAR

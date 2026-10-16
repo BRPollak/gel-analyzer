@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {labelRuns, textSnapshot, formatRange, formatSelection, editText, selectionStyle} from "../gel_analyzer/annotation_component_frontend/rich_text.mjs";
+import {labelRuns, textSnapshot, formatRange, formatSelection, editText, selectionStyle, formattingStyle, renderRuns} from "../gel_analyzer/annotation_component_frontend/rich_text.mjs";
 
 const label = () => ({text: "Control treated", bold: false, italic: false, color: "#202020"});
 
@@ -41,7 +41,7 @@ test("formatting without a saved selection follows the toolbar's whole-label tog
   for (const key of ["text", "label"]) for (const name of ["bold", "italic"]) {
     const value = {...label(), [key]: "AB"};
     formatRange(value, key, 0, 1, {[name]: true});
-    assert.equal(selectionStyle(value, key, undefined, undefined)[name], false,
+    assert.equal(formattingStyle(value, key, null)[name], false,
       "a reopened mixed label shows an unpressed formatting button");
     formatSelection(value, key, null, name);
     assert.ok(value.runs.every(run => run[name]), "clicking the unpressed button formats the whole label");
@@ -51,6 +51,94 @@ test("formatting without a saved selection follows the toolbar's whole-label tog
     formatSelection(value, key, {start: 0, end: 1}, name);
     assert.deepEqual(value.runs.map(run => [run.text, run[name]]), [["A", true], ["B", false]],
       "an explicit text range still formats only that substring");
+  }
+});
+
+test("caret formatting reflects the whole mixed label regardless of caret position", () => {
+  for (const key of ["text", "label"]) for (const start of [0, 1, 2]) {
+    const value = {...label(), [key]: "AB"};
+    formatRange(value, key, 0, 1, {bold: true, italic: true, color: "#0000ff"});
+    formatRange(value, key, 1, 2, {color: "#ff0000"});
+    const range = {start, end: start};
+    assert.deepEqual(formattingStyle(value, key, range), {
+      bold: false, italic: false, color: "#0000ff", mixedColor: true,
+    }, "caret position must not hide the label's mixed formatting");
+    assert.deepEqual(formattingStyle(value, key, {start: 0, end: 1}), {
+      bold: true, italic: true, color: "#0000ff", mixedColor: false,
+    }, "a nonempty range still describes only the selected text");
+    for (const name of ["bold", "italic"]) {
+      const formatted = structuredClone(value);
+      formatSelection(formatted, key, range, name);
+      assert.ok(formatted.runs.every(run => run[name]), "first click applies the style to the whole label");
+      assert.deepEqual(formatted.runs.map(run => run.color), ["#0000ff", "#ff0000"]);
+      formatSelection(formatted, key, range, name);
+      assert.ok(formatted.runs.every(run => !run[name]), "second click removes it from the whole label");
+    }
+    formatSelection(value, key, range, "color", "#008000");
+    assert.ok(value.runs.every(run => run.color === "#008000"));
+    assert.deepEqual(value.runs.map(run => [run.bold, run.italic]), [[true, true], [false, false]],
+      "a whole-label color change preserves each substring's font style");
+  }
+});
+
+test("typing at a style boundary still inherits the text beside the caret", () => {
+  for (const key of ["text", "label"]) {
+    const value = {...label(), [key]: "AB"};
+    formatRange(value, key, 0, 1, {bold: true, italic: true, color: "#0000ff"});
+    assert.equal(formattingStyle(value, key, {start: 1, end: 1}).bold, false);
+    editText(value, key, "AXB", {start: 1, end: 1});
+    assert.deepEqual(value.runs, [
+      {text: "AX", bold: true, italic: true, color: "#0000ff"},
+      {text: "B", bold: false, italic: false, color: "#202020"},
+    ], "whole-label toolbar state does not change the style inherited by new text");
+  }
+});
+
+test("rerendering selected text preserves editor selection without stealing toolbar focus", t => {
+  const globals = ["window", "document", "NodeFilter"];
+  const originals = globals.map(name => Object.getOwnPropertyDescriptor(globalThis, name));
+  t.after(() => globals.forEach((name, index) => {
+    if (originals[index]) Object.defineProperty(globalThis, name, originals[index]);
+    else delete globalThis[name];
+  }));
+  for (const editorFocused of [true, false]) {
+    const originalText = {textContent: "AB", length: 2};
+    const node = {dataset: {}, textContent: "AB", children: [],
+      contains: child => child === originalText,
+      replaceChildren(...children) { this.children = children; }};
+    const toolbarButton = {};
+    let restored = null;
+    // The browser retains the editable selection when a toolbar button has focus.
+    const selection = {rangeCount: 1, anchorNode: originalText, focusNode: originalText,
+      getRangeAt: () => ({startContainer: originalText, startOffset: 1,
+        toString: () => "B", cloneRange: () => ({selectNodeContents() {}, setEnd() {}, toString: () => "A"})}),
+      removeAllRanges() {},
+      addRange(range) {
+        restored = range;
+        // Chromium focuses contenteditable when its selection is restored.
+        document.activeElement = node;
+      }};
+    globalThis.window = {getSelection: () => selection};
+    globalThis.NodeFilter = {SHOW_TEXT: 4};
+    globalThis.document = {activeElement: editorFocused ? node : toolbarButton,
+      createElement: () => ({textContent: "", style: {setProperty(name, value) { this[name] = value; }}}),
+      createTreeWalker: () => {
+        const textNodes = node.children.map(child => ({textContent: child.textContent, length: child.textContent.length}));
+        return {nextNode: () => textNodes.shift() ?? null};
+      },
+      createRange: () => ({setStart(text, offset) { this.start = [text.textContent, offset]; },
+        setEnd(text, offset) { this.end = [text.textContent, offset]; }})};
+    const value = {...label(), text: "AB"};
+    formatRange(value, "text", 1, 2, {bold: true, color: "#0000ff"});
+    renderRuns(node, value, "text");
+    assert.deepEqual(node.children.map(child => [child.textContent, child.style.fontWeight]), [["A", "normal"], ["B", "bold"]]);
+    assert.equal(document.activeElement, editorFocused ? node : toolbarButton);
+    if (editorFocused) {
+      assert.deepEqual([restored.start, restored.end], [["A", 1], ["B", 1]],
+        "mouse formatting keeps the same substring selected across newly rendered spans");
+    } else {
+      assert.equal(restored, null, "keyboard formatting must leave focus on the toolbar button");
+    }
   }
 });
 

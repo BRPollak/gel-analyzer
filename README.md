@@ -1,5 +1,7 @@
 # Agarose Gel Analyzer
 
+Current project version: **0.1.0**.
+
 Latest tagged release: **0.0.1** (Git tag: `v0.0.1`).
 
 **Current development snapshot: work in progress. The app is not yet fully
@@ -54,8 +56,12 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    dimensions. Large images fit the screen's width and height; small images are
    not enlarged. New previews are brought into view automatically.
 3. Click **Rotate and Orient** to fit the gel outline and preview its orientation.
-4. Inspect the result, then click **Confirm** in the workflow panel beside the preview.
-   Both orientation buttons disappear, and the confirmed image stays displayed.
+4. If detection fails, draw the gel outline in the manual editor. If the automatic
+   result needs adjusting, click **Adjust outline manually**. Drag to draw a
+   rectangle, move it from inside, resize its corners, and rotate it with the round
+   handle or angle controls. Click **Preview manual orientation**, inspect the
+   result, then click **Confirm** in the workflow panel beside the preview.
+   Orientation controls disappear, and the confirmed image stays displayed.
 5. Click **Define wells**. Click at the top of the topmost selected well and the
    bottom of the bottommost selected well, with the line passing through the well
    centers. Either click order works. Drag the dots to adjust the dotted line.
@@ -211,8 +217,11 @@ when needed, leaving more room for the gel.
 Crop confirmation opens an annotation editor using the crop's translated lane
 coordinates. Click a right-aligned Arial label beside the gel to edit its text
 in place. Select a substring to change just its bold, italic (including both
-together), or color formatting. With no text range selected, those controls
-format the whole label. Mixed formatting is retained during text edits, layout
+together), or color formatting. Choose from eight color presets: black, gray,
+red, orange, yellow, green, blue, and purple. The toolbar shows whether formatting
+applies to **selected text** or the **whole label**, and keeps the highlighted
+substring selected when you click a color or style. With no text range selected,
+those controls format the whole label. Mixed formatting is retained during text edits, layout
 changes, confirmation, and PNG export. There is no separate lane-text form.
 Formatting controls stay outside the final image; the selected label stays
 highlighted while you use them. Group creation and membership controls are in
@@ -361,9 +370,30 @@ The transformed image remains a pending preview until **Confirm** accepts it as
 the current gel. **Rotate and Orient** remains available before confirmation;
 clicking it again starts from the first crop so transformations never accumulate.
 Replacing or clearing the upload resets this workflow. If the outline cannot be
-estimated reliably, the app explains the failure and keeps the first crop.
+estimated reliably, the app opens a manual outline editor on the first crop.
+**Draw outline manually** also opens this editor before running detection, and
+**Adjust outline manually** opens it with the current outline after a successful
+automatic or manual preview.
 
-Orientation expects one roughly centered, opaque gel with visible outer edges
+Press and drag across the image to draw a rectangle in either direction. Drag
+inside to move it, use its corner handles to resize it, and drag the round handle
+to rotate it. The angle field and quarter-turn buttons also adjust rotation.
+The gold edge becomes the top of the oriented image, making the subsequent
+rotation and flip visible in the selection. **Draw new rectangle** clears the
+selection so it can be replaced. The rectangle must stay inside the image and
+have sides of at least two pixels. Out-of-bounds rotations keep the previous
+selection and explain how to make room.
+
+The editor always shows the initial crop, even after automatic rotation, so
+edges and tilt can be corrected against the original pixels. **Preview manual
+orientation** bypasses edge detection and applies the same rotation, flip, and
+crop using the selected rectangle. Every preview samples that initial crop
+once; editing never repeatedly resamples a previous preview. **Cancel manual
+adjustment** returns to the previous preview, and **Retry automatic detection**
+discards the manual selection and runs detection again. A preview must still be
+confirmed before defining wells.
+
+Automatic orientation expects one roughly centered, opaque gel with visible outer edges
 and a modest tilt. Competing faint or blurred outer edges are treated as
 uncertain so a sharper inner boundary cannot silently remove physical gel.
 
@@ -433,6 +463,10 @@ analysis copy; normalization is confined to that temporary copy.
 `gel_analyzer/orientation.py` fits and transforms the gel rectangle, then flips
 and crops the image. `orient_gel_image` stages an immutable replacement from the
 lossless first-crop PNG; confirmation makes it the current `GelImage`.
+`gel_analyzer/orientation_ui.py` manages manual review and preview staging;
+`gel_analyzer/orientation_component.py` serves its local SVG rectangle editor.
+Manual selection events use image coordinates with session tokens and revisions
+to reject stale geometry after retries, cancellation, or upload replacement.
 `gel_analyzer/wells.py` validates the guide/count and detects wells independently
 of Streamlit. `gel_analyzer/lane_refinement.py` estimates lane coverage from
 typical thickness and downstream contrast without changing detected well
@@ -479,7 +513,7 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **710 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **800 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
   lifecycle, manual review, lane insertion/deletion, annotation validation,
   confirmation/editing, and app workflow tests.
@@ -500,11 +534,14 @@ completed-preview rendering, and detection only once per upload.
 - `node --test tests/test_preview_fit.mjs`: **6 passed**, checking portrait and
   landscape fitting, viewport-height budgets, lane-control gutters, native
   pointer coordinates, and protection against iframe resize feedback.
-- `node --test tests/test_rich_text.mjs`: **7 passed**, checking selection
-  formatting, text edits, undo snapshots, and compatibility with plain labels.
+- `node --test tests/test_rich_text.mjs`: **10 passed**, checking selection
+  formatting, mixed-label caret toggles, keyboard toolbar focus, text edits,
+  undo snapshots, and compatibility with plain labels.
+- `node --test tests/test_orientation_component.mjs`: **15 passed**, checking
+  rectangle geometry, pointer and keyboard controls, cancellation, and stale events.
 - `node --test tests/test_workspace_viewport.mjs`: **1 passed**, checking that
   expanded controls are brought into view without resetting scroll on edits.
-- `node --test tests/*.mjs`: **65 passed** across the JavaScript suites.
+- `node --test tests/*.mjs`: **83 passed** across the JavaScript suites.
 - All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
   five). Four were used for tuning; one was reserved for validation and
   retained its previously accepted bounds. Visual review confirms the visible
