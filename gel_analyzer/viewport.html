@@ -2,7 +2,19 @@
   [data-testid="stElementContainer"]:has(#gel-viewport-controller) { display: none; }
   .stMainBlockContainer { padding-top: 3.5rem; padding-bottom: 1.5rem; }
   [data-testid="stHeadingWithActionElements"] h1 { font-size: 2rem; padding-top: 0; }
-  .st-key-gel_upload_start { max-width: 760px; }
+  .st-key-gel_upload_start { max-width: 760px; margin-inline: auto; }
+  iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"] { display: block; }
+  .st-key-gel_workspace { --gel-workspace-height: calc(100dvh - 260px); }
+  .st-key-gel_workflow_controls { max-height: var(--gel-workspace-height); overflow-y: auto; }
+  .st-key-gel_workflow_controls:has(.st-key-gel_export_options) { overflow: hidden; min-height: 0; }
+  .st-key-gel_workflow_controls > [data-testid="stLayoutWrapper"]:has(.st-key-gel_export_options) {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  }
+  .st-key-gel_export_options { min-height: 0; }
+  .st-key-gel_workflow_controls > [data-testid="stLayoutWrapper"]:has(.st-key-gel_export_actions) {
+    flex: 0 0 auto;
+  }
+  .st-key-gel_export_actions { flex-shrink: 0; }
   .st-key-gel_workflow_controls [data-testid="stHeadingWithActionElements"] h3 {
     font-size: 1.2rem; padding-top: 0;
   }
@@ -10,30 +22,34 @@
   .st-key-gel_workflow_controls [data-testid="stDownloadButton"] button { width: 100%; }
   .st-key-gel_workflow_controls [data-testid="stElementContainer"]:has([data-testid="stButton"]),
   .st-key-gel_workflow_controls [data-testid="stElementContainer"]:has([data-testid="stDownloadButton"]) { width: 100%; }
-  @media (min-width: 400px) {
+  @media (min-width: 700px) {
     :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] {
-      align-items: flex-start; flex-wrap: nowrap;
+      align-items: center; flex-wrap: nowrap; min-height: var(--gel-workspace-height);
     }
     :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
-      flex: 1 1 0; min-width: 0;
+      flex: 1 1 0; min-width: 0; align-self: center;
     }
     :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
-      flex: 0 0 clamp(180px, 26vw, 360px); min-width: 0; position: sticky; top: 4rem;
+      flex: 0 0 clamp(210px, 26vw, 360px); min-width: 0; align-self: center;
     }
   }
-  @media (max-width: 399px) {
+  @media (max-width: 699px) {
+    .st-key-gel_workflow_controls:has(.st-key-gel_export_options) {
+      max-height: min(360px, calc(var(--gel-workspace-height) * .62));
+    }
     :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] { flex-direction: column; gap: 1rem; }
     :is(.st-key-gel_workspace, .st-key-gel_workspace > [data-testid="stLayoutWrapper"]) > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
       width: 100%; flex: 1 1 100%; min-width: 0;
     }
   }
-  [data-testid="stImage"] { max-width: 100%; }
+  [data-testid="stImage"] { max-width: 100%; width: 100% !important; display: flex; flex-direction: column; align-items: center; }
+  [data-testid="stFullScreenFrame"]:has([data-testid="stImage"]) > div { margin-inline: auto; }
   [data-testid="stImage"] img {
     max-width: 100%;
-    max-height: calc(100dvh - 160px);
+    max-height: var(--gel-workspace-height, calc(100dvh - 260px));
     object-fit: contain;
-    object-position: left top;
-    scroll-margin-top: 72px;
+    object-position: center;
+    margin-inline: auto;
   }
 </style>
 <span id="gel-viewport-controller" hidden></span>
@@ -43,56 +59,51 @@
     window.gelPreviewViewport.refresh();
     return;
   }
-  const seen = new WeakMap();
+  const frameBudgets = new WeakMap();
   let scheduled = false;
   const viewportHeight = () => window.visualViewport?.height || window.innerHeight;
-  const isVisible = rect => rect.width > 0 && rect.height > 0;
+  const frameSelector = 'iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"]';
 
-  function revealOnce(element, identity, rect, scrollTarget = element) {
-    if (!identity || !isVisible(rect) || seen.get(element) === identity) return;
-    seen.set(element, identity);
-    // Reveal a newly uploaded image or workflow stage once. Ordinary edits,
-    // selections and reruns keep the user's focus and scroll position.
-    if (rect.top < 64 || rect.bottom > viewportHeight() - 24) {
-      scrollTarget.style.scrollMarginTop = "72px";
-      scrollTarget.scrollIntoView({block: "start", behavior: "instant"});
+  function availableHeight(element) {
+    const workspace = element?.closest(".st-key-gel_workspace");
+    const anchor = workspace || element?.closest('[data-testid="stElementContainer"]') || element;
+    if (!anchor) return Math.max(1, viewportHeight() - 260);
+    // Account for the title, upload control and filename at their natural page
+    // position. Scroll and vertically centering a preview must not change its
+    // budget, otherwise every frame-height update would shrink it again.
+    const scroller = anchor.closest('[data-testid="stMain"]') || document.scrollingElement;
+    const top = anchor.getBoundingClientRect().top + (scroller?.scrollTop || 0);
+    let budget = Math.max(1, viewportHeight() - Math.max(64, top) - 28);
+    if (workspace && window.innerWidth < 700) {
+      const controls = workspace.querySelector(".st-key-gel_workflow_controls");
+      budget = Math.max(1, budget - (controls?.getBoundingClientRect().height || 0) - 16);
     }
+    return Math.floor(budget);
   }
 
   function refresh() {
     scheduled = false;
+    document.querySelectorAll(".st-key-gel_workspace").forEach(workspace => {
+      const scroller = workspace.closest('[data-testid="stMain"]') || document.scrollingElement;
+      const top = workspace.getBoundingClientRect().top + (scroller?.scrollTop || 0);
+      workspace.style.setProperty("--gel-workspace-height", `${Math.max(1, viewportHeight() - Math.max(64, top) - 28)}px`);
+    });
     document.querySelectorAll('[data-testid="stImage"] img').forEach(img => {
       if (!img.complete || !img.naturalWidth) return;
       const container = img.closest('[data-testid="stElementContainer"]');
       const availableWidth = container?.clientWidth || img.parentElement.clientWidth;
       if (!availableWidth) return;
-      const scale = Math.min(1, availableWidth / img.naturalWidth,
-        Math.max(1, viewportHeight() - 160) / img.naturalHeight);
+      const scale = Math.min(1, availableWidth / img.naturalWidth, availableHeight(img) / img.naturalHeight);
       img.style.width = `${img.naturalWidth * scale}px`;
       img.style.height = `${img.naturalHeight * scale}px`;
       img.dataset.previewScale = String(scale);
-      const workspace = img.closest(".st-key-gel_workspace");
-      revealOnce(img, img.currentSrc || img.src, img.getBoundingClientRect(), workspace || img);
     });
 
-    document.querySelectorAll('iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"]').forEach(frame => {
-      try {
-        const doc = frame.contentDocument;
-        const component = doc?.getElementById("component");
-        const target = doc?.getElementById("preview-viewport") || doc?.getElementById("gel");
-        const token = component?.dataset.token || target?.dataset.token;
-        if (!token || !target || !component) return;
-        const identity = `${token}:${component.dataset.ladderStep || ""}:${Boolean(doc.getElementById("group-panel")?.open)}`;
-        const frameRect = frame.getBoundingClientRect();
-        // Include the current step's controls and next action. Ladder and group
-        // panels can grow while the image stays the same size.
-        const localRect = component.getBoundingClientRect();
-        // Wait for Streamlit to acknowledge the iframe's measured height.
-        if (frameRect.height < component.getBoundingClientRect().height - 2 || !isVisible(localRect)) return;
-        const rect = {width: localRect.width, height: localRect.height,
-          top: frameRect.top + localRect.top, bottom: frameRect.top + localRect.bottom};
-        revealOnce(frame, identity, rect, frame.closest(".st-key-gel_workspace") || frame);
-      } catch { /* Cross-origin components handle their own preview sizing. */ }
+    document.querySelectorAll(frameSelector).forEach(frame => {
+      const height = availableHeight(frame);
+      if (frameBudgets.get(frame) === height) return;
+      frameBudgets.set(frame, height);
+      frame.contentWindow?.postMessage({type: "gel:viewport", height}, "*");
     });
   }
 
@@ -105,13 +116,19 @@
   const observer = new MutationObserver(schedule);
   observer.observe(document.body, {childList: true, subtree: true,
     attributes: true, attributeFilter: ["src", "height"]});
-  document.addEventListener("load", schedule, true);
+  document.addEventListener("load", event => {
+    frameBudgets.delete(event.target);
+    schedule();
+  }, true);
   window.addEventListener("resize", schedule);
   window.visualViewport?.addEventListener("resize", schedule);
   window.addEventListener("message", event => {
     if (event.data?.isStreamlitMessage && event.data.type === "streamlit:setFrameHeight") schedule();
   });
-  window.gelPreviewViewport = {refresh: schedule};
+  if (window.ResizeObserver) {
+    new window.ResizeObserver(schedule).observe(document.body);
+  }
+  window.gelPreviewViewport = {refresh: schedule, availableHeight};
   schedule();
 })();
 </script>

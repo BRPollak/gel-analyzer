@@ -119,9 +119,9 @@ export function nearestHandle(selection, point, unit) {
   return nearest;
 }
 
-export function fitPreviewGeometry({imageWidth, imageHeight, availableWidth, viewportHeight, chromeHeight = 0}) {
+export function fitPreviewGeometry({imageWidth, imageHeight, availableWidth, viewportHeight, chromeHeight = 0, outerReserve = 100}) {
   const gutter = 38;
-  const heightBudget = Math.max(1, viewportHeight - chromeHeight - 100 - gutter * 2);
+  const heightBudget = Math.max(1, viewportHeight - chromeHeight - outerReserve - gutter * 2);
   const scale = Math.min(1, Math.max(1, availableWidth - gutter * 2) / imageWidth, heightBudget / imageHeight);
   return {scale, wrapperWidth: imageWidth * scale + gutter * 2, gutter, heightBudget};
 }
@@ -132,4 +132,13 @@ export function outerViewportHeight(host) {
     if (Number.isFinite(height) && height > 0) return height;
   } catch { /* A cross-origin embedding page may hide its viewport. */ }
   return host.screen?.availHeight || host.outerHeight || 800;
+}
+
+export function outerViewportReserve(host) {
+  let height = host.gelPreviewHeight;
+  try {
+    const measured = host.parent?.gelPreviewViewport?.availableHeight(host.frameElement);
+    if (Number.isFinite(measured) && measured > 0) height = measured;
+  } catch { /* Cross-origin parents send the same budget with gel:viewport. */ }
+  return Number.isFinite(height) && height > 0 ? Math.max(0, outerViewportHeight(host) - height) : 100;
 }

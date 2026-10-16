@@ -103,6 +103,7 @@ def preview_manual_orientation() -> None:
         st.session_state.orientation_manual_error = str(exc)
         return
     st.session_state.orientation_preview = preview
+    st.session_state.orientation_preview_method = "manual"
     st.session_state.orientation_error = None
     reset_manual_orientation()
 
@@ -135,7 +136,7 @@ def show_manual_orientation(gel: GelImage, image_panel, controls_panel, retry) -
             disabled=st.session_state.orientation_selection is None,
             on_click=preview_manual_orientation,
         )
-        st.button("Retry automatic detection", key="rotate_and_orient", on_click=retry)
+        st.button("Automatic orientation", key="rotate_and_orient", on_click=retry)
         st.button(
             "Cancel manual adjustment", key="cancel_manual_orientation",
             on_click=reset_manual_orientation,

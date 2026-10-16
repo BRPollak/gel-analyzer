@@ -3,7 +3,7 @@ const OUTER = 12;
 const COLUMN_GAP = 16;
 const IMAGE_GAP = 14;
 const BRACKET_DEPTH = 9;
-const LABEL_BRACKET_GAP = 10;
+const MIN_BRACKET_GAP = 18;
 const VERTICAL_GAP = 4;
 const LADDER_GEL_GAP = 6;
 const LADDER_LEADER = 15;
@@ -243,6 +243,9 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   // Preserve the chosen size even when individual lanes are unusually close.
   // Only labels whose vertical extents collide need another horizontal column.
   const fontSize = requestedFontSize;
+  // A font-relative buffer stays visible when a high-resolution gel is fitted to the
+  // screen. Measure from actual glyph ink, including italic overhang.
+  const bracketGap = Math.max(MIN_BRACKET_GAP, fontSize * 0.4);
   const laneLabels = laneGeometry.map(lane => {
     const value = annotations.labels?.[lane.index] ?? {};
     const spec = textSpec(value, oneLine(value.text), fontSize, measure);
@@ -282,7 +285,7 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   for (const tracks of groupTracks) {
     for (const track of tracks) {
       for (const label of track.items) {
-        // Move each bracket right up to the nearest visible ink in its span.
+        // Keep a clear buffer from the nearest visible ink in this span.
         // Editor minimum widths and unrelated labels must not push it left.
         const top = Math.min(label.top, label.y - (label.ascent + label.descent) / 2);
         const bottom = Math.max(label.bottom, label.y + (label.ascent + label.descent) / 2);
@@ -299,8 +302,8 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
             boundary = Math.min(boundary, other.x);
           }
         }
-        const bracketX = boundary - LABEL_BRACKET_GAP - BRACKET_DEPTH;
-        label.x = bracketX - LABEL_BRACKET_GAP - label.overhangRight;
+        const bracketX = boundary - bracketGap - BRACKET_DEPTH;
+        label.x = bracketX - bracketGap - label.overhangRight;
         label.width = label.measuredWidth - label.overhangRight;
         brackets.push({id: label.id, set: label.set, track: label.track,
           x: bracketX, top: label.top, bottom: label.bottom, ticks: [...label.ticks],
@@ -359,7 +362,7 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   }
   return {width: outputWidth, height: outputHeight,
     imageWidth: width, imageHeight: height, gelX, gelY, fontSize, requestedFontSize,
-    denseFallback: laneTracks.length > 1, reducedFont: fontSize < requestedFontSize,
+    denseFallback: laneTracks.length > 1, reducedFont: fontSize < requestedFontSize, bracketGap,
     laneLabels, groupLabels, brackets, labels: allLabels,
     ladderLabels, guides, ladderTiers: ladderLayout.tiers};
 }

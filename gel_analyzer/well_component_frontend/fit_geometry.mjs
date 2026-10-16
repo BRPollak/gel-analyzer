@@ -32,3 +32,13 @@ export function outerViewportHeight(host = globalThis.window) {
   const fallback = host.screen?.availHeight || host.outerHeight || 800;
   return Number.isFinite(fallback) && fallback > 0 ? fallback : 800;
 }
+
+/** Reserve the real host header and controls, without depending on iframe height. */
+export function outerViewportReserve(host = globalThis.window) {
+  let height = host.gelPreviewHeight;
+  try {
+    const measured = host.parent?.gelPreviewViewport?.availableHeight(host.frameElement);
+    if (Number.isFinite(measured) && measured > 0) height = measured;
+  } catch { /* Cross-origin parents send the same budget with gel:viewport. */ }
+  return Number.isFinite(height) && height > 0 ? Math.max(0, outerViewportHeight(host) - height) : 100;
+}

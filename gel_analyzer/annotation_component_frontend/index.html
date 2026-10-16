@@ -51,8 +51,8 @@
     fieldset { margin: 10px 0 0; padding: 0; border: 0; min-width: 0; }
     legend { font-size: 13px; }
     #preview-viewport { width: 100%; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: #e7e9ed; }
-    #preview-viewport[data-fit="true"] { overflow: hidden; }
-    #preview-space { position: relative; margin-inline: auto; overflow: hidden; overflow: clip; }
+    #preview-viewport[data-fit="true"] { overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    #preview-space { position: relative; margin-inline: auto; overflow: hidden; overflow: clip; flex-shrink: 0; }
     #preview-stage { position: absolute; left: 0; top: 0; transform-origin: top left; background: white; }
     #preview { position: absolute; left: 0; top: 0; display: block; }
     #label-inputs { position: absolute; inset: 0; }

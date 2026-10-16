@@ -7,6 +7,7 @@ import pytest
 
 from gel_analyzer.annotations import default_annotations
 from test_annotations import composition, rich_annotations, styled_annotations
+from test_annotation_exports import vector_event
 from test_lane_app import bounds, finish_review, keys, lane_event, start_review, upload, workflow
 
 
@@ -218,6 +219,35 @@ def test_failed_image_confirmation_keeps_valid_draft_for_retry(annotated):
     annotation_event(annotated, revision=2, action="confirm")
     assert app.session_state["annotation_png"] is not None
     assert app.session_state["annotation_error"] is None
+
+
+def test_vector_snapshot_is_confirmed_and_invalidated_with_the_image(annotated):
+    crop = crop_gel(annotated)
+    annotation_event(annotated, action="confirm", **vector_event(crop))
+    app = annotated.app
+    svg = app.session_state["annotation_svg"]
+    assert b"<text" in svg and b"<path" in svg
+    assert app.session_state["annotation_base_svg"] == svg
+    app.button(key="skip_ladder").click().run()
+    assert app.session_state["annotation_svg"] == svg
+    app.selectbox(key="annotation_export_format").select("SVG").run()
+    assert not app.exception
+    assert any("keeps labels and brackets as vectors" in caption.value for caption in app.caption)
+    app.button(key="edit_annotations").click().run()
+    assert app.session_state["annotation_svg"] is None
+    assert app.session_state["annotation_base_svg"] is None
+
+
+def test_bad_vector_snapshot_cannot_partially_confirm_the_image(annotated):
+    crop = crop_gel(annotated)
+    event = vector_event(crop)
+    event["svg"] = event["svg"].replace("</svg>", "<script>bad()</script></svg>")
+    annotation_event(annotated, action="confirm", **event)
+    app = annotated.app
+    assert app.session_state["annotation_stage"] == "lanes"
+    assert app.session_state["annotation_png"] is None
+    assert app.session_state["annotation_svg"] is None
+    assert app.session_state["annotation_error"]
 
 
 def test_revise_crop_consumes_pending_annotation_edit_and_preserves_it(annotated):

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {fitPreviewGeometry, outerViewportHeight} from "../gel_analyzer/well_component_frontend/fit_geometry.mjs";
+import {fitPreviewGeometry, outerViewportHeight, outerViewportReserve} from "../gel_analyzer/well_component_frontend/fit_geometry.mjs";
 import {laneDeleteLayout, pointerToImage} from "../gel_analyzer/well_component_frontend/geometry.mjs";
 
 test("landscape and portrait previews fit both dimensions without changing source geometry", () => {
@@ -93,4 +93,21 @@ test("parent viewport is stable when iframe height changes and cross-origin fall
   const standalone = {innerHeight: 700, screen: {availHeight: 1000}};
   standalone.parent = standalone;
   assert.equal(outerViewportHeight(standalone), 700);
+});
+
+test("actual host chrome and stacked controls take precedence over a fixed reserve", () => {
+  const frame = {};
+  const host = {parent: {innerHeight: 800, gelPreviewViewport: {
+    availableHeight: element => element === frame ? 436 : 1,
+  }}, frameElement: frame, innerHeight: 1};
+  assert.equal(outerViewportReserve(host), 364);
+  const fit = fitPreviewGeometry({imageWidth: 1200, imageHeight: 2000, availableWidth: 600,
+    viewportHeight: outerViewportHeight(host), outerReserve: outerViewportReserve(host), chromeHeight: 36});
+  assert.equal(fit.height, 400);
+  host.innerHeight = 500;
+  assert.equal(outerViewportReserve(host), 364, "the component height cannot feed back into its fit");
+  Object.defineProperty(host, "parent", {get() { throw new Error("cross origin"); }});
+  host.screen = {availHeight: 900};
+  host.gelPreviewHeight = 410;
+  assert.equal(outerViewportReserve(host), 490);
 });

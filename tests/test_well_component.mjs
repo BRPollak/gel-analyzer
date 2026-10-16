@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveGuideEndpoint, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
 import {createLaneReview} from "../gel_analyzer/well_component_frontend/lane_review.mjs";
 
 test("pointer mapping is independent of scale and page offset", () => {
@@ -21,12 +21,21 @@ test("captured pointer clips at all four image edges", () => {
   assert.equal(pointerToImage(10, 20, {...rect, width: 0}, 400, 200), null);
 });
 
-test("endpoint loading preserves click order and rejects malformed data", () => {
-  assert.deepEqual(readPoints([[13, 180], [11, 15]], 400, 200), [[13, 180], [11, 15]]);
+test("endpoint loading keeps a vertical guide, preserves click order and rejects malformed data", () => {
+  assert.deepEqual(readPoints([[13, 180], [11, 15]], 400, 200), [[13, 180], [13, 15]]);
   assert.deepEqual(readPoints([[-1, 500]], 400, 200), [[0, 200]]);
   for (const input of [null, [[NaN, 1]], [[1]], [[1, 2, 3]], [[1, 2], [3, 4], [5, 6]]]) {
     assert.deepEqual(readPoints(input, 400, 200), []);
   }
+});
+
+test("either endpoint moves the guide horizontally and adjusts only its own height", () => {
+  const points = [[13, 180], [13, 15]];
+  assert.deepEqual(moveGuideEndpoint(points, 0, [45, 175], 400, 200), [[45, 175], [45, 15]]);
+  assert.deepEqual(moveGuideEndpoint(points, 1, [45, 25], 400, 200), [[45, 180], [45, 25]]);
+  assert.deepEqual(moveGuideEndpoint(points, 0, [-10, 220], 400, 200), [[0, 200], [0, 15]]);
+  assert.deepEqual(moveGuideEndpoint(points, 1, [450, -10], 400, 200), [[400, 180], [400, 0]]);
+  assert.deepEqual(points, [[13, 180], [13, 15]]);
 });
 
 test("lane borders round to pixel edges and cannot cross neighbors or collapse", () => {
@@ -109,6 +118,9 @@ class ReviewNode {
   }
   appendChild(child) { child.parent = this; this.children.push(child); }
   replaceChildren() { this.children = []; }
+  querySelector(selector) {
+    return this.children.find(child => child.attributes.class === selector.slice(1)) ?? null;
+  }
   closest(selector) {
     const attribute = selector.slice(1, -1);
     return attribute in this.attributes ? this : this.parent?.closest(selector) ?? null;
@@ -192,5 +204,111 @@ test("trash click and keyboard emit one deletion per token without altering loca
   } finally {
     if (originalDocument === undefined) delete globalThis.document;
     else globalThis.document = originalDocument;
+  }
+});
+
+test("guide stays vertical through edits and preserves confirmed results across pending drags", async () => {
+  const globals = ["document", "window", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame", "getComputedStyle"];
+  const originals = new Map(globals.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const elements = Object.fromEntries(["gel", "component", "gel-image", "image-wrap", "status", "results",
+    "endpoint-0", "endpoint-1", "guide", "guide-halo", "lane-review", "excluded-right"]
+    .map(id => [id, new ReviewNode()]));
+  elements.component.clientWidth = 424;
+  for (let index = 0; index < 2; index++) {
+    const endpoint = elements[`endpoint-${index}`];
+    endpoint.setAttribute("data-endpoint", index);
+    for (const className of ["hit", "dot"]) {
+      const circle = new ReviewNode();
+      circle.setAttribute("class", className);
+      endpoint.appendChild(circle);
+    }
+  }
+  const messages = [];
+  const host = new ReviewNode();
+  host.parent = {innerHeight: 800, postMessage: message => messages.push(message), addEventListener() {}};
+  globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+  globalThis.window = host;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = () => 1;
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.getComputedStyle = () => ({});
+  const values = () => messages.filter(message => message.type === "streamlit:setComponentValue").map(message => message.value);
+  const svg = elements.gel;
+  const pointer = (x, y, target = elements["gel-image"]) => ({clientX: x, clientY: y, target});
+  const render = args => host.dispatch("message", {source: host.parent, data: {type: "streamlit:render", args}});
+  const shownPoints = () => [0, 1].map(index => {
+    const handle = elements[`endpoint-${index}`];
+    return [Number(handle.dataset.x), Number(handle.dataset.y)];
+  });
+  try {
+    await import("../gel_analyzer/well_component_frontend/overlay.mjs");
+    host.dispatch("message", {source: host.parent, data: {type: "streamlit:render", args: {
+      token: "vertical-guide", width: 400, height: 200, editable: true,
+      points: [], wells: [], lanes: [], image_src: "data:image/png;base64,fixture",
+    }}});
+    svg.dispatch("pointerdown", pointer(35, 20));
+    svg.dispatch("pointerdown", pointer(80, 180));
+    assert.deepEqual(values().at(-1).points, [[35, 20], [35, 180]], "second click cannot angle the guide");
+
+    for (let index = 0; index < 2; index++) {
+      const endpoint = elements[`endpoint-${index}`];
+      const targetX = 50 + index * 20;
+      const targetY = index === 0 ? 30 : 170;
+      const before = values().length;
+      svg.dispatch("pointerdown", pointer(...shownPoints()[index], endpoint));
+      svg.dispatch("pointermove", pointer(targetX, targetY, endpoint));
+      assert.equal(elements.guide.attributes.x1, elements.guide.attributes.x2, "live drag remains vertical");
+      assert.equal(values().length, before, "drag does not emit intermediate geometry");
+      svg.dispatch("pointerup", pointer(targetX, targetY, endpoint));
+      assert.equal(values().at(-1).points[0][0], targetX);
+      assert.equal(values().at(-1).points[1][0], targetX);
+      assert.equal(values().at(-1).points[index][1], targetY);
+    }
+    assert.deepEqual(shownPoints(), [[70, 30], [70, 170]]);
+    svg.dispatch("keydown", {target: elements["endpoint-0"], key: "ArrowLeft", shiftKey: true});
+    assert.deepEqual(values().at(-1).points, [[60, 30], [60, 170]]);
+    svg.dispatch("keydown", {target: elements["endpoint-1"], key: "ArrowRight"});
+    assert.deepEqual(values().at(-1).points, [[61, 30], [61, 170]]);
+    svg.dispatch("keydown", {target: elements["endpoint-0"], key: "ArrowDown"});
+    assert.deepEqual(values().at(-1).points, [[61, 31], [61, 170]]);
+    for (const cancel of ["pointercancel", "lostpointercapture"]) {
+      const before = values().length;
+      svg.dispatch("pointerdown", pointer(61, 170, elements["endpoint-1"]));
+      svg.dispatch("pointermove", pointer(150, 160, elements["endpoint-1"]));
+      assert.deepEqual(shownPoints(), [[150, 31], [150, 160]]);
+      svg.dispatch(cancel, {target: svg});
+      assert.deepEqual(shownPoints(), [[61, 31], [61, 170]], "cancel restores the entire guide");
+      assert.equal(values().length, before);
+    }
+    for (const finishBeforeResult of [false, true]) {
+      const args = {token: `detecting-${finishBeforeResult}`, width: 400, height: 200,
+        editable: true, points: [[34, 20], [34, 180]], wells: [], lanes: [], image_src: ""};
+      render(args);
+      svg.dispatch("pointerdown", pointer(34, 180, elements["endpoint-1"]));
+      svg.dispatch("pointermove", pointer(70, 185, elements["endpoint-1"]));
+      if (finishBeforeResult) svg.dispatch("pointerup", pointer(70, 185, elements["endpoint-1"]));
+      render(args);
+      assert.deepEqual(shownPoints(), [[70, 20], [70, 185]], "editable reruns cannot roll back local edits");
+      const before = values().length;
+      render({...args, editable: false,
+        wells: [{bounds: [24, 30, 44, 50], center: [34, 40]}], lanes: [[24, 30, 400, 50]]});
+      assert.deepEqual(shownPoints(), args.points, "frozen results use the guide that was confirmed");
+      const outlines = elements.results.children.filter(node => node.attributes["data-testid"]);
+      assert.deepEqual(outlines.map(node => node.attributes["data-testid"]), ["lane-1", "well-1"]);
+      assert.equal(svg.captures.size, 0, "freezing results releases an active drag");
+      assert.equal(svg.dataset.dragging, "false");
+      svg.dispatch("pointerup", pointer(100, 190, elements["endpoint-1"]));
+      svg.dispatch("lostpointercapture", {target: svg});
+      render(args);
+      assert.equal(svg.dataset.editable, "false", "an older editable render cannot reopen a frozen guide");
+      assert.deepEqual(shownPoints(), args.points);
+      assert.equal(values().length, before, "finishing or cancelling the old drag cannot emit geometry");
+      assert.ok(elements.results.children.length > 0, "delayed editable renders cannot hide the result");
+    }
+  } finally {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
   }
 });

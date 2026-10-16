@@ -77,10 +77,10 @@ test("both group sets coexist, use independent columns, and retain sparse member
   for (const group of layout.groupLabels) {
     const bracket = layout.brackets.find(candidate => candidate.id === group.id);
     assert.equal(group.y, (bracket.top + bracket.bottom) / 2);
-    assert.ok(group.x + group.overhangRight < bracket.x);
+    assert.ok(group.inkRight <= bracket.x - layout.bracketGap);
     const covered = layout.laneLabels.filter(label =>
       label.inkTop < bracket.bottom + 4 && label.inkBottom > bracket.top - 4);
-    assert.ok(bracket.x + bracket.depth <= Math.min(...covered.map(label => label.inkLeft)) - 10);
+    assert.ok(bracket.x + bracket.depth <= Math.min(...covered.map(label => label.inkLeft)) - layout.bracketGap);
     assert.equal(bracket.color, "#000000");
   }
   assert.equal(layout.groupLabels[2].font, "italic bold 18px Arial");
@@ -129,7 +129,7 @@ test("group brackets follow visible ink, ignoring editor padding and unrelated l
   for (const [index, laneIndex] of [0, 2].entries()) {
     const bracket = layout.brackets[index];
     const lane = layout.laneLabels[laneIndex];
-    assert.equal(bracket.x + bracket.depth, lane.inkLeft - 10);
+    assert.equal(bracket.x + bracket.depth, lane.inkLeft - layout.bracketGap);
     assert.ok(bracket.x > lane.x - lane.width,
       "the bracket can use empty editor-box padding beside a short label");
   }
@@ -154,7 +154,7 @@ test("group placement measures mixed fonts and whitespace from visible glyph bou
       ]}], groups: [{id: "a", set: 0, label: "Group", lanes: [0], color: "#ff0000"}]}}, measureVisible);
     const label = layout.laneLabels[0];
     const bracket = layout.brackets[0];
-    assert.ok(Math.abs(bracket.x + bracket.depth - (label.inkLeft - 10)) < 1e-9);
+    assert.ok(Math.abs(bracket.x + bracket.depth - (label.inkLeft - layout.bracketGap)) < 1e-9);
     assert.ok(Math.abs(label.inkLeft - (label.x - label.advance + 4 * fontSize * 0.6)) < 1e-9);
     assert.equal(label.runs[1].font, `bold ${fontSize}px Arial`);
     assert.equal(label.runs[2].font, `italic ${fontSize}px Arial`);
@@ -172,9 +172,24 @@ test("nested group brackets stop at inner visible group text and retain black st
   ]}}, measure);
   const inner = layout.groupLabels[0];
   const outerBracket = layout.brackets.find(bracket => bracket.id === "outer");
-  assert.ok(Math.abs(outerBracket.x + outerBracket.depth - (inner.inkLeft - 10)) < 1e-9);
+  assert.ok(Math.abs(outerBracket.x + outerBracket.depth - (inner.inkLeft - layout.bracketGap)) < 1e-9);
   assert.ok(layout.brackets.every(bracket => bracket.color === "#000000"));
   assertLabelsFit(layout);
+});
+
+test("both sides of each bracket retain visible buffers as label fonts grow", () => {
+  for (const fontSize of [12, 80, 160]) {
+    const layout = layoutAnnotations({width: 400, height: 200, lanes: [[0, 20, 400, 180]],
+      annotations: {fontSize, labels: [{text: "Lane", italic: true}],
+        groups: [{id: "group", set: 0, label: "Group", italic: true, lanes: [0]}]}}, measure);
+    const bracket = layout.brackets[0];
+    const gapToLane = layout.laneLabels[0].inkLeft - (bracket.x + bracket.depth);
+    const gapToGroup = bracket.x - layout.groupLabels[0].inkRight;
+    const requiredGap = Math.max(18, fontSize * 0.4) - 1e-9;
+    assert.ok(gapToLane >= requiredGap);
+    assert.ok(gapToGroup >= requiredGap);
+    assertLabelsFit(layout);
+  }
 });
 
 test("mixed runs render at measured offsets and preserve each segment's font and color", () => {
@@ -208,7 +223,7 @@ test("stale runs cannot replace edited plain text and blank labels do not obstru
   assert.equal(layout.laneLabels[0].hasInk, false);
   assert.equal(layout.laneLabels[0].runs[0].text, " ".repeat(80));
   assert.equal(layout.laneLabels[0].runs[0].color, "#000000");
-  assert.equal(layout.brackets[0].x + layout.brackets[0].depth, layout.gelX - 14 - 10);
+  assert.equal(layout.brackets[0].x + layout.brackets[0].depth, layout.gelX - 14 - layout.bracketGap);
 });
 
 test("dense and coincident lane centers preserve the chosen font and never overlap", () => {

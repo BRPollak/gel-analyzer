@@ -20,7 +20,7 @@ selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
 After cropping, annotate lanes and two independent sets of groups, then confirm
-and download the composed PNG. Optional manual ladder size labels can be placed
+and download as PNG, JPEG, TIFF, or SVG. Optional manual ladder size labels can be placed
 above the gel. Automatic band identification and ladder analysis remain later
 steps; band contrast already helps refine automatic lane coverage.
 
@@ -54,24 +54,32 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    startup screen. No image-type selection is needed.
 2. Wait for the automatic crop, then inspect the preview and its cropped pixel
    dimensions. Large images fit the screen's width and height; small images are
-   not enlarged. New previews are brought into view automatically.
+   not enlarged. Scrolling and ordinary edits keep the preview size and page position stable.
 3. Click **Rotate and Orient** to fit the gel outline and preview its orientation.
+   After a successful automatic preview, confirm it or adjust the outline manually.
 4. If detection fails, draw the gel outline in the manual editor. If the automatic
    result needs adjusting, click **Adjust outline manually**. Drag to draw a
    rectangle, move it from inside, resize its corners, and rotate it with the round
    handle or angle controls. Click **Preview manual orientation**, inspect the
    result, then click **Confirm** in the workflow panel beside the preview.
-   Orientation controls disappear, and the confirmed image stays displayed.
+   **Automatic orientation** is available during manual adjustment and after a
+   manual preview. Orientation controls disappear after confirmation, and the
+   confirmed image stays displayed.
 5. Click **Define wells**. Click at the top of the topmost selected well and the
    bottom of the bottommost selected well, with the line passing through the well
-   centers. Either click order works. Drag the dots to adjust the dotted line.
-6. Optionally enter **Expected number of lanes**, then click **Confirm line and
-   detect lanes**. Leave the field blank for automatic counting. Review the
-   detected count and numbered well markers and horizontal lane outlines.
-7. Click **Adjust lane borders**. Use the trash button to the right of a lane to
-   delete it, or **Add lane** to insert one at the bottom of the guide. Drag each
-   numbered lane's top and bottom borders independently, then click **Confirm
-   lane borders**. **Add lane** is also available when detection finds no wells.
+   centers. Either click order works. The dotted line stays vertical; drag either
+   dot to adjust its height or move the whole guide sideways. Detection is automatic
+   by default. To guide detection, enter the **Expected number of wells (optional)**;
+   clear the field to return to automatic detection.
+6. Click **Confirm** to detect wells. The result has three actions: **Confirm**
+   continues directly to the shared right edge, **Adjust** opens well and lane
+   adjustments, and **Back** returns to the guide.
+7. In **Adjust**, use the trash button to the right of a lane to delete it, or
+   **Add lane** to insert one at the bottom of the guide. Drag each lane's top
+   and bottom borders independently, then click **Confirm** to continue.
+   **Edit well line** returns to the guide; **Back** returns to the detected
+   summary and retains your adjustments. **Adjust** is available even when no
+   wells were detected, so you can add lanes manually.
 8. Drag the shared right boundary to the farthest point you want to keep.
    Click **Confirm lanes and crop** to create the cropped gel preview.
 9. Click a lane label beside the crop and type directly on the preview. The
@@ -80,11 +88,13 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    workflow panel to create groups in either set. Click
    **Confirm annotations** to compose the final image. **Edit annotations**
    returns to the saved labels and groups. Choose **Annotate ladder** to add
-   manual size labels, or **Skip** to continue. **Download annotated PNG** saves
-   the confirmed image, including any ladder labels.
+   manual size labels, or **Skip** to continue. Choose **Image file type** and
+   **Resolution (DPI)**, then download the confirmed image, including any ladder
+   labels. SVG uses vector annotations and does not need a DPI setting.
 10. Expand **Revise analysis** to use **Revise lanes and crop** to adjust the
-   existing review, or **Edit well line** to detect again. **Reset points** starts
-   a new guide on the same gel.
+   existing review, or **Edit well line** to detect again. In the guide editor,
+   **Back** leaves the editor and preserves your points; **Define wells** reopens
+   them for further adjustment.
 11. Open **Change image** to choose another TIFF, even if it has the same filename.
    Use **Clear image** or the uploader's remove button there to start again.
 
@@ -103,8 +113,11 @@ so they do not displace the menu on the right.
 Well selection is available only on the confirmed, reoriented gel. The endpoints
 specify the outside vertical limits of the selected range; the line should cross
 the centers of the wells near the left side of the gel, where migration begins.
-It may slope slightly. Coincident, too-short, or nearly horizontal selections
-cannot be confirmed. The overlay keeps the image's aspect ratio and records
+The line stays vertical. Selecting the second endpoint retains the first
+endpoint's horizontal position. Dragging either endpoint sideways moves the
+whole line; Up/Down changes that endpoint's height, and Left/Right moves the
+line horizontally. Coincident or too-short selections cannot be confirmed.
+The overlay keeps the image's aspect ratio and records
 coordinates in confirmed-image pixels, even when the browser preview is scaled.
 
 Detection runs only when you confirm the line. It analyzes narrow strips around
@@ -113,19 +126,16 @@ missed or partial well. Clear wells retain their independently measured sizes
 and spacing. A visible well does **not** indicate whether a sample was loaded.
 Numbering runs from top to bottom.
 
-**Expected number of lanes** is the only additional input. It is optional and
-helps join compatible short fragments and recover faint, supported outlines.
-Spacing is a soft preference, not a forced uniform grid. A count mismatch is
-reported rather than inventing wells in blank gaps or deleting clear wells.
-Changing the count preserves the guide but clears the previous detection and
-crop for a fresh confirmation. Guide edits retain the count; a new image or
-orientation clears it.
+The app determines the initial well count automatically. The detected summary
+provides only **Confirm**, **Adjust**, and **Back**. **Confirm** proceeds directly
+to the shared right edge. **Adjust** lets you add or delete lanes and edit their
+vertical borders, and **Back** lets you revise the guide and detect again.
 
 When the first pass finds weak boundaries, a second pass looks for faint,
 spatially coherent well walls and recovers shallow interruptions. It preserves
 clear separations from the first pass so stronger neighboring wells are not
 merged into one lane. If an endpoint cuts slightly into a well, a bounded search
-can complete its outline just beyond the endpoint, with a review message. Wells
+can complete its outline just beyond the endpoint. Wells
 entirely outside the selected range remain excluded. Review remains necessary
 for faint or ambiguous outlines.
 
@@ -138,15 +148,18 @@ neighboring wells; empty lanes remain present. Isolated hot pixels and scratches
 that continue across the search window do not establish lane borders.
 
 Half-open lane bounds are `(well_left, lane_top, image_width, lane_bottom)`;
-the detected well outline stays separate from the expanded lane. Sloping the
-guide does not rotate the lanes. Endpoints, well bounds, centers, and lane
+the detected well outline stays separate from the expanded lane. Endpoints,
+well bounds, centers, and lane
 rectangles are session data separate from image pixels. All analysis uses
 temporary arrays; the original TIFF bytes and lossless preview, including
 16-bit grayscale precision, are preserved.
 
-Editing invalidates the previous result. If no wells are found or boundaries are
-uncertain, the app explains the issue and keeps the guide editable. Candidate
-results with warnings require review and are not shown as a completed detection.
+Editing the guide invalidates the previous result. Detection results freeze the
+guide until you choose **Back** or **Edit well line**, including when no wells
+are found or boundaries are uncertain. Detection uncertainty messages are not
+displayed; the outlines remain available for your review and adjustment. An
+empty result enables **Adjust** and **Back**, while **Confirm** stays disabled
+until at least one lane has been added.
 Replacing, removing, or clearing an upload, or changing its orientation, discards
 all well geometry. Events from an older image or an earlier edit are ignored.
 
@@ -164,17 +177,18 @@ left/right walls.
 
 ### Adjust lane borders and crop
 
-**Adjust lane borders** begins a two-step review after at least one well has
-been detected. Candidates with uncertainty warnings can also be reviewed; the
-warnings remain visible in the border step. If no wells are found, use **Add
-lane** to begin manual recovery, or edit the guide and run detection again.
+**Adjust** opens the well and lane border editor from the detected summary,
+including an empty result. If no wells are found, use **Add lane** there to begin
+manual recovery, or **Edit well line** to revise the guide and detect again.
+**Confirm** on the detected summary skips this optional adjustment step and
+opens the shared right-edge editor directly.
 
 In the first step, a trash button at the right of each lane deletes that lane
 and renumbers the remaining lanes from top to bottom. **Add lane** places a new
 lane at the bottom guide endpoint, or below the last lane when that endpoint
 is already occupied. Its starting width and height use the median reviewed well
-dimensions; an empty review uses a small initial rectangle. The new well follows
-the guide's slope, and its placement is kept within the image and shared right
+dimensions; an empty review uses a small initial rectangle. The new well aligns
+with the vertical guide, and its placement is kept within the image and shared right
 edge. Adjust its borders to cover the intended well and bands. If there is no
 room for another lane below the last one, the app explains how to make room.
 Deleting every lane is allowed; add at least one before confirming. Trash
@@ -184,7 +198,8 @@ Drag the arrow handle on each lane's top or bottom border up
 or down. The well marker changes height with its lane. A border cannot cross
 its opposite border, overlap a neighboring lane, or leave the image. Focus a
 handle and use Up/Down for one-pixel adjustments, or hold Shift for ten pixels.
-Click **Confirm lane borders** to continue.
+Click **Confirm** to continue. **Back** returns to the detected summary while
+retaining your lane additions, deletions, and border adjustments.
 
 In the second step, drag the shared right boundary horizontally. The shaded
 area to its right will be removed. This boundary applies to every lane and
@@ -211,7 +226,7 @@ its final crop. Late events from earlier stages cannot restore old geometry.
 ### Lane annotations
 
 The app uses a wide workspace. **Change image** opens the replacement and clear
-controls; optional detection settings and analysis revisions can be expanded
+controls; optional annotation settings and analysis revisions can be expanded
 when needed, leaving more room for the gel.
 
 Crop confirmation opens an annotation editor using the crop's translated lane
@@ -222,7 +237,7 @@ red, orange, yellow, green, blue, and purple. The toolbar shows whether formatti
 applies to **selected text** or the **whole label**, and keeps the highlighted
 substring selected when you click a color or style. With no text range selected,
 those controls format the whole label. Mixed formatting is retained during text edits, layout
-changes, confirmation, and PNG export. There is no separate lane-text form.
+changes, confirmation, and all export formats. There is no separate lane-text form.
 Formatting controls stay outside the final image; the selected label stays
 highlighted while you use them. Group creation and membership controls are in
 the collapsible **Lane groups** section in the workflow panel.
@@ -252,8 +267,13 @@ use additional horizontal tracks while retaining their font size and lane center
 Preview zoom only changes the on-screen view: the final gel
 region retains its crop dimensions and is never resampled to make room for labels.
 
-**Confirm annotations** captures the same canvas used for the live preview into
-a new PNG containing the gel, labels, and brackets. Text-box borders, selection
+**Confirm annotations** saves the clean preview and its vector annotation geometry.
+Choose PNG, JPEG, TIFF, or SVG under **Image file type** before downloading.
+PNG and TIFF preserve the display image losslessly; JPEG uses lossy compression.
+The **Resolution (DPI)** choices depend on the selected format and set real print
+resolution metadata without changing pixel dimensions or resampling the gel.
+SVG embeds the native-resolution gel image and keeps labels, brackets, and ladder
+leaders as vectors; its DPI control is disabled. Text-box borders, selection
 indicators, and editing controls are excluded. **Edit annotations** keeps every
 label, format, and group. Revising crop bounds retains annotations; deleting a
 lane removes its label and group membership, and adding a lane creates a new
@@ -310,7 +330,8 @@ to focus the placement cursor. Arrow keys move one native pixel; Shift moves ten
 Enter places or moves the selected marker, and Escape leaves cursor interaction.
 Fit screen and percentage zoom change only the view. Touch scrolling does not
 place markers. Selection outlines, cursors, and controls are excluded from the
-confirmed PNG and download; both use the same clean canvas.
+confirmed image and every download format. Raster exports use the clean canvas;
+SVG uses the same positions and font styles with the embedded gel image.
 
 #### Define your ladder presets
 
@@ -367,8 +388,10 @@ bottom, original top at the left, and original bottom at the right. This is a
 rotation and reflection, without perspective correction.
 
 The transformed image remains a pending preview until **Confirm** accepts it as
-the current gel. **Rotate and Orient** remains available before confirmation;
-clicking it again starts from the first crop so transformations never accumulate.
+the current gel. A successful automatic preview offers confirmation and manual
+adjustment. The manual editor and a completed manual preview also offer
+**Automatic orientation**, which starts again from the first crop so
+transformations never accumulate.
 Replacing or clearing the upload resets this workflow. If the outline cannot be
 estimated reliably, the app opens a manual outline editor on the first crop.
 **Draw outline manually** also opens this editor before running detection, and
@@ -478,9 +501,12 @@ events before accepting geometry, and only a confirmation stages detection.
 appended lanes, and makes a lossless enclosing crop. `gel_analyzer/lane_review_ui.py`
 manages the two review stages, lane insertion/deletion, and confirmation callbacks.
 `gel_analyzer/annotation_ui.py` retains annotation drafts and confirmed images;
-`annotations.py` validates label, group, and PNG events. The local
-`annotation_component_frontend/` editor measures and draws the same canvas for
-both live preview and final PNG, with token/revision checks guarding stale events.
+`annotations.py` validates label, group, and PNG events. `annotation_exports.py`
+validates inert SVG geometry, embeds the current crop, and produces raster files
+with the selected DPI metadata. The local `annotation_component_frontend/` editor
+measures and draws the same canvas for the live preview and raster downloads;
+its SVG serializer uses that geometry for vector annotations. Token/revision
+checks guard stale events.
 Structural edits rotate the component token so delayed events cannot restore
 deleted lanes or target an outdated lane number. The overlay's `lane_review.mjs`
 handles trash buttons and axis-constrained border and extent dragging with the
@@ -513,17 +539,17 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **800 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **848 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
   lifecycle, manual review, lane insertion/deletion, annotation validation,
   confirmation/editing, and app workflow tests.
   The nine original-TIFF sample cases require `GEL_ANALYZER_EXAMPLE_TIFF`;
   the saved oriented sample was separately checked across all nine guides.
-- `node --test tests/test_well_component.mjs`: **9 passed**, checking scaled and
+- `node --test tests/test_well_component.mjs`: **11 passed**, checking scaled and
   offset coordinates, edge clipping, endpoint order, handle sizing, constrained
   border/right-edge movement, independent targeting of narrow-lane handles,
   responsive trash buttons, and mouse/keyboard deletion events.
-- `node --test tests/test_annotation_layout.mjs`: **28 passed**, checking native
+- `node --test tests/test_annotation_layout.mjs`: **29 passed**, checking native
   lane alignment, both group sets, overlapping groups, changing memberships,
   bold/italic text metrics, lane-based font sizing, edge padding, dense lanes,
   clean composition, and rotated ladder geometry, font sizing to prevent collisions,
@@ -531,7 +557,7 @@ completed-preview rendering, and detection only once per upload.
 - `node --test tests/test_ladder_component.mjs`: **14 passed**, checking manual
   marker placement/correction, keyboard/touch behavior, guarded changes, exact
   coordinate conversion, responsive preview height, and ladder reference photos.
-- `node --test tests/test_preview_fit.mjs`: **6 passed**, checking portrait and
+- `node --test tests/test_preview_fit.mjs`: **7 passed**, checking portrait and
   landscape fitting, viewport-height budgets, lane-control gutters, native
   pointer coordinates, and protection against iframe resize feedback.
 - `node --test tests/test_rich_text.mjs`: **10 passed**, checking selection
@@ -539,9 +565,9 @@ completed-preview rendering, and detection only once per upload.
   undo snapshots, and compatibility with plain labels.
 - `node --test tests/test_orientation_component.mjs`: **15 passed**, checking
   rectangle geometry, pointer and keyboard controls, cancellation, and stale events.
-- `node --test tests/test_workspace_viewport.mjs`: **1 passed**, checking that
-  expanded controls are brought into view without resetting scroll on edits.
-- `node --test tests/*.mjs`: **83 passed** across the JavaScript suites.
+- `node --test tests/test_workspace_viewport.mjs`: **3 passed**, checking header
+  and control space, resizing, and stable preview size and scrolling during edits.
+- `node --test tests/*.mjs`: **89 passed** across the JavaScript suites.
 - All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
   five). Four were used for tuning; one was reserved for validation and
   retained its previously accepted bounds. Visual review confirms the visible
@@ -550,6 +576,12 @@ completed-preview rendering, and detection only once per upload.
 - Browser verification covers TIFF upload and replacement, including previously
   rejected gels, plus the full-frame fallback when a reliable boundary is absent.
   No initial outer-crop controls are displayed.
+
+#### Earlier validation records
+
+These records describe earlier development snapshots. References to removed
+controls, sloping guides, displayed uncertainty warnings, and per-feature test
+counts are historical; the current workflow is described in **Use** above.
 
 Manual ladder browser verification follows the four-lane fixture from upload
 through the optional offer, preset selection, direct lane selection, placement,
@@ -711,8 +743,10 @@ gel files and generated previews are excluded from Git.
 6. Ladder presets and manual size markings (implemented; automatic inference
    remains future work)
 7. Editable lane labels and two group sets (implemented after cropping)
-8. Annotated PNG export (implemented at native crop dimensions); selectable
-   pixel dimensions and print-resolution metadata (DPI) remain future work
+8. Annotated PNG, JPEG, TIFF, and SVG export (implemented). Raster exports retain
+   native pixel dimensions with selectable print-resolution metadata (DPI); SVG
+   keeps annotations as vectors and embeds the raster gel. Resampling to selectable
+   pixel dimensions remains future work.
 
 Build and verify one version at a time. Detection versions will use separate
 tuning and validation gels. Named gel profiles will remain separate from ladder

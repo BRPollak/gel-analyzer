@@ -1,4 +1,5 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
+import {annotationSvg} from "./svg.mjs";
 import {createLadderEditor} from "./ladder.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
 import {cleanText, cleanStyle, labelRuns, textSnapshot, formattingStyle, formatSelection, editText,
@@ -347,6 +348,14 @@ function outerViewportHeight() {
   return heights.length ? Math.min(...heights) : 800;
 }
 
+function availableComponentHeight() {
+  try {
+    const height = window.parent.gelPreviewViewport?.availableHeight(window.frameElement);
+    if (Number.isFinite(height) && height > 0) return height;
+  } catch { /* Cross-origin hosts provide this measurement via gel:viewport. */ }
+  return window.gelPreviewHeight || Math.max(1, outerViewportHeight() - 100);
+}
+
 function updateZoom() {
   if (!layout || byId("editor").hidden) return;
   const viewport = byId("preview-viewport");
@@ -359,19 +368,20 @@ function updateZoom() {
   const paddingX = pixels("paddingLeft") + pixels("paddingRight");
   const insetY = pixels("paddingTop") + pixels("paddingBottom")
     + pixels("borderTopWidth") + pixels("borderBottomWidth");
-  // Measure toolbar, hints, actions, groups and status as rendered; reserve
-  // another 100px for the host header and breathing room around this component.
-  // Ladder controls stack on a phone. Let the page scroll rather than shrink
-  // the image to an unusable strip when those controls fill the screen.
+  // The host measures its title, upload control and filename. Only the actual
+  // remaining space is shared by this preview and its controls.
   const workspace = byId("ladder-workspace");
-  component.style.setProperty("--workspace-budget", `${Math.max(300, outerViewportHeight() - 180)}px`);
-  const budget = annotationPreviewBudget({viewportHeight: outerViewportHeight(),
+  const componentBudget = availableComponentHeight();
+  const outsideWorkspace = component.getBoundingClientRect().height - workspace.getBoundingClientRect().height;
+  component.style.setProperty("--workspace-budget", `${Math.max(1, componentBudget - outsideWorkspace)}px`);
+  const budget = annotationPreviewBudget({viewportHeight: componentBudget,
     componentHeight: component.getBoundingClientRect().height,
     previewHeight: viewport.getBoundingClientRect().height,
     workspaceHeight: workspace.getBoundingClientRect().height,
     sidePanel: window.matchMedia("(min-width: 400px)").matches, insetY,
-    ladderMode: state.mode === "ladder"});
+    ladderMode: state.mode === "ladder", outerReserve: 0, minimumPreview: 1});
   viewport.style.maxHeight = `${budget}px`;
+  viewport.style.height = fit ? `${budget}px` : "";
   const availableWidth = Math.max(1, Math.floor(viewport.clientWidth - paddingX) - 1);
   const availableHeight = Math.max(1, Math.floor(budget - insetY) - 1);
   const scale = fit ? Math.min(1, availableWidth / layout.width, availableHeight / layout.height) : Number(zoom);
@@ -452,7 +462,7 @@ function canvasSnapshot(target, geometry) {
   const png = target.toDataURL("image/png");
   if (!png.startsWith("data:image/png;base64,"))
     throw new Error("The browser could not compose this image. Reduce annotation size and try again.");
-  return {png, width: geometry.width, height: geometry.height,
+  return {png, svg: annotationSvg(geometry), width: geometry.width, height: geometry.height,
     gel_x: geometry.gelX, gel_y: geometry.gelY};
 }
 
@@ -663,6 +673,13 @@ byId("confirm").addEventListener("click", () => finishAction("confirm"));
 
 
 window.addEventListener("message", event => {
+  if (event.source === window.parent && event.data?.type === "gel:viewport") {
+    if (Number.isFinite(event.data.height) && event.data.height > 0) {
+      window.gelPreviewHeight = event.data.height;
+      scheduleZoom();
+    }
+    return;
+  }
   if (event.source !== window.parent || event.data?.type !== "streamlit:render") return;
   const args = event.data.args;
   if (!args || typeof args.token !== "string" || !(args.width > 0 && args.height > 0) || !Array.isArray(args.lanes)) return;

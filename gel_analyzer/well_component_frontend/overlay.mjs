@@ -1,6 +1,6 @@
-import {clipPoint, pointerToImage, readPoints, screenRadius} from "./geometry.mjs";
+import {clipPoint, moveGuideEndpoint, pointerToImage, readPoints, screenRadius} from "./geometry.mjs";
 import {createLaneReview} from "./lane_review.mjs";
-import {fitPreviewGeometry, outerViewportHeight} from "./fit_geometry.mjs";
+import {fitPreviewGeometry, outerViewportHeight, outerViewportReserve} from "./fit_geometry.mjs";
 
 // Streamlit's documented v1 component postMessage protocol. No CDN, external
 // runtime, network service, or image processing is used in this iframe.
@@ -68,7 +68,7 @@ function fitPreview() {
     px(wrapStyle.marginTop) + px(wrapStyle.marginBottom);
   const fit = fitPreviewGeometry({imageWidth: state.width, imageHeight: state.height,
     availableWidth: Math.max(1, component.clientWidth - horizontalPadding),
-    viewportHeight: outerViewportHeight(window), chromeHeight,
+    viewportHeight: outerViewportHeight(window), outerReserve: outerViewportReserve(window), chromeHeight,
     reviewMode: state.reviewMode, laneCount: state.lanes.length});
   wrap.style.width = `${fit.wrapperWidth}px`;
   wrap.style.maxWidth = `${state.width + fit.rightGutter}px`;
@@ -107,7 +107,7 @@ function drawGuide() {
     handle.setAttribute("aria-disabled", String(!state.editable));
     if (!point) return;
     handle.setAttribute("transform", `translate(${point[0]} ${point[1]})`);
-    handle.setAttribute("aria-label", `Endpoint ${index + 1}, x ${point[0].toFixed(1)}, y ${point[1].toFixed(1)}. Use arrow keys to adjust; Shift moves ten pixels.`);
+    handle.setAttribute("aria-label", `Endpoint ${index + 1}, x ${point[0].toFixed(1)}, y ${point[1].toFixed(1)}. Up and Down adjust this endpoint; Left and Right move the vertical line. Shift moves ten pixels.`);
     handle.dataset.x = point[0];
     handle.dataset.y = point[1];
     handle.querySelector(".hit").setAttribute("r", screenRadius(18, rect, state.width));
@@ -132,12 +132,12 @@ function drawGuide() {
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
     : !state.editable
-    ? "Detected wells and horizontal lanes. Choose Edit well line to adjust the selection."
+    ? "Detected wells and horizontal lanes."
     : state.points.length === 0
       ? "Click the top edge of the first well and the bottom edge of the last well, in either order."
       : state.points.length === 1
-        ? "Click the other end of the well range. Drag either dot to adjust its position."
-        : "Drag the dots so the dotted line passes through the well centers, then confirm the line. Arrow keys also adjust a focused dot.";
+        ? "Click the other end of the well range. The line stays vertical."
+        : "Drag either dot to adjust the range or move the vertical line sideways. Arrow keys also adjust a focused dot.";
   if (status.textContent !== instructions) {
     status.textContent = instructions;
     scheduleFit();
@@ -189,7 +189,7 @@ svg.addEventListener("pointerdown", event => {
     if (!state.points[index]) return;
     event.preventDefault();
     handle.focus();
-    drag = {index, pointerId: event.pointerId, original: [...state.points[index]],
+    drag = {index, pointerId: event.pointerId, original: state.points.map(point => [...point]),
       wells: state.wells, lanes: state.lanes};
     svg.setPointerCapture(event.pointerId);
     svg.dataset.dragging = "true";
@@ -197,7 +197,7 @@ svg.addEventListener("pointerdown", event => {
     const point = pointerPosition(event);
     if (!point) return;
     event.preventDefault();
-    state.points.push(point);
+    state.points = readPoints([...state.points, point], state.width, state.height);
     invalidateResults();
     drawGuide();
     emitPoints();
@@ -209,7 +209,7 @@ svg.addEventListener("pointermove", event => {
   const point = pointerPosition(event);
   if (!point) return;
   if (point.some((coordinate, index) => coordinate !== state.points[drag.index][index])) invalidateResults();
-  state.points[drag.index] = point;
+  state.points = moveGuideEndpoint(state.points, drag.index, point, state.width, state.height);
   drawGuide(); // The bridge is deliberately silent until pointerup.
 });
 
@@ -219,13 +219,14 @@ function finishDrag(event, cancelled) {
   drag = null;
   svg.dataset.dragging = "false";
   if (cancelled) {
-    state.points[active.index] = active.original;
+    state.points = active.original;
     state.wells = active.wells;
     state.lanes = active.lanes;
     drawResults();
   } else {
-    state.points[active.index] = pointerPosition(event) || state.points[active.index];
-    if (state.points[active.index].some((coordinate, index) => coordinate !== active.original[index])) invalidateResults();
+    state.points = moveGuideEndpoint(state.points, active.index,
+      pointerPosition(event) || state.points[active.index], state.width, state.height);
+    if (state.points[active.index].some((coordinate, index) => coordinate !== active.original[active.index][index])) invalidateResults();
   }
   if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
   drawGuide();
@@ -245,13 +246,21 @@ svg.addEventListener("keydown", event => {
   if (!point) return;
   event.preventDefault();
   const step = event.shiftKey ? 10 : 1;
-  state.points[index] = clipPoint([point[0] + direction[0] * step, point[1] + direction[1] * step], state.width, state.height);
+  state.points = moveGuideEndpoint(state.points, index,
+    [point[0] + direction[0] * step, point[1] + direction[1] * step], state.width, state.height);
   invalidateResults();
   drawGuide();
   emitPoints();
 });
 
 window.addEventListener("message", event => {
+  if (event.source === window.parent && event.data?.type === "gel:viewport") {
+    if (Number.isFinite(event.data.height) && event.data.height > 0) {
+      window.gelPreviewHeight = event.data.height;
+      scheduleFit();
+    }
+    return;
+  }
   if (event.source !== window.parent || event.data?.type !== "streamlit:render") return;
   const args = event.data.args;
   if (!args || typeof args.token !== "string" || !(args.width > 0 && args.height > 0)) return;
@@ -277,18 +286,24 @@ window.addEventListener("message", event => {
     image.setAttribute("href", args.image_src);
     review.reset();
   }
-  // Never overwrite local points for an existing token: a rerun can carry an
-  // older snapshot while the pointer is down. Results may update independently.
+  // A frozen result can only become editable again with a new token. Ignore
+  // editable renders that were queued before confirmation completed.
+  if (!state.reviewMode && state.editable === false && args.editable) return;
   state.editable = Boolean(args.editable);
   if (!state.reviewMode) {
+    if (!state.editable) {
+      // Detection may finish after another local edit. Its confirmed guide is
+      // authoritative so the corresponding outlines remain visible.
+      const pointerId = drag?.pointerId;
+      drag = null;
+      svg.dataset.dragging = "false";
+      if (pointerId !== undefined && svg.hasPointerCapture(pointerId)) svg.releasePointerCapture(pointerId);
+      state.points = readPoints(args.points, state.width, state.height);
+    }
+    // While editing, preserve local points against older snapshots from reruns.
     const matchingPoints = JSON.stringify(readPoints(args.points, state.width, state.height)) === JSON.stringify(state.points);
     state.wells = !drag && matchingPoints && Array.isArray(args.wells) ? args.wells : [];
     state.lanes = !drag && matchingPoints && Array.isArray(args.lanes) ? args.lanes : [];
-  }
-  if (!state.editable && drag) {
-    state.points[drag.index] = drag.original;
-    drag = null;
-    svg.dataset.dragging = "false";
   }
   repaint();
   requestAnimationFrame(resizeFrame);

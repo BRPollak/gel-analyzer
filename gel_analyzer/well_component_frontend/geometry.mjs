@@ -19,7 +19,16 @@ export function readPoints(points, width, height) {
   if (!Array.isArray(points) || points.length > 2) return [];
   if (!points.every(point => Array.isArray(point) && point.length === 2 &&
       point.every(Number.isFinite))) return [];
-  return points.map(point => clipPoint(point, width, height));
+  const clipped = points.map(point => clipPoint(point, width, height));
+  // Orientation makes wells vertical. The first selection anchors the shared
+  // x coordinate, including when loading an older, angled guide.
+  return clipped.map(point => [clipped[0][0], point[1]]);
+}
+
+/** Move either endpoint while translating the whole vertical guide in x. */
+export function moveGuideEndpoint(points, index, point, width, height) {
+  const clipped = clipPoint(point, width, height);
+  return points.map((existing, candidate) => [clipped[0], candidate === index ? clipped[1] : existing[1]]);
 }
 
 /** Keep handles equally easy to grab at every responsive image scale. */
