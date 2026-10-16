@@ -75,7 +75,7 @@
       revealOnce(img, img.currentSrc || img.src, img.getBoundingClientRect(), workspace || img);
     });
 
-    document.querySelectorAll('iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"]').forEach(frame => {
+    document.querySelectorAll('iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"]').forEach(frame => {
       try {
         const doc = frame.contentDocument;
         const component = doc?.getElementById("component");

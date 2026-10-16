@@ -1,7 +1,7 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
 import {createLadderEditor} from "./ladder.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
-import {cleanText, cleanStyle, labelRuns, textSnapshot, selectionStyle, formatSelection, editText,
+import {cleanText, cleanStyle, labelRuns, textSnapshot, formattingStyle, formatSelection, editText,
   readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
 
 // Streamlit's v1 component protocol keeps the editor self-contained and offline.
@@ -11,6 +11,12 @@ const canvas = byId("preview");
 const inputLayer = byId("label-inputs");
 const seenTokens = new Set();
 const inputNodes = new Map();
+const COLOR_PRESETS = [
+  {name: "Black", color: "#000000"}, {name: "Gray", color: "#666666"},
+  {name: "Red", color: "#dc2626"}, {name: "Orange", color: "#ea580c"},
+  {name: "Yellow", color: "#eab308"}, {name: "Green", color: "#15803d"},
+  {name: "Blue", color: "#2563eb"}, {name: "Purple", color: "#9333ea"},
+];
 let state = null;
 let image = null;
 let layout = null;
@@ -105,16 +111,24 @@ function syncToolbar() {
   const value = selectedLabel();
   const isGroup = selected.startsWith("group:");
   const range = textSelection?.key === selected ? textSelection : null;
-  const style = value ? selectionStyle(value, isGroup ? "label" : "text", range?.start, range?.end) : {};
+  const style = value ? formattingStyle(value, isGroup ? "label" : "text", range) : {};
   byId("selection-name").textContent = !value ? "Select a label"
     : isGroup ? `Group · set ${value.set + 1}` : `Lane ${Number(selected.slice(5)) + 1}`;
   byId("bold").setAttribute("aria-pressed", String(style.bold === true));
   byId("italic").setAttribute("aria-pressed", String(style.italic === true));
-  setValue(byId("color"), style.color || "#000000");
-  byId("color").title = style.mixedColor ? "Mixed text colors; choose a color for the selection" : "Text color";
+  byId("formatting-scope").textContent = range && range.start !== range.end
+    ? "Formatting: selected text" : "Formatting: whole label";
+  // Older lane labels use near-black; present those as Black without changing saved colors.
+  const color = style.color?.toLowerCase() === "#202020" ? "#000000" : style.color?.toLowerCase();
+  const preset = COLOR_PRESETS.find(preset => preset.color === color);
+  byId("color-state").textContent = !value ? "" : style.mixedColor ? "· Mixed" : preset ? `· ${preset.name}` : "· Saved color";
+  byId("color-presets").querySelectorAll("button").forEach(button => {
+    button.setAttribute("aria-pressed", String(!style.mixedColor && color === button.dataset.color));
+    button.disabled = confirming || !value;
+  });
   setValue(byId("font-size"), state.annotations.fontSize);
   byId("edit-selected-group").hidden = !value || !isGroup;
-  for (const name of ["bold", "italic", "color"]) byId(name).disabled = confirming || !value;
+  for (const name of ["bold", "italic"]) byId(name).disabled = confirming || !value;
   for (const [key, node] of inputNodes) node.dataset.selected = String(key === selected);
 }
 
@@ -208,7 +222,9 @@ function rememberEdit(key) {
 
 function captureSelection() {
   const node = inputNodes.get(selected);
-  const range = node && readSelection(node);
+  // A rerender can collapse an unfocused DOM selection. Keep the saved range
+  // while keyboard users move through the toolbar instead of replacing it.
+  const range = node && document.activeElement === node && readSelection(node);
   if (range) textSelection = {key: selected, ...range};
   syncToolbar();
 }
@@ -514,29 +530,45 @@ document.addEventListener("selectionchange", () => { if (state) captureSelection
 function applyFormat(name, explicitValue) {
   const label = selectedLabel();
   if (!label || confirming) return;
+  // Read the current DOM range as well as the cached range: selectionchange
+  // can arrive after a quick toolbar click or keyboard formatting shortcut.
+  captureSelection();
   const key = selected.startsWith("lane:") ? "text" : "label";
   const range = textSelection?.key === selected ? textSelection : null;
   rememberEdit(selected);
   formatSelection(label, key, range, name, explicitValue);
   changed();
-  // Keep the range through toolbar focus and color-picker events. Keyboard
-  // users can tab back to the label without losing the formatted substring.
+  // Keep the range highlighted for pointer users; keyboard users retain the
+  // cached range while moving among toolbar controls.
   const node = inputNodes.get(selected);
   if (node && document.activeElement === node) restoreSelection(node, range);
 }
 
-for (const name of ["bold", "italic"]) {
-  byId(name).addEventListener("pointerdown", event => {
-    // Keep the text caret and selection when using the mouse to format a label.
+function bindFormatButton(button, name, value) {
+  button.addEventListener("pointerdown", event => {
+    captureSelection();
+    // Keep the highlighted substring when using a mouse or touch to format it.
     if (inputLayer.contains(document.activeElement)) event.preventDefault();
   });
-  byId(name).addEventListener("click", () => {
-    applyFormat(name);
-  });
+  button.addEventListener("click", () => applyFormat(name, value));
 }
-byId("color").addEventListener("input", event => {
-  applyFormat("color", event.target.value);
-});
+for (const name of ["bold", "italic"]) bindFormatButton(byId(name), name);
+for (const preset of COLOR_PRESETS) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "color-preset";
+  button.dataset.color = preset.color;
+  button.setAttribute("aria-label", `${preset.name} text color`);
+  button.setAttribute("aria-pressed", "false");
+  button.title = preset.name;
+  const swatch = document.createElement("span");
+  swatch.className = "color-swatch";
+  swatch.style.setProperty("--swatch-color", preset.color);
+  swatch.setAttribute("aria-hidden", "true");
+  button.append(swatch, document.createTextNode(preset.name));
+  bindFormatButton(button, "color", preset.color);
+  byId("color-presets").appendChild(button);
+}
 byId("font-size").addEventListener("change", event => {
   state.annotations.fontSize = Math.max(1, Math.min(4096,
     Math.round(Number(event.target.value) || defaultFontSize(state.lanes))));

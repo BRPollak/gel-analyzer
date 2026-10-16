@@ -13,7 +13,7 @@ from gel_analyzer.image_io import (
 from gel_analyzer.orientation import OrientationError
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
-from gel_analyzer import lane_review_ui
+from gel_analyzer import lane_review_ui, orientation_ui
 from gel_analyzer.viewport import install_preview_viewport
 
 
@@ -205,11 +205,13 @@ def reset_orientation() -> None:
     st.session_state.orientation_preview = None
     st.session_state.orientation_requested = False
     st.session_state.orientation_error = None
+    orientation_ui.reset_manual_orientation()
     st.session_state.well_expected_count = None
     reset_wells()
 
 
 def request_orientation() -> None:
+    orientation_ui.reset_manual_orientation()
     st.session_state.well_expected_count = None
     reset_wells()
     st.session_state.orientation_requested = True
@@ -261,6 +263,8 @@ def main() -> None:
     st.session_state.setdefault("well_expected_count", None)
     if "well_token" not in st.session_state:
         reset_wells()
+    if "orientation_token" not in st.session_state:
+        orientation_ui.reset_manual_orientation()
     if "lane_stage" not in st.session_state:
         lane_review_ui.reset_lane_review()
 
@@ -307,6 +311,7 @@ def main() -> None:
                 )
             except OrientationError as exc:
                 st.session_state.orientation_error = str(exc)
+                orientation_ui.start_manual_orientation()
 
     request = st.session_state.well_detection_request
     st.session_state.well_detection_request = None
@@ -344,7 +349,7 @@ def main() -> None:
             return
 
         pending: GelImage | None = st.session_state.orientation_preview
-        gel = pending if pending is not None else current_gel
+        gel = pending if pending is not None and not st.session_state.orientation_manual else current_gel
         final_crop = st.session_state.lane_crop if st.session_state.lane_stage == "cropped" else None
         visible_width = final_crop.width if final_crop else gel.preview_width
         visible_height = final_crop.height if final_crop else gel.preview_height
@@ -369,7 +374,11 @@ def main() -> None:
             image_panel, controls_column = st.columns([3.2, 1.15], gap="large")
             with controls_column:
                 controls_panel = st.container(border=True, key="gel_workflow_controls")
-            if confirmed_gel() is not None and st.session_state.lane_stage is not None:
+            if st.session_state.orientation_manual:
+                orientation_ui.show_manual_orientation(
+                    current_gel, image_panel, controls_panel, request_orientation,
+                )
+            elif confirmed_gel() is not None and st.session_state.lane_stage is not None:
                 lane_review_ui.show_lane_review(
                     current_gel, image_panel=image_panel, controls_panel=controls_panel,
                 )
@@ -398,8 +407,8 @@ def main() -> None:
                         if pending is not None:
                             st.caption(
                                 "The gel has been straightened, rotated, flipped vertically, "
-                                "and cropped. The original left side is now at the top. "
-                                "Confirm this preview to continue."
+                                "and cropped. Inspect the result, then confirm this preview "
+                                "or adjust the outline manually."
                             )
                         else:
                             st.caption("Orientation confirmed. Define the wells to detect your lanes.")
@@ -420,6 +429,11 @@ def main() -> None:
                                 "Confirm", key="confirm_orientation", type="primary",
                                 on_click=confirm_orientation,
                             )
+                        st.button(
+                            "Adjust outline manually" if pending is not None else "Draw outline manually",
+                            key="adjust_orientation_manually",
+                            on_click=orientation_ui.start_manual_orientation,
+                        )
                         st.button(
                             "Rotate and Orient", key="rotate_and_orient",
                             type="secondary" if pending is not None else "primary",

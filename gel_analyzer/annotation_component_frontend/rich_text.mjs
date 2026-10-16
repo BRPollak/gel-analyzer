@@ -48,6 +48,12 @@ export function selectionStyle(value, key, start = 0, end = value[key].length) {
     mixedColor: selected.some(run => run.color !== first.color)};
 }
 
+/** Toolbar actions with only a caret apply to the complete label. */
+export function formattingStyle(value, key, range) {
+  return range && range.start !== range.end
+    ? selectionStyle(value, key, range.start, range.end) : selectionStyle(value, key);
+}
+
 export function formatRange(value, key, start, end, patch) {
   const text = value[key];
   // A caret (or a toolbar selection without a range) retains whole-label formatting.
@@ -57,9 +63,9 @@ export function formatRange(value, key, start, end, patch) {
     ...sliceRuns(runs, start, end).map(run => ({...run, ...patch})), ...sliceRuns(runs, end, text.length)]);
 }
 
-/** A missing saved range uses the same whole-label state as the toolbar. */
+/** Use the same selection or whole-label state as the toolbar. */
 export function formatSelection(value, key, range, name, explicitValue) {
-  const style = selectionStyle(value, key, range?.start, range?.end);
+  const style = formattingStyle(value, key, range);
   formatRange(value, key, range?.start ?? 0, range?.end ?? 0,
     {[name]: explicitValue ?? !style[name]});
 }
@@ -112,7 +118,9 @@ export function renderRuns(node, value, key) {
   const runs = labelRuns(value, key);
   const signature = JSON.stringify(runs);
   if (node.dataset.runs === signature && node.textContent === value[key]) return;
-  const saved = readSelection(node);
+  // Restoring a contenteditable range also focuses it in Chromium. Leave focus
+  // on a keyboard-activated toolbar button; the editor retains its saved range.
+  const saved = document.activeElement === node ? readSelection(node) : null;
   node.replaceChildren(...runs.map(run => {
     const span = document.createElement("span");
     span.textContent = run.text;
