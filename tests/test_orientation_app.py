@@ -78,7 +78,9 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     assert app.session_state["gel_image"] is first_crop
     assert app.text[0].value == "gel.tif · 9 × 15 pixels"
     assert app.get("image")[0].proto != first_preview
-    assert {"rotate_and_orient", "confirm_orientation"} <= button_keys(app)
+    assert "confirm_orientation" in button_keys(app)
+    assert "rotate_and_orient" not in button_keys(app)
+    assert app.session_state["orientation_preview_method"] == "automatic"
     assert "adjust_orientation_manually" in button_keys(app)
     assert len(orientation_calls) == 1
     staged_preview = app.get("image")[0].proto
@@ -86,13 +88,6 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     app.run()
     assert len(orientation_calls) == 1
     assert app.session_state["orientation_preview"] is candidate
-
-    # A second click starts with the first crop again instead of compounding
-    # the rotation or flip on the image currently visible in the preview.
-    app.button(key="rotate_and_orient").click().run()
-    assert orientation_calls == [orientation_calls[0], orientation_calls[0]]
-    assert app.session_state["gel_image"] is first_crop
-    assert app.session_state["orientation_preview"].preview_png == candidate.preview_png
 
     app.button(key="confirm_orientation").click().run()
 
@@ -109,7 +104,7 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     app.run()
     assert app.session_state["gel_image"] is accepted
     assert app.get("image")[0].proto == staged_preview
-    assert len(orientation_calls) == 2
+    assert len(orientation_calls) == 1
 
 
 def test_failed_orientation_restores_first_crop_and_can_be_retried(
@@ -125,6 +120,8 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
         raise OrientationError("The gel outline could not be fitted confidently.")
 
     monkeypatch.setattr(image_io, "orient_gel", fail)
+    app.button(key="adjust_orientation_manually").click().run()
+    assert app.button(key="rotate_and_orient").label == "Automatic orientation"
     app.button(key="rotate_and_orient").click().run()
 
     assert not app.exception

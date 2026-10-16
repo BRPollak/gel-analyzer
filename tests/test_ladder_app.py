@@ -7,6 +7,7 @@ import pytest
 from gel_analyzer.ladders import LadderError, load_presets
 from test_annotation_app import annotated, annotation_event, crop_gel
 from test_annotations import composition
+from test_annotation_exports import vector_event
 from test_lane_app import keys, lane_event, upload, workflow
 
 
@@ -73,6 +74,24 @@ def test_lane_confirmation_offers_ladder_and_skip_preserves_lane_only_image(anno
     assert app.get("download_button")[0].label == "Download annotated PNG"
     assert crop.preview_png == original
     assert app.session_state["gel_image"].source_bytes == source
+
+
+def test_ladder_vectors_replace_and_restore_lane_only_vectors(annotated):
+    crop = crop_gel(annotated)
+    annotation_event(annotated, action="confirm", **vector_event(crop))
+    app = annotated.app
+    lane_svg = app.session_state["annotation_svg"]
+    app.button(key="annotate_ladder").click().run()
+    event = vector_event(crop)
+    event["svg"] = event["svg"].replace("α &amp; β", "Ladder")
+    ladder_event(annotated, action="confirm", **event)
+    assert app.session_state["annotation_svg"] != lane_svg
+    assert b">Ladder</text>" in app.session_state["annotation_svg"]
+    assert app.session_state["annotation_base_svg"] == lane_svg
+    app.button(key="edit_ladder").click().run()
+    ladder_event(annotated, action="remove")
+    assert not app.exception
+    assert app.session_state["annotation_svg"] == lane_svg
 
 
 def test_opening_ladder_keeps_existing_annotations_and_starts_without_implicit_preset(annotated):

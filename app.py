@@ -85,12 +85,24 @@ def accept_well_event(event: object, gel: GelImage) -> None:
             return
     st.session_state.well_revision = revision
     new_points = tuple(tuple(float(value) for value in point) for point in points)
+    if len(new_points) == 2:
+        new_points = (new_points[0], (new_points[0][0], new_points[1][1]))
     if new_points != st.session_state.well_points:
         st.session_state.well_points = new_points
         st.session_state.well_result = None
         st.session_state.well_error = None
         st.session_state.well_detection_request = None
         lane_review_ui.reset_lane_review()
+
+
+def leave_well_selection() -> None:
+    """Retain a completed pointer edit even when Back arrives in the same run."""
+    gel = confirmed_gel()
+    if gel is not None:
+        accept_well_event(
+            st.session_state.get(f"well_overlay_{st.session_state.well_token}"), gel,
+        )
+    reset_wells(preserve_points=True)
 
 
 def start_lane_adjustment() -> None:
@@ -102,14 +114,14 @@ def start_lane_adjustment() -> None:
     lane_review_ui.start_lane_review()
 
 
-def start_lane_addition() -> None:
+def confirm_detected_lanes() -> None:
     start_lane_adjustment()
-    lane_review_ui.add_lane()
+    lane_review_ui.confirm_lane_borders()
 
 
-def change_expected_lane_count() -> None:
-    """A new count needs fresh detection but keeps the guide for confirmation."""
-    count = st.session_state.expected_lane_count
+def change_expected_well_count() -> None:
+    """Keep the latest guide while invalidating detection for a new count."""
+    count = st.session_state.expected_well_count
     if count == st.session_state.well_expected_count:
         return
     gel = confirmed_gel()
@@ -121,15 +133,15 @@ def change_expected_lane_count() -> None:
     reset_wells(editing=gel is not None, preserve_points=True)
 
 
-def show_expected_lane_count() -> None:
-    # Keep this preference independently of widget state: the field is hidden
-    # while orientation is pending, and Streamlit removes hidden widget keys.
-    st.session_state.expected_lane_count = st.session_state.well_expected_count
+def show_expected_well_count() -> None:
+    # Preserve the preference when Streamlit cleans up the hidden widget during
+    # result review, lane adjustment, or navigation out of the guide editor.
+    st.session_state.expected_well_count = st.session_state.well_expected_count
     st.number_input(
-        "Expected number of lanes (optional)", min_value=1, value=None, step=1,
-        placeholder="Automatic", key="expected_lane_count",
-        on_change=change_expected_lane_count,
-        help="Count the lanes crossed by the guide. Leave blank to detect automatically.",
+        "Expected number of wells (optional)", min_value=1, value=None, step=1,
+        placeholder="Automatic", key="expected_well_count",
+        on_change=change_expected_well_count,
+        help="Count the wells crossed by the guide. Leave blank for automatic detection.",
     )
 
 
@@ -152,38 +164,30 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             st.rerun()
     with controls_panel:
         st.subheader("Define wells")
-        st.caption(
-            "Click the top of the first well and the bottom of the last well, "
-            "passing through their centers. Drag either dot to adjust the line."
-        )
         result = st.session_state.well_result
         if result is not None:
             count = len(result.wells)
-            if result.warnings:
-                st.write(f"{count} well candidate{'s' if count != 1 else ''} detected; review required.")
-                for warning in result.warnings:
-                    st.warning(warning)
-            elif count:
-                st.success(f"Detected {count} well{'s' if count != 1 else ''} and {count} horizontal lane{'s' if count != 1 else ''}.")
-            else:
-                st.warning("No wells found. Move the line through the visible well centers and retry.")
-            st.caption("Visible wells do not establish whether a sample was loaded. Numbers run from top to bottom.")
-            if count:
-                st.button(
-                    "Adjust lane borders", key="adjust_lane_borders", type="primary",
-                    on_click=start_lane_adjustment,
-                )
-            st.button("Add lane", key="add_lane", on_click=start_lane_addition)
+            st.write(f"Detected {count} well{'s' if count != 1 else ''} and {count} horizontal lane{'s' if count != 1 else ''}.")
+            st.button(
+                "Confirm", key="confirm_detected_lanes", type="primary",
+                on_click=confirm_detected_lanes, disabled=not count,
+            )
+            st.button("Adjust", key="adjust_lane_borders", on_click=start_lane_adjustment)
             if st.session_state.lane_error:
                 st.warning(st.session_state.lane_error)
             st.button(
-                "Edit well line", key="edit_well_line", on_click=reset_wells,
+                "Back", key="edit_well_line", on_click=reset_wells,
                 kwargs={"editing": True, "preserve_points": True},
             )
+            return
+        st.caption(
+            "Click the top and bottom of the well range. "
+            "Drag either dot to move or extend the vertical guide."
+        )
         if st.session_state.well_error:
             st.warning(st.session_state.well_error)
-        show_expected_lane_count()
         if st.session_state.well_editing:
+            show_expected_well_count()
             valid = False
             try:
                 validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
@@ -191,12 +195,11 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             except SelectionError as exc:
                 st.info(str(exc))
             st.button(
-                "Confirm line and detect lanes", key="confirm_well_line", type="primary",
+                "Confirm", key="confirm_well_line", type="primary",
                 disabled=not valid, on_click=request_well_detection,
             )
             st.button(
-                "Reset points", key="reset_well_line", on_click=reset_wells,
-                kwargs={"editing": True},
+                "Back", key="back_from_well_line", on_click=leave_well_selection,
             )
 
 
@@ -205,6 +208,7 @@ def reset_orientation() -> None:
     st.session_state.orientation_preview = None
     st.session_state.orientation_requested = False
     st.session_state.orientation_error = None
+    st.session_state.orientation_preview_method = None
     orientation_ui.reset_manual_orientation()
     st.session_state.well_expected_count = None
     reset_wells()
@@ -216,6 +220,7 @@ def request_orientation() -> None:
     reset_wells()
     st.session_state.orientation_requested = True
     st.session_state.orientation_error = None
+    st.session_state.orientation_preview_method = None
 
 
 def confirm_orientation() -> None:
@@ -260,6 +265,7 @@ def main() -> None:
     st.session_state.setdefault("orientation_preview", None)
     st.session_state.setdefault("orientation_requested", False)
     st.session_state.setdefault("orientation_error", None)
+    st.session_state.setdefault("orientation_preview_method", None)
     st.session_state.setdefault("well_expected_count", None)
     if "well_token" not in st.session_state:
         reset_wells()
@@ -309,6 +315,7 @@ def main() -> None:
                 st.session_state.orientation_preview = orient_gel_image(
                     st.session_state.gel_image
                 )
+                st.session_state.orientation_preview_method = "automatic"
             except OrientationError as exc:
                 st.session_state.orientation_error = str(exc)
                 orientation_ui.start_manual_orientation()
@@ -334,7 +341,7 @@ def main() -> None:
                             if expected_count is not None else detect_wells(analysis_source, points)
                         )
                     st.session_state.well_result = result
-                    st.session_state.well_editing = bool(result.warnings or not result.wells)
+                    st.session_state.well_editing = False
                 except (SelectionError, ValueError) as exc:
                     st.session_state.well_error = str(exc)
                     st.session_state.well_editing = True
@@ -362,7 +369,6 @@ def main() -> None:
                     "Revise lanes and crop", key="revise_lane_crop",
                     on_click=lane_review_ui.back_to_lane_borders,
                 )
-                show_expected_lane_count()
                 st.button(
                     "Edit well line", key="edit_well_line", on_click=reset_wells,
                     kwargs={"editing": True, "preserve_points": True},
@@ -383,12 +389,12 @@ def main() -> None:
                     current_gel, image_panel=image_panel, controls_panel=controls_panel,
                 )
                 with controls_panel:
-                    with st.expander("Lane detection settings"):
-                        show_expected_lane_count()
-                    st.button(
-                        "Edit well line", key="edit_well_line", on_click=reset_wells,
-                        kwargs={"editing": True, "preserve_points": True},
-                    )
+                    if st.session_state.lane_stage == "borders":
+                        st.button(
+                            "Edit well line", key="edit_well_line", on_click=reset_wells,
+                            kwargs={"editing": True, "preserve_points": True},
+                        )
+                        st.button("Back", key="back_to_well_review", on_click=lane_review_ui.back_to_well_review)
             elif confirmed_gel() is not None and (
                 st.session_state.well_editing or st.session_state.well_result is not None
             ):
@@ -419,7 +425,7 @@ def main() -> None:
                     if confirmed_gel() is not None:
                         st.button(
                             "Define wells", key="define_wells", type="primary", on_click=reset_wells,
-                            kwargs={"editing": True},
+                            kwargs={"editing": True, "preserve_points": True},
                         )
                     if st.session_state.orientation_error:
                         st.error(st.session_state.orientation_error)
@@ -434,12 +440,14 @@ def main() -> None:
                             key="adjust_orientation_manually",
                             on_click=orientation_ui.start_manual_orientation,
                         )
-                        st.button(
-                            "Rotate and Orient", key="rotate_and_orient",
-                            type="secondary" if pending is not None else "primary",
-                            on_click=request_orientation,
-                            help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
-                        )
+                        if pending is None or st.session_state.orientation_preview_method == "manual":
+                            st.button(
+                                "Automatic orientation" if pending is not None else "Rotate and Orient",
+                                key="rotate_and_orient",
+                                type="secondary" if pending is not None else "primary",
+                                on_click=request_orientation,
+                                help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
+                            )
 
 
 if __name__ == "__main__":

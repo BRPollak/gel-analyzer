@@ -10,6 +10,7 @@ import streamlit as st
 from .annotations import (
     AnnotationError, default_annotations, default_label, validate_annotations, validate_composition,
 )
+from .annotation_exports import EXPORT_FORMATS, export_composition, validate_svg_composition
 from .ladders import load_presets, validate_ladder
 
 
@@ -24,8 +25,10 @@ def invalidate_confirmation() -> None:
     _new_event_identity()
     st.session_state.annotation_stage = "lanes"
     st.session_state.annotation_png = None
+    st.session_state.annotation_svg = None
     st.session_state.annotation_dimensions = None
     st.session_state.annotation_base_png = None
+    st.session_state.annotation_base_svg = None
     st.session_state.annotation_base_dimensions = None
     st.session_state.ladder_draft = None
 
@@ -98,14 +101,18 @@ def accept_annotation_event(event: object, crop) -> bool:
         st.session_state.annotation_data = data
         if event["action"] == "confirm":
             png = validate_composition(event, crop)
+            svg = validate_svg_composition(event, crop)
             base = event.get("base") if st.session_state.get("ladder_data") else event
             if not isinstance(base, dict):
                 raise AnnotationError("The lane-only image could not be composed. Please try again.")
             base_png = validate_composition(base, crop)
+            base_svg = svg if base is event else validate_svg_composition(base, crop)
             # Do not publish either output until both compositions are valid.
             st.session_state.annotation_base_png = base_png
+            st.session_state.annotation_base_svg = base_svg
             st.session_state.annotation_base_dimensions = (base["width"], base["height"])
             st.session_state.annotation_png = png
+            st.session_state.annotation_svg = svg
             st.session_state.annotation_dimensions = (event["width"], event["height"])
             st.session_state.annotation_stage = (
                 "final" if st.session_state.annotation_completed else "ladder_offer"
@@ -120,6 +127,7 @@ def _finish_ladder(*, discard=False) -> None:
     if discard:
         st.session_state.ladder_data = None
         st.session_state.annotation_png = st.session_state.annotation_base_png
+        st.session_state.annotation_svg = st.session_state.get("annotation_base_svg")
         st.session_state.annotation_dimensions = st.session_state.annotation_base_dimensions
     st.session_state.ladder_draft = None
     st.session_state.annotation_stage = "final"
@@ -158,8 +166,10 @@ def accept_ladder_event(event: object, crop) -> bool:
         if event["action"] == "confirm":
             checked = validate_ladder(draft, crop, complete=True)
             png = validate_composition(event, crop)
+            svg = validate_svg_composition(event, crop)
             st.session_state.ladder_data = checked
             st.session_state.annotation_png = png
+            st.session_state.annotation_svg = svg
             st.session_state.annotation_dimensions = (event["width"], event["height"])
             _finish_ladder()
         st.session_state.annotation_error = None
@@ -192,7 +202,8 @@ def show_annotations(crop, filename: str) -> None:
     if st.session_state.annotation_data is None:
         st.session_state.annotation_data = default_annotations(len(crop.lanes), crop.lanes)
     stage = st.session_state.annotation_stage
-    st.subheader("4. Annotate ladder" if stage == "ladder" else "3. Annotate lanes")
+    if stage != "final":
+        st.subheader("4. Annotate ladder" if stage == "ladder" else "3. Annotate lanes")
     if st.session_state.ladder_notice:
         st.info(st.session_state.ladder_notice)
     if stage in ("ladder_offer", "final"):
@@ -202,21 +213,48 @@ def show_annotations(crop, filename: str) -> None:
             with image_panel:
                 st.image(BytesIO(st.session_state.annotation_png), width=width, output_format="PNG")
             with controls_column, st.container(border=True, key="gel_workflow_controls"):
-                st.success(f"Annotations confirmed · {width:,} × {height:,} pixels")
                 if stage == "ladder_offer":
+                    st.success(f"Annotations confirmed · {width:,} × {height:,} pixels")
                     st.write("Would you like to annotate a ladder?")
                     st.button("Annotate ladder", key="annotate_ladder", type="primary", on_click=start_ladder)
                     st.button("Skip", key="skip_ladder", on_click=skip_ladder)
+                    st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
                 else:
-                    st.download_button(
-                        "Download annotated PNG", data=st.session_state.annotation_png,
-                        file_name=f"{Path(filename).stem}-annotated.png", mime="image/png",
-                        key="download_annotations", type="primary",
+                    with st.container(key="gel_export_options"):
+                        image_format = st.selectbox("Image file type", list(EXPORT_FORMATS),
+                                                    key="annotation_export_format")
+                        specification = EXPORT_FORMATS[image_format]
+                        if image_format == "SVG":
+                            st.selectbox("Resolution (DPI)", ["Vector · resolution independent"],
+                                         disabled=True, key="annotation_export_vector_resolution")
+                            dpi = None
+                        else:
+                            dpi = st.selectbox("Resolution (DPI)", specification["dpi"],
+                                               index=specification["dpi"].index(300),
+                                               key=f"annotation_export_dpi_{image_format}")
+                        st.caption(f"Annotations confirmed · {width:,} × {height:,} pixels")
+                        if image_format == "SVG":
+                            st.caption("SVG keeps labels and brackets as vectors and embeds the gel at its original pixel resolution."
+                                       if st.session_state.get("annotation_svg") else
+                                       "This SVG embeds the confirmed image. Edit and reconfirm annotations for vector labels and brackets.")
+                        else:
+                            st.caption("DPI sets print size; pixel dimensions stay unchanged."
+                                       + (" JPEG uses lossy compression." if image_format == "JPEG" else ""))
+                        st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
+                                  key="edit_ladder", on_click=start_ladder)
+                        st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
+                        st.caption("Exports use display colors. Your original TIFF and lossless crop remain in this session.")
+                    exported = export_composition(
+                        st.session_state.annotation_png, image_format, dpi,
+                        svg=st.session_state.get("annotation_svg"),
                     )
-                    st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
-                              key="edit_ladder", on_click=start_ladder)
-                    st.caption("The annotated PNG uses browser display colors. Your original TIFF and lossless crop remain in this session.")
-                st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
+                    with st.container(key="gel_export_actions"):
+                        st.download_button(
+                            f"Download annotated {image_format}", data=exported,
+                            file_name=f"{Path(filename).stem}-annotated.{specification['extension']}",
+                            mime=specification["mime"],
+                            key="download_annotations", type="primary",
+                        )
         return
     presets = []
     if stage == "ladder":

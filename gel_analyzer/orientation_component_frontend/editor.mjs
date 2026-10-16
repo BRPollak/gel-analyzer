@@ -1,4 +1,4 @@
-import {axes, drawRectangle, fitPreviewGeometry, moveRectangle, nearestHandle, outerViewportHeight,
+import {axes, drawRectangle, fitPreviewGeometry, moveRectangle, nearestHandle, outerViewportHeight, outerViewportReserve,
   pointerToImage, readSelection, rectangleCorners, resizeRectangle, rotateRectangle,
   rotationHandle, sameSelection, screenRadius} from "./geometry.mjs";
 
@@ -48,7 +48,7 @@ export function createOrientationEditor({document: doc, window: host}) {
       sum + nodes[id].getBoundingClientRect().height, 0) + 28;
     const fit = fitPreviewGeometry({imageWidth: state.width, imageHeight: state.height,
       availableWidth: Math.max(1, nodes.component.clientWidth),
-      viewportHeight: outerViewportHeight(host), chromeHeight});
+      viewportHeight: outerViewportHeight(host), outerReserve: outerViewportReserve(host), chromeHeight});
     nodes["image-wrap"].style.width = `${fit.wrapperWidth}px`;
     nodes["image-wrap"].dataset.previewScale = String(fit.scale);
   }
@@ -253,6 +253,13 @@ export function createOrientationEditor({document: doc, window: host}) {
     repaint();
   }
   host.addEventListener("message", event => {
+    if (event.source === host.parent && event.data?.type === "gel:viewport") {
+      if (Number.isFinite(event.data.height) && event.data.height > 0) {
+        host.gelPreviewHeight = event.data.height;
+        scheduleFit();
+      }
+      return;
+    }
     if (event.source === host.parent && event.data?.type === "streamlit:render") render(event.data.args, event.data.theme);
   });
   host.addEventListener("resize", scheduleFit);

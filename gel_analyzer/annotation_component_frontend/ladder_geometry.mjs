@@ -47,7 +47,7 @@ export function movedPastTap(start, event) {
 
 /** A side panel consumes width, not the vertical preview budget. */
 export function annotationPreviewBudget({viewportHeight, componentHeight, previewHeight,
-  workspaceHeight, sidePanel, insetY, ladderMode}) {
+  workspaceHeight, sidePanel, insetY, ladderMode, outerReserve = 100, minimumPreview = 220}) {
   const otherHeight = componentHeight - (sidePanel ? workspaceHeight : previewHeight);
-  return Math.max(insetY + (ladderMode || !sidePanel ? 220 : 1), Math.floor(viewportHeight - otherHeight - 100));
+  return Math.max(insetY + (ladderMode || !sidePanel ? minimumPreview : 1), Math.floor(viewportHeight - otherHeight - outerReserve));
 }

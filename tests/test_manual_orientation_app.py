@@ -118,6 +118,8 @@ def test_failed_detection_can_draw_rotate_preview_and_confirm(app, editor, auto_
     assert not app.session_state["orientation_manual"]
     assert len(auto_fit.calls) == 1  # Manual processing bypassed detection.
     assert {"confirm_orientation", "adjust_orientation_manually"} <= keys(app)
+    assert app.button(key="rotate_and_orient").label == "Automatic orientation"
+    assert app.session_state["orientation_preview_method"] == "manual"
     assert "define_wells" not in keys(app)
 
     app.button(key="confirm_orientation").click().run()
@@ -159,6 +161,7 @@ def test_successful_detection_opens_original_crop_with_seed_and_cancel_keeps_pre
     assert app.get("image")[0].proto == displayed
     assert app.session_state["orientation_selection"] is None
     assert "confirm_orientation" in keys(app)
+    assert "rotate_and_orient" not in keys(app)
 
 
 def test_reediting_manual_preview_always_samples_original_crop(
@@ -208,6 +211,25 @@ def test_automatic_retry_invalidates_manual_selection(app, editor, auto_fit):
     assert not app.session_state["orientation_manual"]
     assert app.session_state["orientation_error"] is None
     assert app.session_state["orientation_preview"].orientation.size == (50, 76)
+    assert "rotate_and_orient" not in keys(app)
+
+
+def test_manual_preview_can_return_to_automatic_orientation(app, editor, auto_fit, sampled_sources):
+    upload(app)
+    app.button(key="adjust_orientation_manually").click().run()
+    send_selection(app, editor)
+    app.button(key="preview_manual_orientation").click().run()
+    assert app.session_state["orientation_preview_method"] == "manual"
+    assert app.button(key="rotate_and_orient").label == "Automatic orientation"
+
+    app.button(key="rotate_and_orient").click().run()
+
+    assert not app.exception
+    assert app.session_state["orientation_preview_method"] == "automatic"
+    assert app.session_state["orientation_preview"].orientation.size == (50, 76)
+    assert "rotate_and_orient" not in keys(app)
+    assert len(sampled_sources) == 2
+    assert sampled_sources[0][:2] == sampled_sources[1][:2]
 
 
 def test_bad_or_stale_browser_events_cannot_change_selected_outline(app, editor):

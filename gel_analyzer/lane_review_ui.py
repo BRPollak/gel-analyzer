@@ -6,6 +6,7 @@ uploaded TIFF or the confirmed image used for detection.
 """
 
 from io import BytesIO
+from dataclasses import replace
 from uuid import uuid4
 
 from PIL import Image
@@ -53,10 +54,11 @@ def start_lane_review() -> None:
     result = st.session_state.well_result
     if gel is None or result is None:
         return
+    right = result.lanes[0][2] if result.lanes else gel.preview_width
     try:
         validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
         wells = lane_crop.validate_lane_adjustments(
-            result.wells, result.lanes, gel.preview_width,
+            result.wells, result.lanes, right,
             (gel.preview_width, gel.preview_height),
         ) if result.wells else ()
     except (lane_crop.LaneAdjustmentError, SelectionError) as exc:
@@ -65,7 +67,7 @@ def start_lane_review() -> None:
     st.session_state.lane_source = gel
     annotation_ui.reset_annotations()
     st.session_state.lane_wells = wells
-    st.session_state.lane_right = gel.preview_width
+    st.session_state.lane_right = right
     # Freeze the original guide, including uncertain candidates, while the
     # user reviews boundaries. Late guide events cannot replace this review.
     st.session_state.well_editing = False
@@ -159,6 +161,20 @@ def confirm_lane_borders() -> None:
         _set_stage("extent")
 
 
+def back_to_well_review() -> None:
+    """Keep manual changes when returning to the three-action well review."""
+    if st.session_state.lane_stage != "borders":
+        return
+    _consume_latest_event()
+    if _confirmed_image() is not st.session_state.lane_source:
+        return
+    st.session_state.well_result = replace(
+        st.session_state.well_result, wells=st.session_state.lane_wells, lanes=_lanes(),
+    )
+    st.session_state.well_editing = False
+    reset_lane_review()
+
+
 def back_to_lane_borders() -> None:
     if st.session_state.lane_stage not in ("extent", "cropped"):
         return
@@ -200,7 +216,8 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
     if stage == "cropped":
         crop = st.session_state.lane_crop
         count = len(crop.lanes)
-        st.caption(f"Crop confirmed · {count} lane{'s' if count != 1 else ''}")
+        if st.session_state.get("annotation_stage") not in ("ladder_offer", "final"):
+            st.caption(f"Crop confirmed · {count} lane{'s' if count != 1 else ''}")
         annotation_ui.show_annotations(crop, gel.filename)
         return
 
@@ -220,7 +237,7 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
 
     with controls_panel:
         if stage == "borders":
-            st.subheader("Adjust lane borders")
+            st.subheader("Adjust wells and lanes")
             st.caption(
                 "Drag each lane’s top and bottom borders. Use its trash button to delete it, "
                 "or Add lane to insert one below the guide. Neighboring lanes cannot overlap."
@@ -230,15 +247,13 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
             if not count:
                 st.info("No lanes remain. Choose Add lane, then adjust its borders over the well and bands.")
             st.button(
-                "Confirm lane borders", key="confirm_lane_borders", type="primary",
+                "Confirm", key="confirm_lane_borders", type="primary",
                 on_click=confirm_lane_borders, disabled=not st.session_state.lane_wells,
             )
             st.button("Add lane", key="add_lane", on_click=add_lane)
-            for warning in st.session_state.well_result.warnings:
-                st.warning(warning)
             st.caption("Arrow keys move a focused handle one pixel; Shift moves ten.")
         else:
-            st.subheader("Set the right edge")
+            st.subheader("Define bottom of lane (right edge)")
             st.caption(
                 "Drag the right boundary to choose how much gel to keep. "
                 "The shaded area will be removed. All wells stay inside the crop."
