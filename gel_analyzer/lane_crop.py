@@ -136,13 +136,15 @@ def validate_lane_adjustments(
 
 
 def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well, ...]:
-    """Append an editable lane at the guide's bottom without moving other lanes.
+    """Append an editable lane at the guide's bottom, fitting available rows.
 
     Existing lanes supply the median height, width, and gap. With no lanes,
     conservative image/guide-scaled dimensions seed manual recovery. Prefer a
     center at the lower endpoint; continue below the final lane when needed.
-    Image edges may shift the new rectangle, but cannot shrink existing lanes
-    or cause overlap. Reject when the inferred lane height cannot fit below.
+    A smaller new rectangle uses any remaining space without moving existing
+    lanes. At the image bottom, make one row by trimming the last lane, moving
+    a contiguous one-pixel tail upward only if needed. Every lane stays at
+    least one pixel high, ordered, and inside the image.
     """
     width, height = _size(size)
     originals = _checked_wells(wells, (width, height), allow_empty=True)
@@ -168,8 +170,25 @@ def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well,
         lane_height = min(height, max(4, round(min(height * 0.035, (lower[1] - upper[1]) * 0.12))))
         lane_width = max(4, round(min(width, height) * 0.025))
         gap, previous_bottom = 0, 0
-    if height - previous_bottom < lane_height:
-        raise LaneAdjustmentError("There is not enough room below the last lane. Move its bottom edge up or delete a lane before adding another.")
+    if previous_bottom == height:
+        if len(originals) >= height:
+            raise LaneAdjustmentError("Every image row already contains a separate lane. Delete a lane before adding another.")
+        # Reserve one bottom row with the smallest possible boundary change.
+        # A one-pixel lane cannot shrink, so move that trailing lane upward
+        # until a gap or a taller lane supplies the required row.
+        adjusted = list(originals)
+        ceiling = height - 1
+        for index in range(len(adjusted) - 1, -1, -1):
+            left, top, right, bottom = adjusted[index].bounds
+            if bottom <= ceiling:
+                break
+            bottom = ceiling
+            top = min(top, bottom - 1)
+            adjusted[index] = Well((left, top, right, bottom), ((left + right) / 2, (top + bottom) / 2))
+            ceiling = top
+        originals = tuple(adjusted)
+        previous_bottom = originals[-1].bounds[3]
+    lane_height = min(lane_height, height - previous_bottom)
 
     top = int(round(lower[1] - lane_height / 2))
     if originals and top < previous_bottom:

@@ -1,6 +1,6 @@
 # Agarose Gel Analyzer
 
-Current project version: **0.1.0**.
+Current project version: **0.1.1**.
 
 Latest tagged release: **0.0.1** (Git tag: `v0.0.1`).
 
@@ -23,6 +23,20 @@ After cropping, annotate lanes and two independent sets of groups, then confirm
 and download as PNG, JPEG, TIFF, or SVG. Optional manual ladder size labels can be placed
 above the gel. Automatic band identification and ladder analysis remain later
 steps; band contrast already helps refine automatic lane coverage.
+
+## Version 0.1.1
+
+- Click completed progress steps to revisit orientation, lane review, or annotations.
+  Unchanged orientation preserves existing analysis, and navigation retains lane-label
+  and group edits.
+- Create groups from lane ranges such as `2-5, 8`, with no lane selected by default,
+  All/Clear controls, and a more prominent creation form in a wider annotation panel.
+- Start ladder marker labels at 80% of the lane-label font size and shrink nearby
+  markers as needed to prevent collisions.
+- Add manual lanes near the image bottom by fitting the remaining space or making
+  a minimal adjustment to trailing boundaries.
+- Hide Streamlit deployment/menu controls and refine the upload card, workflow
+  controls, and mobile annotation layout.
 
 ## Run locally
 
@@ -84,7 +98,7 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    Click **Confirm lanes and crop** to create the cropped gel preview.
 9. Click a lane label beside the crop and type directly on the preview. The
    formatting controls apply to selected text; with only a caret or no text
-   selected, they apply to the whole label. Expand **Lane groups** in the
+   selected, they apply to the whole label. Expand **Create lane groups** in the
    workflow panel to create groups in either set. Click
    **Confirm annotations** to compose the final image. **Edit annotations**
    returns to the saved labels and groups. Choose **Annotate ladder** to add
@@ -189,8 +203,11 @@ lane at the bottom guide endpoint, or below the last lane when that endpoint
 is already occupied. Its starting width and height use the median reviewed well
 dimensions; an empty review uses a small initial rectangle. The new well aligns
 with the vertical guide, and its placement is kept within the image and shared right
-edge. Adjust its borders to cover the intended well and bands. If there is no
-room for another lane below the last one, the app explains how to make room.
+edge. Adjust its borders to cover the intended well and bands. When little
+space remains below the last lane, the added lane starts smaller. If the last
+lane reaches the image bottom, its lower border moves up one pixel to make
+room; a contiguous tail of one-pixel lanes shifts up only as needed. Existing
+lanes stay unchanged whenever any space remains below them.
 Deleting every lane is allowed; add at least one before confirming. Trash
 buttons support Enter and Space as well as clicking.
 
@@ -240,7 +257,19 @@ those controls format the whole label. Mixed formatting is retained during text 
 changes, confirmation, and all export formats. There is no separate lane-text form.
 Formatting controls stay outside the final image; the selected label stays
 highlighted while you use them. Group creation and membership controls are in
-the collapsible **Lane groups** section in the workflow panel.
+the **Create lane groups** section at the top of the wider workflow panel.
+New groups start with no lanes selected. Enter lane numbers or ranges such as
+`2-5, 8`, use **All lanes** / **Clear**, or expand **Choose individual lanes**
+for a compact picker. The **Create group** button keeps the form open with empty
+fields for the next group. Existing groups can be renamed in the form and their
+memberships update as you enter valid lane numbers.
+
+The progress buttons at the top return to completed analysis steps. **Define
+lanes** reopens the boundaries, while **Annotate** returns to the lane-label editor.
+Returning to **Orient** reviews the existing orientation; **Return to analysis**
+keeps the later work. Confirming a changed orientation resets downstream geometry,
+while reconfirming the unchanged orientation preserves it. Unreached steps remain
+disabled so required confirmations cannot be skipped.
 
 The initial font size is 80% of the average cropped lane height, rounded to a
 whole pixel. It applies to lane and group labels, and can be adjusted from
@@ -302,9 +331,8 @@ the photo for a closer look while matching bands to the available size markers.
 The reference panel stays separate from the exported annotation image.
 
 Labels appear above the gel, rotated 90° counterclockwise, at the exact clicked
-horizontal position. Their normal Arial size is half the calculated default
-lane-label size (80% of mean lane height, rounded, then halved), independent of
-manual lane font changes. When nearby labels would overlap, all ladder labels
+horizontal position. Their normal Arial size is 80% of the current lane-label
+font size, including any manual font changes. When nearby labels would overlap, all ladder labels
 shrink together while keeping their visible bottoms aligned at one level. Moving
 markers apart restores the normal size. Lane and group fonts stay unchanged.
 Coincident markers or positions too close to fit prompt you to move or remove a
@@ -539,12 +567,16 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **848 passed, 9 skipped**, including crop,
+- `.venv/bin/python -m pytest -q`: **868 passed, 9 skipped**, including crop,
   image I/O, orientation, well detection, automatic lane refinement, count
   lifecycle, manual review, lane insertion/deletion, annotation validation,
-  confirmation/editing, and app workflow tests.
+  confirmation/editing, backward progress navigation, and app workflow tests.
   The nine original-TIFF sample cases require `GEL_ANALYZER_EXAMPLE_TIFF`;
   the saved oriented sample was separately checked across all nine guides.
+- `node --test tests/*.mjs`: **100 passed** across the browser component suites below.
+- `node --test tests/test_annotation_groups.mjs`: **11 passed**, checking empty
+  defaults, lane ranges, All/Clear, individual selections, keyboard creation,
+  group editing, rich-text preservation, and invalid-input handling.
 - `node --test tests/test_well_component.mjs`: **11 passed**, checking scaled and
   offset coordinates, edge clipping, endpoint order, handle sizing, constrained
   border/right-edge movement, independent targeting of narrow-lane handles,

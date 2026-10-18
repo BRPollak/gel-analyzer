@@ -112,7 +112,7 @@ def bounds(workflow):
 
 
 def keys(app):
-    return {button.key for button in app.button}
+    return {button.key for button in app.button if not button.key.startswith("workflow_step_")}
 
 
 def finish_review(workflow, right_edge=230):
@@ -303,6 +303,40 @@ def test_add_consumes_pending_drag_and_invalidates_old_collection(workflow):
     workflow.event = {**pending, "revision": 999}
     app.run()
     assert bounds(workflow) == added
+    assert len(workflow.detections) == 1
+
+
+@pytest.mark.parametrize("last_bottom", [199, 200])
+def test_add_near_image_bottom_fits_lane_and_can_confirm_crop(workflow, last_bottom):
+    start_review(workflow)
+    app = workflow.app
+    gel = app.session_state["gel_image"]
+    old_token = app.session_state["lane_token"]
+    pending = lane_event(
+        workflow, lanes=((30, 17, 300, 55), (32, 170, 300, last_bottom)), run=False,
+    )
+
+    app.button(key="add_lane").click().run()
+
+    assert not app.exception
+    assert not app.error
+    assert app.session_state["lane_error"] is None
+    added = bounds(workflow)
+    assert added[:2] == ((30, 17, 46, 55), (32, 170, 49, 199))
+    assert added[2][1::2] == (199, 200)
+    assert app.session_state["lane_token"] != old_token
+    workflow.event = {**pending, "revision": 999}
+    app.run()
+    assert bounds(workflow) == added
+
+    app.button(key="confirm_lane_borders").click().run()
+    app.button(key="confirm_lane_crop").click().run()
+
+    assert not app.exception
+    assert app.session_state["lane_stage"] == "cropped"
+    assert app.session_state["lane_crop"].crop_box[3] == 200
+    assert len(app.session_state["lane_crop"].wells) == 3
+    assert app.session_state["gel_image"] is gel
     assert len(workflow.detections) == 1
 
 
@@ -691,7 +725,7 @@ def test_upload_changes_clear_manual_review_and_confirmed_crop(workflow, change)
     if change == "replace":
         upload(workflow, offset=50)
     elif change == "clear":
-        app.button[0].click().run()
+        app.button(key="clear_image").click().run()
     elif change == "remove":
         app.file_uploader[0].set_value(None).run()
     else:

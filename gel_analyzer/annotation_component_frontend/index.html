@@ -5,22 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gel lane annotations</title>
   <style>
-    :root { font-family: Arial, sans-serif; color-scheme: light; --text: #31333f; --panel: #f7f8fa; --border: #c9cdd4; --accent: #2563eb; }
+    :root { font-family: Arial, sans-serif; color-scheme: light; --text: #172b3a; --panel: #eef3f5; --border: #d9e3e7; --accent: #18786f; --accent-soft: #e4f2ef; }
     * { box-sizing: border-box; }
     body { margin: 0; background: transparent; color: var(--text); }
     #component { padding: 4px 0; font-size: 14px; }
     [hidden] { display: none !important; }
     p { line-height: 1.45; }
     .hint { margin: 7px 0; font-size: 12px; }
-    .panel { border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; background: var(--panel); }
+    .panel { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: #fff; box-shadow: 0 4px 18px #172b3a06; }
     .row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
     label.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
     .grow { flex: 1 1 220px; }
     input, select, button { font: inherit; }
-    .panel input[type="text"], .panel input[type="number"], select { min-height: 34px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; background: white; color: #20242b; min-width: 0; }
+    .panel input[type="text"], .panel input[type="number"], select { min-height: 34px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: white; color: var(--text); min-width: 0; }
     select { max-width: 100%; }
-    button { min-height: 34px; border: 1px solid var(--border); border-radius: 5px; padding: 5px 10px; background: white; color: #20242b; cursor: pointer; }
-    button:hover:not(:disabled) { border-color: var(--accent); }
+    button { min-height: 34px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; background: white; color: var(--text); cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     button:disabled, input:disabled, select:disabled { opacity: .6; cursor: default; }
     button[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
@@ -31,7 +31,7 @@
     .color-heading { margin-bottom: 5px; font-size: 12px; }
     #color-presets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
     .color-preset { display: flex; align-items: center; gap: 6px; padding: 5px 7px; font-size: 12px; }
-    .color-preset[aria-pressed="true"] { background: #e8efff; color: #20242b; box-shadow: inset 0 0 0 1px var(--accent); }
+    .color-preset[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
     .color-swatch { width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; background: var(--swatch-color); border: 1px solid #0002; }
     #font-size { width: 80px; }
     #toolbar { display: flex; flex-wrap: wrap; gap: 7px 12px; align-items: center; margin-bottom: 8px; padding: 8px 10px; }
@@ -40,29 +40,45 @@
     .formatting { display: flex; align-items: center; gap: 5px; }
     .font-family { margin-right: 3px; font-size: 13px; }
     .toolbar-end { display: flex; flex-wrap: wrap; gap: 7px; margin-left: auto; }
-    #group-panel { margin-top: 12px; }
+    #group-panel { margin-bottom: 10px; }
     #group-panel summary { cursor: pointer; font-size: 13px; font-weight: bold; }
     #group-panel summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
-    #group-panel[open] summary { margin-bottom: 12px; }
+    #group-panel[open] > summary { margin-bottom: 10px; }
     #group-count { font-weight: normal; }
-    #group-members { display: flex; gap: 7px 14px; flex-wrap: wrap; max-height: 140px; overflow: auto; margin-top: 8px; }
-    #group-members label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; min-height: 28px; }
-    #group-members input { accent-color: var(--accent); }
+    #group-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+    #group-fields .field { min-width: 0; }
+    #group-text-field, #group-lanes-field { grid-column: 1 / -1; }
+    #group-selection-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+    #group-selection-actions button { min-height: 28px; padding: 3px 8px; font-size: 12px; }
+    #group-selection-count { margin-left: auto; font-size: 12px; }
+    #group-error { margin: 8px 0 0; color: #b42318; font-size: 12px; }
+    #group-lanes[aria-invalid="true"] { border-color: #b42318; }
+    #group-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    #add-group, #new-group { flex: 1 1 100%; min-height: 38px; background: var(--accent); border-color: var(--accent); color: white; font-weight: bold; }
+    #add-group:disabled { opacity: 1; background: #eef3f5; border-color: #cbd9dd; color: #617580; }
+    #delete-group { color: #b42318; }
+    #group-lane-picker { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 9px; }
+    #group-lane-picker summary { font-size: 12px; font-weight: normal; }
+    #group-members { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 5px; max-height: 124px; overflow: auto; margin-top: 8px; padding: 3px; }
+    #group-members label { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid var(--border); border-radius: 6px; min-height: 30px; font-size: 12px; cursor: pointer; }
+    #group-members label:has(input:checked) { background: var(--accent-soft); border-color: var(--accent); }
+    #group-members input { accent-color: var(--accent); margin: 0; }
+    #group-hint { margin-bottom: 0; }
     fieldset { margin: 10px 0 0; padding: 0; border: 0; min-width: 0; }
     legend { font-size: 13px; }
-    #preview-viewport { width: 100%; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: #e7e9ed; }
+    #preview-viewport { width: 100%; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
     #preview-viewport[data-fit="true"] { overflow: hidden; display: flex; align-items: center; justify-content: center; }
     #preview-space { position: relative; margin-inline: auto; overflow: hidden; overflow: clip; flex-shrink: 0; }
     #preview-stage { position: absolute; left: 0; top: 0; transform-origin: top left; background: white; }
     #preview { position: absolute; left: 0; top: 0; display: block; }
     #label-inputs { position: absolute; inset: 0; }
     .image-label { position: absolute; margin: 0; padding: 0; border: 1px dashed #94a3b8a8; border-radius: 2px; background: transparent; color: transparent; caret-color: var(--label-color, #000); text-align: right; box-sizing: content-box; cursor: text; white-space: pre; }
-    .image-label:hover { border-color: #2563eb; outline: 1px solid #2563eb; }
-    .image-label[data-selected="true"] { outline: 2px solid #2563eb; outline-offset: 1px; }
-    .image-label:focus { color: var(--label-color, #000); outline: 2px solid #2563eb; outline-offset: 1px; }
+    .image-label:hover { border-color: var(--accent); outline: 1px solid var(--accent); }
+    .image-label[data-selected="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .image-label:focus { color: var(--label-color, #000); outline: 2px solid var(--accent); outline-offset: 1px; }
     .image-label:focus span { color: var(--run-color, #000); background: white; }
     .image-label:empty::before { content: attr(data-placeholder); color: #64748b; font-style: italic; }
-    #confirm { color: white; background: #2563eb; border-color: #2563eb; font-weight: bold; }
+    #confirm { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
     #actions { margin-top: 10px; align-items: center; justify-content: space-between; }
     #size-hint { margin: 0; }
     #status { margin: 9px 0 0; min-height: 20px; font-size: 13px; overflow-wrap: anywhere; }
@@ -83,11 +99,11 @@
     #ladder-confirm { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
     #ladder-overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: auto; }
     #ladder-overlay[data-step="lane"], #ladder-overlay[data-step="markers"] { cursor: crosshair; }
-    .ladder-lane-outline { fill: transparent; stroke: #2563eb; stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
-    .ladder-lane-outline[data-selected="true"] { fill: #2563eb18; stroke-width: 2; stroke-dasharray: none; }
+    .ladder-lane-outline { fill: transparent; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+    .ladder-lane-outline[data-selected="true"] { fill: #18786f18; stroke-width: 2; stroke-dasharray: none; }
     #ladder-cursor { outline: none; pointer-events: none; }
-    #ladder-cursor line { stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; }
-    #ladder-cursor circle { fill: white; stroke: #2563eb; stroke-width: 2; vector-effect: non-scaling-stroke; }
+    #ladder-cursor line { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+    #ladder-cursor circle { fill: white; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
     #ladder-cursor:focus circle { stroke: #111827; stroke-width: 3; }
     #ladder-workspace { min-width: 0; }
     #workflow-panel { min-width: 0; }
@@ -97,7 +113,7 @@
     #ladder-reference h2 { font-size: 14px; margin: 0 0 4px; }
     #ladder-reference-name { font-size: 12px; margin: 0 0 10px; }
     #ladder-reference-image { display: block; width: auto; height: auto; max-width: 100%; max-height: min(500px, calc(var(--workspace-budget, 620px) - 170px)); margin: 0 auto; background: #fff; }
-    #ladder-reference-selected { font-weight: bold; color: #1d4ed8; }
+    #ladder-reference-selected { font-weight: bold; color: var(--accent); }
     #ladder-reference-enlarge { width: 100%; margin-top: 8px; }
     #ladder-reference-toggle { margin-bottom: 10px; }
     #ladder-reference-dialog { padding: 14px; border: 1px solid var(--border); border-radius: 8px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); background: #fff; color: #31333f; }
@@ -107,6 +123,7 @@
     #ladder-reference-large { display: block; max-width: 100%; width: auto; height: min(850px, calc(var(--workspace-budget, 620px) - 30px)); max-height: calc(100vh - 130px); object-fit: contain; margin: 12px auto 0; background: #fff; }
     @media (min-width: 400px) {
       #ladder-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(180px, 30vw, 300px); align-items: start; gap: 14px; }
+      #component[data-mode="lanes"] #ladder-workspace { grid-template-columns: minmax(0, 1fr) clamp(190px, 43vw, 320px); }
       #preview-viewport { grid-column: 1; grid-row: 1; }
       #ladder-reference { grid-column: 1; grid-row: 2; max-height: var(--workspace-budget, 620px); overflow-y: auto; }
       #ladder-reference-image { max-height: 240px; }
@@ -122,14 +139,23 @@
       #component[data-mode="ladder"][data-ladder-step="markers"] #ladder-markers { flex-direction: column; flex-wrap: nowrap; max-height: 300px; overflow: auto; padding: 3px; }
       #component[data-mode="ladder"][data-ladder-step="markers"] .ladder-marker { flex: 0 0 auto; justify-content: space-between; text-align: left; overflow-wrap: anywhere; }
     }
+    @media (min-width: 760px) {
+      #component[data-mode="lanes"] #ladder-workspace { grid-template-columns: minmax(0, 1fr) clamp(360px, 43vw, 520px); gap: 18px; }
+      #component[data-mode="lanes"] #color-presets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      #component[data-mode="lanes"] #formatting-scope { flex-basis: auto; margin-left: auto; }
+      #component[data-mode="lanes"] #toolbar { gap: 8px 10px; }
+      #group-text-field, #group-lanes-field { grid-column: auto; }
+    }
     @media (min-width: 1100px) {
       #component[data-reference-open="true"] #ladder-workspace { grid-template-columns: minmax(0, 1fr) 300px 190px; }
       #ladder-reference { grid-column: 3; grid-row: 1; }
       #ladder-reference-image { max-height: min(500px, calc(var(--workspace-budget, 620px) - 170px)); }
     }
     @media (max-width: 399px) {
-      #workflow-panel { margin-top: 10px; }
-      #ladder-reference { margin-top: 10px; }
+      #workflow-panel { display: flex; flex-direction: column; margin-top: 10px; max-height: min(360px, calc(var(--workspace-budget, 620px) * .62)); }
+      #workflow-scroll { overflow-y: auto; min-height: 0; padding: 2px; }
+      #workflow-actions { flex-shrink: 0; }
+      #ladder-reference { margin-top: 10px; max-height: min(360px, calc(var(--workspace-budget, 620px) * .62)); overflow-y: auto; }
       #ladder-reference-image { max-height: 240px; }
       #ladder-panel .field { min-width: 0; }
       #ladder-panel button { max-width: 100%; overflow-wrap: anywhere; }
@@ -173,6 +199,31 @@
       </aside>
       <aside id="workflow-panel" aria-label="Current annotation step">
       <div id="workflow-scroll">
+      <details id="group-panel" class="panel lane-only">
+        <summary>Create lane groups <span id="group-count">(0)</span></summary>
+        <div id="group-fields">
+          <label class="field">Column<select id="group-set" aria-label="Group column"><option value="0">Set 1 · near lanes</option><option value="1">Set 2 · far left</option></select></label>
+          <label class="field">Group<select id="group-select" aria-label="Group to edit"><option value="">New group</option></select></label>
+          <label class="field" id="group-text-field">Group label<input id="group-text" type="text" maxlength="500" placeholder="Enter a group label" autocomplete="off" aria-label="Group label"></label>
+          <label class="field" id="group-lanes-field">Lane numbers<input id="group-lanes" type="text" placeholder="e.g. 2-5, 8" autocomplete="off" spellcheck="false" aria-describedby="group-error group-selection-count" aria-invalid="false"></label>
+        </div>
+        <div id="group-selection-actions">
+          <button id="all-group-lanes" type="button">All lanes</button>
+          <button id="clear-group-lanes" type="button">Clear</button>
+          <span id="group-selection-count" aria-live="polite">0 lanes selected</span>
+        </div>
+        <p id="group-error" role="status" hidden></p>
+        <div id="group-actions">
+          <button id="add-group" type="button">Create group</button>
+          <button id="new-group" type="button" hidden>Create another group</button>
+          <button id="delete-group" type="button" hidden>Delete group</button>
+        </div>
+        <details id="group-lane-picker">
+          <summary>Choose individual lanes</summary>
+          <div id="group-members" role="group" aria-label="Lanes in this group"></div>
+        </details>
+        <p class="hint" id="group-hint">Enter a name and lane numbers, then create your group.</p>
+      </details>
       <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
         <strong id="selection-name" class="lane-only">Lane 1</strong>
         <p id="formatting-scope" class="lane-only" aria-live="polite">Formatting: whole label</p>
@@ -193,7 +244,7 @@
           <button id="open-groups" type="button">Add group</button>
         </div>
       </div>
-      <p class="hint lane-only" id="editing-hint">Click a label to edit. Highlight any part, then choose a color, Bold, or Italic. With no text highlighted, formatting applies to the whole label. Use ↑ / ↓ to move between labels.</p>
+      <p class="hint lane-only" id="editing-hint">Click a label to edit; highlight text to format part of it. Use ↑ / ↓ to move between labels.</p>
       <section id="ladder-panel" class="panel" aria-label="Ladder annotation steps" hidden>
         <h2 id="ladder-heading" tabindex="-1">Choose a ladder preset</h2>
         <button id="ladder-reference-toggle" type="button" aria-controls="ladder-reference" aria-expanded="true" hidden>Hide reference</button>
@@ -234,18 +285,6 @@
           </div>
         </div>
       </section>
-      <details id="group-panel" class="panel lane-only">
-        <summary>Lane groups <span id="group-count">(0)</span></summary>
-        <div class="row">
-          <label class="field">Column<select id="group-set" aria-label="Group column"><option value="0">Set 1 · near lanes</option><option value="1">Set 2 · far left</option></select></label>
-          <label class="field grow">Group<select id="group-select" aria-label="Group to edit"><option value="">New group</option></select></label>
-          <label class="field grow" id="group-text-field">Group label<input id="group-text" type="text" maxlength="500" placeholder="Enter a group label" autocomplete="off" aria-label="Group label"></label>
-          <button id="add-group" type="button">Create group</button>
-          <button id="delete-group" type="button" hidden>Delete group</button>
-        </div>
-        <fieldset><legend>Lanes in this group</legend><div id="group-members"></div></fieldset>
-        <p class="hint" id="group-hint">Choose a column, name the group, and select its lanes.</p>
-      </details>
       </div>
       <div id="workflow-actions">
       <div class="row" id="actions"><button id="confirm" type="button">Confirm annotations</button><p id="size-hint" class="hint"></p></div>

@@ -342,12 +342,54 @@ def test_append_can_use_remaining_full_height_when_ideal_gap_does_not_fit():
     assert result[-1].bounds[1::2] == (80, 100)
 
 
-@pytest.mark.parametrize("height", [80, 90, 99])
-def test_append_rejects_insufficient_space_without_repositioning_existing_lanes(height):
-    with pytest.raises(LaneAdjustmentError, match="not enough room below"):
-        append_lane(APPEND_WELLS, ((36, 15), (42, 75)), 90, (100, height))
+@pytest.mark.parametrize("height", [81, 90, 99])
+def test_append_shrinks_new_lane_to_remaining_space_without_moving_existing_lanes(height):
+    result = append_lane(APPEND_WELLS, ((36, 15), (42, 75)), 90, (100, height))
 
+    assert result[:-1] == APPEND_WELLS
+    assert result[-1].bounds[1::2] == (80, height)
+    assert crop_lanes(Image.new("L", (100, height)), result, 90).height == height - 17
+
+
+def test_append_at_image_bottom_trims_only_one_row_from_last_lane():
+    result = append_lane(APPEND_WELLS, ((36, 15), (42, 75)), 90, (100, 80))
+
+    assert result[0] == APPEND_WELLS[0]
+    assert result[1] == Well((35, 60, 47, 79), (41, 69.5))
+    assert result[-1].bounds[1::2] == (79, 80)
+    # The prior reviewed tuple remains available for back/revise operations.
     assert APPEND_WELLS[-1].bounds == (35, 60, 47, 80)
+
+
+def test_append_at_image_bottom_uses_gap_above_one_pixel_lane():
+    originals = (APPEND_WELLS[0], Well((35, 79, 47, 80), (41, 79.5)))
+
+    result = append_lane(originals, ((36, 15), (42, 75)), 90, (100, 80))
+
+    assert result[0] == originals[0]
+    assert result[1] == Well((35, 78, 47, 79), (41, 78.5))
+    assert result[-1].bounds[1::2] == (79, 80)
+
+
+def test_repeated_append_at_image_bottom_keeps_every_lane_editable_and_crop_valid():
+    result = APPEND_WELLS
+    for count in range(3, 9):
+        result = append_lane(result, ((36, 15), (42, 75)), 90, (100, 80))
+
+        assert len(result) == count
+        assert result[0] == APPEND_WELLS[0]
+        assert result[-1].bounds[1::2] == (79, 80)
+        assert all(a.bounds[3] <= b.bounds[1] for a, b in zip(result, result[1:]))
+        cropped = crop_lanes(Image.new("L", (100, 80)), result, 90)
+        assert len(cropped.wells) == count
+        assert all(well.bounds[1] < well.bounds[3] for well in cropped.wells)
+
+
+def test_append_reports_only_the_physical_one_lane_per_image_row_limit():
+    originals = tuple(Well((0, y, 1, y + 1), (0.5, y + 0.5)) for y in range(8))
+
+    with pytest.raises(LaneAdjustmentError, match="Every image row already contains a separate lane"):
+        append_lane(originals, ((0, 0), (0, 8)), 1, (1, 8))
 
 
 @pytest.mark.parametrize(

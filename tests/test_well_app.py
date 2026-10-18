@@ -75,7 +75,7 @@ def begin_selection(workflow):
 
 
 def button_keys(app):
-    return {button.key for button in app.button}
+    return {button.key for button in app.button if not button.key.startswith("workflow_step_")}
 
 
 def event(workflow, points=((34, 20), (38, 180)), revision=1, **overrides):
@@ -188,7 +188,7 @@ def test_detected_summary_has_only_confirm_adjust_and_back_without_count_or_warn
     assert button_keys(app) - {"clear_image"} == {
         "confirm_detected_lanes", "adjust_lane_borders", "edit_well_line",
     }
-    assert [button.label for button in app.button if button.key != "clear_image"] == [
+    assert [button.label for button in app.button if button.key != "clear_image" and not button.key.startswith("workflow_step_")] == [
         "Confirm", "Adjust", "Back",
     ]
     assert not app.number_input
@@ -577,7 +577,7 @@ def test_upload_changes_clear_results_and_reject_previous_image_events(workflow,
     if change == "replace":
         upload(workflow, color=20000)
     elif change == "clear":
-        app.button[0].click().run()
+        app.button(key="clear_image").click().run()
     elif change == "remove":
         app.file_uploader[0].set_value(None).run()
     else:

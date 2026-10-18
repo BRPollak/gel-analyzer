@@ -144,8 +144,9 @@ def skip_ladder() -> None:
 def start_ladder() -> None:
     if st.session_state.get("annotation_stage") not in ("ladder_offer", "final"):
         return
-    st.session_state.ladder_draft = deepcopy(st.session_state.ladder_data)
-    st.session_state.ladder_step = "markers" if st.session_state.ladder_data else "preset"
+    if st.session_state.ladder_draft is None:
+        st.session_state.ladder_draft = deepcopy(st.session_state.ladder_data)
+        st.session_state.ladder_step = "markers" if st.session_state.ladder_data else "preset"
     st.session_state.annotation_stage = "ladder"
     _new_event_identity()
 
@@ -190,7 +191,14 @@ def consume_latest_event() -> None:
 
 def edit_annotations() -> None:
     if st.session_state.get("lane_stage") == "cropped":
+        consume_latest_event()
+        draft = st.session_state.ladder_draft
+        step = st.session_state.ladder_step
         invalidate_confirmation()
+        # Lane text changes leave marker coordinates valid. A user returning
+        # from ladder placement can resume that draft after confirming labels.
+        st.session_state.ladder_draft = draft
+        st.session_state.ladder_step = step
 
 
 def show_annotations(crop, filename: str) -> None:
@@ -202,8 +210,12 @@ def show_annotations(crop, filename: str) -> None:
     if st.session_state.annotation_data is None:
         st.session_state.annotation_data = default_annotations(len(crop.lanes), crop.lanes)
     stage = st.session_state.annotation_stage
-    if stage != "final":
-        st.subheader("4. Annotate ladder" if stage == "ladder" else "3. Annotate lanes")
+    if stage not in ("ladder_offer", "final"):
+        with st.container(key="gel_annotation_heading"):
+            st.subheader("Annotate ladder" if stage == "ladder" else "Annotate lanes")
+            if stage == "lanes":
+                count = len(crop.lanes)
+                st.caption(f"{count} lane{'s' if count != 1 else ''} · Click a label to edit. Highlight text to format a selection.")
     if st.session_state.ladder_notice:
         st.info(st.session_state.ladder_notice)
     if stage in ("ladder_offer", "final"):
@@ -262,8 +274,6 @@ def show_annotations(crop, filename: str) -> None:
             presets = load_presets()
         except AnnotationError as exc:
             st.warning(str(exc))
-    else:
-        st.caption("Click a label to edit it. Select text within a label to format just that selection.")
     event = render_annotation_component(
         crop, annotations=st.session_state.annotation_data,
         token=st.session_state.annotation_token, revision=st.session_state.annotation_revision,
