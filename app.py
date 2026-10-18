@@ -1,5 +1,6 @@
 """Session-only gel orientation, lane review, cropping, and annotation."""
 
+from dataclasses import replace
 from io import BytesIO
 import math
 from uuid import uuid4
@@ -13,7 +14,7 @@ from gel_analyzer.image_io import (
 from gel_analyzer.orientation import OrientationError
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
-from gel_analyzer import lane_review_ui, orientation_ui
+from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui
 from gel_analyzer.viewport import install_preview_viewport
 
 
@@ -203,21 +204,28 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             )
 
 
-def reset_orientation() -> None:
-    """Discard any orientation preview when the upload changes."""
+def reset_orientation_preview() -> None:
+    """Close orientation review without discarding a retained analysis."""
     st.session_state.orientation_preview = None
     st.session_state.orientation_requested = False
     st.session_state.orientation_error = None
     st.session_state.orientation_preview_method = None
+    st.session_state.orientation_previous_gel = None
     orientation_ui.reset_manual_orientation()
+
+
+def reset_orientation() -> None:
+    """Discard orientation and downstream geometry when the source changes."""
+    reset_orientation_preview()
     st.session_state.well_expected_count = None
     reset_wells()
 
 
 def request_orientation() -> None:
     orientation_ui.reset_manual_orientation()
-    st.session_state.well_expected_count = None
-    reset_wells()
+    if st.session_state.get("orientation_previous_gel") is None:
+        st.session_state.well_expected_count = None
+        reset_wells()
     st.session_state.orientation_requested = True
     st.session_state.orientation_error = None
     st.session_state.orientation_preview_method = None
@@ -225,9 +233,25 @@ def request_orientation() -> None:
 
 def confirm_orientation() -> None:
     """Only an explicit confirmation replaces the current gel image."""
-    if st.session_state.orientation_preview is not None:
-        st.session_state.gel_image = st.session_state.orientation_preview
+    preview = st.session_state.orientation_preview
+    if preview is None:
+        return
+    previous = st.session_state.get("orientation_previous_gel")
+    if previous is not None and preview == previous:
+        # Preserve the original object's identity, which binds lane geometry
+        # to its source, when the user only inspected an existing orientation.
+        st.session_state.gel_image = previous
+        reset_orientation_preview()
+    else:
+        st.session_state.gel_image = preview
         reset_orientation()
+
+
+def keep_previous_orientation() -> None:
+    previous = st.session_state.get("orientation_previous_gel")
+    if previous is not None:
+        st.session_state.gel_image = previous
+        reset_orientation_preview()
 
 
 def clear_image() -> None:
@@ -251,12 +275,80 @@ def read_upload(uploader_key: str) -> None:
     st.session_state.pending_upload = (uploaded_file.getvalue(), uploaded_file.name)
 
 
+def workflow_stage() -> int | None:
+    if st.session_state.gel_image is None:
+        return None
+    if confirmed_gel() is not None:
+        if st.session_state.lane_stage == "cropped":
+            return 3 if st.session_state.annotation_stage == "final" else 2
+        return 1
+    return 0
+
+
+def navigate_workflow(stage: int) -> None:
+    """Return to a reached stage, retaining edits before changing event identities."""
+    active = workflow_stage()
+    if active is None or stage not in range(active + 1):
+        return
+    gel = confirmed_gel()
+    if gel is not None:
+        accept_well_event(st.session_state.get(f"well_overlay_{st.session_state.well_token}"), gel)
+    lane_review_ui._consume_latest_event()
+    annotation_ui.consume_latest_event()
+    if stage == 0 and gel is not None:
+        # Recreate the first crop directly from the original TIFF. Never
+        # resample the accepted orientation or rerun automatic crop detection.
+        preview = BytesIO()
+        with Image.open(BytesIO(gel.source_bytes)) as source:
+            source.load()
+            source.crop(gel.crop_box).save(preview, format="PNG")
+        st.session_state.gel_image = replace(gel, preview_png=preview.getvalue(), orientation=None)
+        st.session_state.orientation_previous_gel = gel
+        st.session_state.orientation_preview = gel
+        st.session_state.orientation_preview_method = "confirmed"
+        st.session_state.orientation_requested = False
+        st.session_state.orientation_error = None
+        orientation_ui.reset_manual_orientation()
+        # Suspend downstream state until a changed orientation is accepted.
+        # Events from the editors being removed must never modify that state.
+        for editor in ("well", "lane", "annotation"):
+            st.session_state[f"{editor}_token"] = uuid4().hex
+            st.session_state[f"{editor}_revision"] = 0
+        st.session_state.well_detection_request = None
+    elif stage == 1:
+        if st.session_state.lane_stage in ("extent", "cropped"):
+            lane_review_ui.back_to_lane_borders()
+        elif st.session_state.lane_stage is None and st.session_state.well_result is None:
+            st.session_state.well_editing = True
+    elif stage == 2 and st.session_state.annotation_stage != "lanes":
+        annotation_ui.edit_annotations()
+
+
+def show_workflow_progress() -> None:
+    """Native keyboard-accessible controls for revisiting reached stages."""
+    active = workflow_stage()
+    with st.container(key="gel_progress"):
+        columns = st.columns([1, 1.35, 1.15, 1], gap="small")
+        for index, (column, label) in enumerate(zip(columns, ("Orient", "Define lanes", "Annotate", "Export"))):
+            reached = active is not None and index <= active
+            marker = "✓" if active is not None and index < active else str(index + 1)
+            with column:
+                st.button(
+                    f"{marker} · {label}", key=f"workflow_step_{index}",
+                    type="primary" if index == active else "secondary",
+                    disabled=not reached, on_click=navigate_workflow, args=(index,),
+                    width="stretch",
+                    help=f"Return to {label.lower()}" if reached else f"Complete the earlier steps to {label.lower()}.",
+                )
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Agarose Gel Analyzer",
         page_icon="🧬",
         layout="wide",
     )
+    st.set_option("client.toolbarMode", "minimal")
     install_preview_viewport()
     st.session_state.setdefault("gel_image", None)
     st.session_state.setdefault("upload_error", None)
@@ -266,6 +358,7 @@ def main() -> None:
     st.session_state.setdefault("orientation_requested", False)
     st.session_state.setdefault("orientation_error", None)
     st.session_state.setdefault("orientation_preview_method", None)
+    st.session_state.setdefault("orientation_previous_gel", None)
     st.session_state.setdefault("well_expected_count", None)
     if "well_token" not in st.session_state:
         reset_wells()
@@ -274,13 +367,17 @@ def main() -> None:
     if "lane_stage" not in st.session_state:
         lane_review_ui.reset_lane_review()
 
-    st.title("Agarose Gel Analyzer")
-    st.caption("Orient your gel, define lanes, crop, and annotate.")
+    with st.container(key="gel_header"):
+        st.title("Agarose Gel Analyzer")
+        st.caption("Orient your gel, define lanes, crop, and annotate.")
+    progress_slot = st.empty()
 
     uploader_key = f"gel_upload_{st.session_state.uploader_generation}"
     has_image = st.session_state.gel_image is not None or st.session_state.pending_upload is not None
     upload_panel = st.popover("Change image") if has_image else st.container(key="gel_upload_start")
     with upload_panel:
+        if not has_image:
+            st.subheader("Start with a gel image")
         st.file_uploader(
             "Open a gel image",
             type=["tif", "tiff"],
@@ -346,6 +443,9 @@ def main() -> None:
                     st.session_state.well_error = str(exc)
                     st.session_state.well_editing = True
 
+    with progress_slot.container():
+        show_workflow_progress()
+
     with preview_slot.container():
         if st.session_state.upload_error:
             st.error(st.session_state.upload_error)
@@ -357,7 +457,10 @@ def main() -> None:
 
         pending: GelImage | None = st.session_state.orientation_preview
         gel = pending if pending is not None and not st.session_state.orientation_manual else current_gel
-        final_crop = st.session_state.lane_crop if st.session_state.lane_stage == "cropped" else None
+        final_crop = (
+            st.session_state.lane_crop
+            if confirmed_gel() is not None and st.session_state.lane_stage == "cropped" else None
+        )
         visible_width = final_crop.width if final_crop else gel.preview_width
         visible_height = final_crop.height if final_crop else gel.preview_height
         st.text(f"{gel.filename} · {visible_width:,} × {visible_height:,} pixels")
@@ -440,7 +543,7 @@ def main() -> None:
                             key="adjust_orientation_manually",
                             on_click=orientation_ui.start_manual_orientation,
                         )
-                        if pending is None or st.session_state.orientation_preview_method == "manual":
+                        if pending is None or st.session_state.orientation_preview_method in ("manual", "confirmed"):
                             st.button(
                                 "Automatic orientation" if pending is not None else "Rotate and Orient",
                                 key="rotate_and_orient",
@@ -448,6 +551,13 @@ def main() -> None:
                                 on_click=request_orientation,
                                 help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
                             )
+            if st.session_state.orientation_previous_gel is not None:
+                with controls_panel:
+                    st.button(
+                        "Return to analysis", key="keep_previous_orientation",
+                        on_click=keep_previous_orientation,
+                        help="Keep the previous orientation and all analysis edits.",
+                    )
 
 
 if __name__ == "__main__":

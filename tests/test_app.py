@@ -36,7 +36,7 @@ def assert_preview(app, source, size, filename="gel.tif"):
     with Image.open(BytesIO(app.session_state["gel_image"].preview_png)) as preview:
         assert preview.format == "PNG"
         assert preview.size == size
-    assert not app.button[0].disabled
+    assert not app.button(key="clear_image").disabled
 
 
 def assert_empty(app):
@@ -49,7 +49,7 @@ def assert_empty(app):
     assert app.file_uploader[0].label == "Open a gel image"
     assert app.file_uploader[0].value is None
     assert app.session_state["gel_image"] is None
-    assert not app.button
+    assert all(button.disabled for button in app.button)
 
 
 def test_upload_same_name_replacement_clear_and_same_file_reupload(app):
@@ -64,7 +64,7 @@ def test_upload_same_name_replacement_clear_and_same_file_reupload(app):
     app.run()
     assert_preview(app, replacement, (9, 31))
 
-    app.button[0].click().run()
+    app.button(key="clear_image").click().run()
     assert_empty(app)
     upload(app, replacement)
     assert_preview(app, replacement, (9, 31))
@@ -156,7 +156,7 @@ def test_crop_detection_runs_once_per_upload_and_not_on_reruns(app, monkeypatch)
     assert calls == [(31, 20), (35, 23)]
 
     app.run()
-    app.button[0].click().run()
+    app.button(key="clear_image").click().run()
     assert_empty(app)
     assert calls == [(31, 20), (35, 23)]
 

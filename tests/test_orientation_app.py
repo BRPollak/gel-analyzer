@@ -164,7 +164,7 @@ def test_changing_upload_resets_orientation_state(
         app.button(key="confirm_orientation").click().run()
 
     if change == "clear":
-        app.button[0].click().run()
+        app.button(key="clear_image").click().run()
     elif change == "remove":
         app.file_uploader[0].set_value(None).run()
     elif change == "replace":

@@ -146,4 +146,5 @@ process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.widt
     root = ET.fromstring(validate_svg_composition(event, crop))
     labels = root.findall("{http://www.w3.org/2000/svg}text")
     assert [label.text for label in labels] == ["A ", "& β", "<Control>", "1 kb"]
+    assert float(labels[-1].attrib["font-size"]) == pytest.approx(14 * 0.8)
     assert labels[-1].attrib["transform"].endswith("rotate(-90)")

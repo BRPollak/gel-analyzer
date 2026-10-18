@@ -1,6 +1,7 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
 import {annotationSvg} from "./svg.mjs";
 import {createLadderEditor} from "./ladder.mjs";
+import {createGroupEditor} from "./groups.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
 import {cleanText, cleanStyle, labelRuns, textSnapshot, formattingStyle, formatSelection, editText,
   readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
@@ -27,9 +28,6 @@ let pendingEdit = null;
 let confirmationTimer = null;
 let confirming = false;
 let selected = "lane:0";
-let selectedGroupId = "";
-let groupSet = 0;
-let draft = {label: "", lanes: [0]};
 let previewError = "";
 let zoomFrame = null;
 let outerViewportListeners = [];
@@ -38,6 +36,10 @@ const histories = new Map();
 
 const ladderEditor = createLadderEditor({getState: () => state, getLayout: () => layout,
   canvas, onChange: changed, onAction: finishAction, status, onLayout: scheduleZoom});
+const groupEditor = createGroupEditor({getState: () => state, isDisabled: () => confirming,
+  onChange: changed, onSelect: id => selectLabel(`group:${id}`, false),
+  onRename: (id, text) => setLabelText(`group:${id}`, text), status,
+  onLayout: () => { scheduleZoom(); resizeFrame(); }});
 
 function syncMode() {
   const ladderMode = state?.mode === "ladder";
@@ -100,10 +102,6 @@ function selectedLabel() {
   return state.annotations.groups.find(group => `group:${group.id}` === selected) || null;
 }
 
-function currentGroup() {
-  return state?.annotations.groups.find(group => group.id === selectedGroupId) || null;
-}
-
 function setValue(node, value) {
   if (node.value !== String(value)) node.value = value;
 }
@@ -137,62 +135,6 @@ function refreshTargets() {
   if (!selectedLabel()) selected = state.annotations.labels.length ? "lane:0" : "";
 }
 
-function refreshGroupOptions() {
-  const select = byId("group-select");
-  const groups = state.annotations.groups.filter(group => group.set === groupSet);
-  const choices = [{id: "", label: "New group"}, ...groups];
-  while (select.options.length > choices.length) select.remove(select.options.length - 1);
-  choices.forEach((group, index) => {
-    const option = select.options[index] || select.appendChild(document.createElement("option"));
-    option.value = group.id;
-    option.textContent = group.label || "Untitled group";
-  });
-  if (!groups.some(group => group.id === selectedGroupId)) selectedGroupId = "";
-  setValue(select, selectedGroupId);
-}
-
-function syncGroupForm() {
-  setValue(byId("group-set"), groupSet);
-  refreshGroupOptions();
-  const group = currentGroup();
-  setValue(byId("group-text"), group?.label ?? draft.label);
-  const members = group?.lanes ?? draft.lanes;
-  byId("group-members").querySelectorAll("input").forEach(node => { node.checked = members.includes(Number(node.value)); });
-  byId("add-group").hidden = Boolean(group);
-  byId("delete-group").hidden = !group;
-  byId("group-text-field").hidden = Boolean(group);
-  byId("group-count").textContent = `(${state.annotations.groups.length})`;
-  byId("add-group").disabled = confirming || !draft.label.trim() || !draft.lanes.length || state.annotations.groups.length >= 100;
-  byId("group-hint").textContent = group
-    ? "Select lanes to change membership. Rename the group directly in the preview."
-    : "Choose a column, name the group, and select its lanes. Both sets appear together.";
-}
-
-function buildMembership() {
-  const container = byId("group-members");
-  container.replaceChildren();
-  state.lanes.forEach((_, index) => {
-    const label = document.createElement("label");
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = String(index);
-    checkbox.setAttribute("aria-label", `Include lane ${index + 1}`);
-    label.append(checkbox, document.createTextNode(`Lane ${index + 1}`));
-    container.appendChild(label);
-    checkbox.addEventListener("change", () => {
-      const members = [...container.querySelectorAll("input:checked")].map(node => Number(node.value));
-      const group = currentGroup();
-      if (group && !members.length) {
-        checkbox.checked = true;
-        status("A group needs at least one lane. Use Delete group to remove it.", true);
-        return;
-      }
-      if (group) { group.lanes = members; changed(); }
-      else { draft.lanes = members; syncGroupForm(); }
-    });
-  });
-}
-
 function selectLabel(key, updateGroup = true) {
   if (key !== selected) textSelection = null;
   selected = key;
@@ -200,9 +142,7 @@ function selectLabel(key, updateGroup = true) {
   if (updateGroup && key.startsWith("group:")) {
     const group = selectedLabel();
     if (group) {
-      groupSet = group.set;
-      selectedGroupId = group.id;
-      syncGroupForm();
+      groupEditor.selectGroup(group.id);
     }
   }
 }
@@ -495,7 +435,7 @@ function changed() {
   if (state.mode !== "ladder") {
     refreshTargets();
     syncToolbar();
-    syncGroupForm();
+    groupEditor.render();
   }
   repaint();
   // Bound the bridge delay even during continuous typing; each batch carries
@@ -529,7 +469,7 @@ function setConfirming(value) {
   ladderEditor.setDisabled(value, Boolean(previewError));
   byId("confirm").textContent = value ? "Composing annotations…" : "Confirm annotations";
   if (!value) {
-    syncGroupForm();
+    groupEditor.render();
     syncToolbar();
     byId("confirm").disabled = Boolean(previewError) || !layout;
   }
@@ -595,61 +535,14 @@ byId("auto-size").addEventListener("click", () => {
   state.annotations.fontSize = defaultFontSize(state.lanes);
   changed();
 });
-byId("open-groups").addEventListener("click", () => {
-  selectedGroupId = "";
-  const lane = selected.startsWith("lane:") ? Number(selected.slice(5)) : null;
-  if (Number.isInteger(lane)) draft.lanes = [lane];
-  syncGroupForm();
-  byId("group-panel").open = true;
-  byId("group-text").focus();
-  resizeFrame();
-});
+byId("open-groups").addEventListener("click", () => groupEditor.openNew());
 byId("edit-selected-group").addEventListener("click", () => {
-  if (!selected.startsWith("group:")) return;
-  selectLabel(selected);
-  byId("group-panel").open = true;
-  byId("group-select").focus();
-  resizeFrame();
-});
-byId("group-panel").addEventListener("toggle", resizeFrame);
-byId("group-set").addEventListener("change", event => {
-  groupSet = Number(event.target.value);
-  selectedGroupId = "";
-  syncGroupForm();
-});
-byId("group-select").addEventListener("change", event => {
-  selectedGroupId = event.target.value;
-  if (selectedGroupId) selectLabel(`group:${selectedGroupId}`, false);
-  syncGroupForm();
-});
-byId("group-text").addEventListener("input", event => {
-  const group = currentGroup();
-  if (group) { setLabelText(`group:${group.id}`, event.target.value); }
-  else { draft.label = cleanText(event.target.value); syncGroupForm(); }
-});
-byId("add-group").addEventListener("click", () => {
-  if (!draft.label.trim() || !draft.lanes.length || state.annotations.groups.length >= 100) return;
-  const id = `group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  state.annotations.groups.push({id, set: groupSet, label: draft.label, lanes: [...draft.lanes],
-    bold: false, italic: false, color: "#000000"});
-  selectedGroupId = id;
-  selected = `group:${id}`;
-  draft = {label: "", lanes: [0]};
-  changed();
-  byId("group-panel").open = false;
-  inputNodes.get(selected)?.focus();
-  resizeFrame();
-});
-byId("delete-group").addEventListener("click", () => {
-  if (!selectedGroupId) return;
-  state.annotations.groups = state.annotations.groups.filter(group => group.id !== selectedGroupId);
-  if (selected === `group:${selectedGroupId}`) selected = "lane:0";
-  selectedGroupId = "";
-  changed();
+  if (selected.startsWith("group:")) groupEditor.openGroup(selected.slice(6));
 });
 byId("zoom").addEventListener("change", updateZoom);
 function finishAction(action = "confirm") {
   if (confirming || !state) return;
+  if (action === "confirm" && state.mode !== "ladder" && !groupEditor.validate()) return;
   clearTimeout(pendingEdit);
   pendingEdit = null;
   if (action === "confirm" && !repaint()) return;
@@ -713,14 +606,10 @@ window.addEventListener("message", event => {
     histories.clear();
     textSelection = null;
     selected = "lane:0";
-    groupSet = 0;
-    selectedGroupId = "";
-    draft = {label: "", lanes: [0]};
-    byId("group-panel").open = false;
-    buildMembership();
+    groupEditor.reset();
     refreshTargets();
     syncToolbar();
-    syncGroupForm();
+    groupEditor.render();
     setConfirming(false);
     byId("loading").hidden = false;
     byId("editor").hidden = true;
@@ -749,7 +638,7 @@ window.addEventListener("message", event => {
     state.ladderStep = args.ladder_step || "preset";
     refreshTargets();
     syncToolbar();
-    syncGroupForm();
+    groupEditor.render();
     repaint();
   }
   if (args.error && incomingRevision >= revision) {

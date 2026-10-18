@@ -124,13 +124,13 @@ function oneLine(value) {
 }
 
 /** Rotated ladder labels keep their ink centers at the clicked native x. */
-function layoutLadder(ladder, defaultFontSize, annotationTop, measure) {
+function layoutLadder(ladder, laneFontSize, annotationTop, measure) {
   if (!ladder) return {labels: [], guides: [], top: 0, tiers: 0};
   const labels = ladder.preset?.labels;
   if (!Array.isArray(labels) || !labels.length || labels.some(text => typeof text !== "string")) {
     throw new Error("Choose a ladder preset with size labels.");
   }
-  const preferredFontSize = Math.min(4096, Math.max(1, defaultFontSize)) / 2;
+  const preferredFontSize = laneFontSize * 0.8;
   function labelSpec(value, fontSize) {
     const font = annotationFont({}, fontSize);
     const text = oneLine(value);
@@ -314,7 +314,7 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   }
   const allLabels = [...laneLabels, ...groupLabels];
   const annotationTop = Math.min(0, ...allLabels.map(label => label.start));
-  const ladderLayout = layoutLadder(ladder, defaultFontSize, annotationTop, measure);
+  const ladderLayout = layoutLadder(ladder, fontSize, annotationTop, measure);
   const ladderLabels = ladderLayout.labels;
   const guides = ladderLayout.guides;
   const minX = Math.min(0, ...allLabels.map(label => label.x - label.width),

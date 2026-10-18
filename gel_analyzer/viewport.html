@@ -1,8 +1,32 @@
 <style>
   [data-testid="stElementContainer"]:has(#gel-viewport-controller) { display: none; }
-  .stMainBlockContainer { padding-top: 3.5rem; padding-bottom: 1.5rem; }
-  [data-testid="stHeadingWithActionElements"] h1 { font-size: 2rem; padding-top: 0; }
-  .st-key-gel_upload_start { max-width: 760px; margin-inline: auto; }
+  [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], #MainMenu { display: none !important; }
+  [data-testid="stHeader"] { background: transparent; pointer-events: none; }
+  [data-testid="stHeader"] > * { pointer-events: auto; }
+  .stMainBlockContainer { padding-top: 1.75rem; padding-bottom: 1.5rem; }
+  [data-testid="stHeadingWithActionElements"] h1 { font-size: 2rem; padding-top: 0; letter-spacing: -.045em; font-weight: 650; }
+  .st-key-gel_header { gap: .1rem; border-left: 3px solid #18786f; padding-left: 1rem; }
+  .st-key-gel_header [data-testid="stCaptionContainer"] { color: #526777; }
+  .st-key-gel_progress { max-width: 680px; }
+  .st-key-gel_progress [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; gap: .5rem; }
+  .st-key-gel_progress [data-testid="stColumn"] { min-width: 0; }
+  .st-key-gel_progress [data-testid="stButton"] button { min-height: 2.25rem; border-color: #d9e3e7; background: #f4f8f8; color: #11665e; }
+  .st-key-gel_progress [data-testid="stButton"] button p { font-size: .8rem; white-space: nowrap; }
+  .st-key-gel_progress [data-testid="stButton"] button[kind="primary"] { background: #18786f; border-color: #18786f; color: #fff; }
+  .st-key-gel_progress [data-testid="stButton"] button:not(:disabled):hover { background: #e4f2ef; border-color: #18786f; color: #11665e; }
+  .st-key-gel_progress [data-testid="stButton"] button:disabled { background: transparent; border-color: transparent; color: #7c8991; }
+  .st-key-gel_upload_start { max-width: 760px; margin: 1.5rem auto 0; padding: 1.5rem; border: 1px solid #d9e3e7; border-radius: 16px; background: #fff; box-shadow: 0 6px 24px #172b3a06; }
+  .st-key-gel_upload_start h3 { font-size: 1.25rem; padding-top: 0; }
+  .st-key-gel_upload_start [data-testid="stFileUploaderDropzone"] { border: 1px dashed #a5bfc1; border-radius: 10px; background: #f4f9f8; }
+  .st-key-gel_upload_start [data-testid="stFileUploaderDropzone"]:hover { border-color: #18786f; }
+  .st-key-gel_workflow_controls { background: #fff; border-color: #d9e3e7; border-radius: 12px; box-shadow: 0 4px 18px #172b3a06; }
+  [data-testid="stButton"] button, [data-testid="stDownloadButton"] button, [data-testid="stPopover"] button { border-radius: 8px; }
+  @media (max-width: 480px) {
+    .st-key-gel_progress [data-testid="stHorizontalBlock"] { gap: .2rem; }
+    .st-key-gel_progress [data-testid="stButton"] button { padding: .25rem .2rem; }
+    .st-key-gel_progress [data-testid="stButton"] button p { font-size: .69rem; }
+    .st-key-gel_upload_start { padding: 1rem; margin-top: .5rem; }
+  }
   iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"] { display: block; }
   .st-key-gel_workspace { --gel-workspace-height: calc(100dvh - 260px); }
   .st-key-gel_workflow_controls { max-height: var(--gel-workspace-height); overflow-y: auto; }
@@ -11,6 +35,9 @@
     flex: 1 1 auto; min-height: 0; overflow-y: auto;
   }
   .st-key-gel_export_options { min-height: 0; }
+  .st-key-gel_annotation_heading { gap: .25rem; }
+  .st-key-gel_annotation_heading [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+  .st-key-gel_annotation_heading h3 { padding-block: 0; font-size: 1.35rem; }
   .st-key-gel_workflow_controls > [data-testid="stLayoutWrapper"]:has(.st-key-gel_export_actions) {
     flex: 0 0 auto;
   }

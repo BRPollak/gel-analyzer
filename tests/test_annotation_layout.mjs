@@ -386,14 +386,14 @@ test("unobstructed ladder leaders use the subtly lengthened fifteen-pixel line",
   assertLadderFits(layout);
 });
 
-test("ladder labels keep fractional clicked x and half the default font independently of edited lane font", () => {
+test("ladder labels keep fractional clicked x and start at 80% of the edited lane font", () => {
   const specification = {...input, annotations: {...input.annotations, fontSize: 72},
     ladder: ladderWith([{markerIndex: 2, x: 173.375, y: 45.25}])};
   const before = structuredClone(specification);
   const layout = layoutAnnotations(specification, measure);
   const label = layout.ladderLabels[0];
-  assert.equal(label.fontSize, 4.5, "default lane size is 9, even though edited lane size is 72");
-  assert.equal(label.font, "4.5px Arial");
+  assert.equal(label.fontSize, 57.6, "ladder size follows the edited lane size of 72");
+  assert.equal(label.font, "57.6px Arial");
   assert.equal(label.text, "1.0 kb");
   assert.equal(label.color, "#202020");
   assert.equal(label.cropX, 173.375);
@@ -406,13 +406,21 @@ test("ladder labels keep fractional clicked x and half the default font independ
   assert.deepEqual(specification, before, "layout must not mutate placement data");
 });
 
-test("ladder font halves the bounded default including half-pixel and maximum sizes", () => {
-  for (const [height, expected] of [[1, 0.5], [39, 15.5], [6000, 2048]]) {
+test("ladder font follows 80% of default and edited lane sizes including fractional and maximum sizes", () => {
+  for (const [height, laneFontSize] of [[1, 1], [39, 31], [6000, 4096]]) {
     const layout = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
-      annotations: {fontSize: 1, labels: [{text: "A"}]},
+      annotations: {labels: [{text: "A"}]},
       ladder: ladderWith([{markerIndex: 0, x: 25, y: height / 2}], {labels: ["M"]})}, measure);
-    assert.equal(layout.ladderLabels[0].fontSize, expected);
+    assert.equal(layout.fontSize, laneFontSize);
+    assert.equal(layout.ladderLabels[0].fontSize, laneFontSize * 0.8);
     assertLadderFits(layout);
+    for (const editedSize of [1, 31, 4096]) {
+      const edited = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
+        annotations: {fontSize: editedSize, labels: [{text: "A"}]},
+        ladder: ladderWith([{markerIndex: 0, x: 25, y: height / 2}], {labels: ["M"]})}, measure);
+      assert.equal(edited.ladderLabels[0].fontSize, editedSize * 0.8);
+      assertLadderFits(edited);
+    }
   }
 });
 
@@ -440,7 +448,7 @@ test("nearby ladder labels shrink together at one level without moving markers o
   const layout = layoutAnnotations(specification, measure);
   const single = layoutAnnotations({...specification, ladder: ladderWith(placements.slice(0, 1))}, measure);
   assert.equal(layout.ladderTiers, 1);
-  assert.ok(layout.ladderLabels[0].fontSize > 0 && layout.ladderLabels[0].fontSize < 4.5);
+  assert.ok(layout.ladderLabels[0].fontSize > 0 && layout.ladderLabels[0].fontSize < 72 * 0.8);
   assert.equal(new Set(layout.ladderLabels.map(label => label.fontSize)).size, 1);
   assert.equal(new Set(layout.ladderLabels.map(label => label.inkBottom)).size, 1);
   assert.equal(new Set(layout.guides.map(guide => guide.startY - guide.endY)).size, 1);
@@ -459,9 +467,9 @@ test("nearby ladder labels shrink together at one level without moving markers o
     {...placements[0], x: 10}, {...placements[1], x: 100}, {...placements[2], x: 300},
   ])}, measure);
   assert.equal(separated.ladderTiers, 1);
-  assert.ok(separated.ladderLabels.every(label => label.fontSize === 4.5),
+  assert.ok(separated.ladderLabels.every(label => label.fontSize === 72 * 0.8),
     "moving close markers apart restores the normal ladder font");
-  assert.equal(single.ladderLabels[0].fontSize, 4.5, "removing the collision restores the normal font");
+  assert.equal(single.ladderLabels[0].fontSize, 72 * 0.8, "removing the collision restores the normal font");
   assert.equal(separated.gelY, layout.gelY);
   assertLadderFits(separated);
   assert.deepEqual(specification, before, "fitting must not modify saved markers, labels, or fonts");
@@ -488,7 +496,8 @@ test("ladder fitting remeasures quantized glyph ink instead of assuming proporti
     {markerIndex: 0, x: 120.125, y: 45}, {markerIndex: 1, x: 123.25, y: 46},
   ])};
   const layout = layoutAnnotations(specification, quantizedMeasure);
-  assert.ok(layout.ladderLabels.every(label => label.fontSize < 1),
+  const proportional = layoutAnnotations(specification, measure);
+  assert.ok(layout.ladderLabels.every(label => label.fontSize < proportional.ladderLabels[0].fontSize),
     "pixel-rounded ink requires a smaller font than a proportional estimate");
   for (const label of layout.ladderLabels) {
     const metrics = quantizedMeasure(label.text, label.font);
@@ -557,7 +566,7 @@ test("ladder composition draws all leaders behind white label backings and rotat
   assert.equal(calls.filter(call => call.method === "restore").length, 2);
   const ladderText = calls.filter(call => call.method === "fillText").slice(input.lanes.length);
   assert.ok(ladderText.every(call => call.args[1] === 0 && call.args[2] === 0 && call.align === "left"));
-  assert.ok(layout.ladderLabels.every(label => label.fontSize < 4.5));
+  assert.ok(layout.ladderLabels.every(label => label.fontSize < input.annotations.fontSize * 0.8));
   assert.deepEqual(ladderText.map(call => call.font), layout.ladderLabels.map(label => label.font),
     "export draws the fitted fonts used to calculate collision-free geometry");
   assert.equal(new Set(layout.guides.map(guide => guide.startY - guide.endY)).size, 1);

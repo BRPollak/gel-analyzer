@@ -215,9 +215,6 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
     stage = st.session_state.lane_stage
     if stage == "cropped":
         crop = st.session_state.lane_crop
-        count = len(crop.lanes)
-        if st.session_state.get("annotation_stage") not in ("ladder_offer", "final"):
-            st.caption(f"Crop confirmed · {count} lane{'s' if count != 1 else ''}")
         annotation_ui.show_annotations(crop, gel.filename)
         return
 
@@ -250,7 +247,10 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
                 "Confirm", key="confirm_lane_borders", type="primary",
                 on_click=confirm_lane_borders, disabled=not st.session_state.lane_wells,
             )
-            st.button("Add lane", key="add_lane", on_click=add_lane)
+            st.button(
+                "Add lane", key="add_lane", on_click=add_lane,
+                help="Fits a smaller lane into remaining space. At the image bottom, nearby borders move by one pixel to make room.",
+            )
             st.caption("Arrow keys move a focused handle one pixel; Shift moves ten.")
         else:
             st.subheader("Define bottom of lane (right edge)")
