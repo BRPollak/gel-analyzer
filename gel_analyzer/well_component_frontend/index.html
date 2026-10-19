@@ -32,7 +32,9 @@
     .outline, #guide-halo, #guide, .dot { vector-effect: non-scaling-stroke; }
     #gel[data-review-mode="borders"], #gel[data-review-mode="extent"], #gel[data-review-mode^="boundary_"] { cursor: default; }
     .review-handle { outline: none; }
+    .review-ring { fill: none; stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; visibility: hidden; }
     .border-handle { cursor: ns-resize; }
+    #gel[data-review-mode="borders"] .border-handle { cursor: inherit; }
     .extent-handle { cursor: ew-resize; }
     .review-line { stroke: #67e8f9; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
     .review-grip { fill: #0f172a; stroke: #67e8f9; stroke-width: 2; vector-effect: non-scaling-stroke; }
@@ -44,6 +46,22 @@
     #gel[data-dragging="true"] .position-handle { cursor: grabbing; }
     .review-handle:focus .review-grip { fill: #fff; stroke: #2563eb; stroke-width: 3; }
     .review-handle:focus .review-symbol { fill: #2563eb; }
+    #gel[data-review-mode="borders"] .review-line,
+    #gel[data-review-mode="borders"] .review-grip { stroke: var(--lane-color); }
+    #gel[data-review-mode="borders"] .review-symbol { fill: var(--lane-color); }
+    #gel[data-review-mode="borders"] .review-handle:focus .review-grip { fill: #0f172a; stroke-width: 3; }
+    #gel[data-review-mode="borders"] .review-handle[data-highlighted="true"] .review-ring,
+    #gel[data-review-mode="borders"] .review-handle:focus .review-ring { visibility: visible; }
+    #gel[data-review-mode="borders"] .review-handle[data-active="true"] .review-grip { stroke-width: 4; }
+    .manual-halo, .manual-box { fill: none; vector-effect: non-scaling-stroke; }
+    .manual-halo { stroke: #101827; stroke-width: 4.5; }
+    .manual-box { stroke: var(--lane-color); stroke-width: 1.8; }
+    .manual-well { stroke-width: 2; }
+    .manual-lane[data-highlighted="true"] .manual-halo { stroke-width: 7; }
+    .manual-lane[data-highlighted="true"] .manual-box { stroke-width: 3; }
+    .manual-lane[data-selected="true"] .manual-box { stroke-dasharray: 7 3; }
+    .manual-label rect { fill: #0f172a; stroke: var(--lane-color); stroke-width: 2; }
+    .manual-label text { fill: #fff; font-size: 12px; font-weight: 700; }
     .review-line.extent-line { stroke: #fbbf24; stroke-width: 2; }
     .extent-handle .review-grip { stroke: #fbbf24; }
     .extent-handle .review-symbol { fill: #fbbf24; }
@@ -56,8 +74,16 @@
     .delete-background { fill: #0f172a; stroke: #fda4af; stroke-width: 1.5; }
     .delete-symbol { fill: none; stroke: #fda4af; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
     .delete-connector { stroke: #fda4af; stroke-width: 1; vector-effect: non-scaling-stroke; }
+    .delete-number { fill: var(--lane-color); font-weight: 700; }
+    #gel[data-review-mode="borders"] .delete-background,
+    #gel[data-review-mode="borders"] .delete-symbol,
+    #gel[data-review-mode="borders"] .delete-connector { stroke: var(--lane-color); }
+    .delete-connector[data-highlighted="true"] { stroke-width: 3; }
+    .lane-delete[data-highlighted="true"] .delete-background { stroke-width: 3; }
     .lane-delete:hover .delete-background, .lane-delete:focus .delete-background { fill: #881337; stroke: #fff; stroke-width: 2; }
     .lane-delete:hover .delete-symbol, .lane-delete:focus .delete-symbol { stroke: #fff; }
+    #gel[data-review-mode="borders"] .lane-delete:hover .delete-background,
+    #gel[data-review-mode="borders"] .lane-delete:focus .delete-background { fill: #334155; stroke-width: 3; }
     .lane-delete[aria-disabled="true"] { cursor: default; opacity: .45; }
     .review-handle[aria-disabled="true"] { cursor: default; }
     #excluded-right { fill: #0f172a88; pointer-events: none; }
@@ -66,7 +92,7 @@
 <body>
   <main id="component">
     <div id="image-wrap">
-      <svg id="gel" xmlns="http://www.w3.org/2000/svg" role="group"
+      <svg id="gel" xmlns="http://www.w3.org/2000/svg" role="group" tabindex="-1"
           aria-label="Confirmed gel with well selection overlay" aria-describedby="status"
           data-testid="well-overlay">
         <image id="gel-image" x="0" y="0" preserveAspectRatio="none" />

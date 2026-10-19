@@ -64,6 +64,10 @@ image and correct them before relying on the results.
    their borders, remove one with its trash button, or **Add lane**, then
    **Confirm**. Drag the shared right edge (wells at left) or bottom edge
    (wells at top) to include the bands you want. Click **Confirm lanes and crop**.
+   During manual adjustment, lanes cycle through cyan, gold, and lavender with
+   matching, staggered handles. Hover or click a lane to identify it by its
+   outline and label; numbered trash buttons identify the lane they remove.
+   Remaining lanes keep their colors when you resize or delete a well.
 5. **Label samples.** Click a lane label on the image and type a name.
    Command-click (Ctrl-click on Windows) to add or remove labels from your
    selection, then use bold, italic, or text color to format them together.

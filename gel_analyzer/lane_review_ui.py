@@ -28,6 +28,10 @@ def reset_lane_review() -> None:
     st.session_state.lane_right = None
     st.session_state.lane_crop = None
     st.session_state.lane_source = None
+    st.session_state.lane_review_ids = ()
+    st.session_state.lane_review_next_id = 0
+    st.session_state.lane_review_identity_source = None
+    st.session_state.lane_review_resume_identity = None
     st.session_state.lane_token = uuid4().hex
     st.session_state.lane_revision = 0
     st.session_state.lane_error = None
@@ -39,6 +43,31 @@ def _clear_boundary_draft() -> None:
     st.session_state.lane_boundary_backup = None
     st.session_state.lane_boundary_last = None
     st.session_state.lane_boundary_count = None
+    st.session_state.lane_boundary_identity_backup = None
+
+
+def _set_review_ids(ids, next_id=None) -> None:
+    """Keep presentation identity outside Well/DetectionResult and project data."""
+    st.session_state.lane_review_ids = tuple(ids)
+    st.session_state.lane_review_next_id = (
+        max(ids, default=-1) + 1 if next_id is None else next_id
+    )
+    st.session_state.lane_review_identity_source = st.session_state.lane_source
+
+
+def _review_ids() -> tuple[int, ...]:
+    """Initialize upgraded/restored sessions without tying colors to lane indexes."""
+    ids = st.session_state.get("lane_review_ids")
+    if (st.session_state.get("lane_review_identity_source") is not st.session_state.lane_source
+            or not isinstance(ids, (tuple, list)) or len(ids) != len(st.session_state.lane_wells)
+            or any(type(value) is not int or value < 0 for value in ids)
+            or len(set(ids)) != len(ids)):
+        _set_review_ids(tuple(range(len(st.session_state.lane_wells))))
+    else:
+        next_id = st.session_state.get("lane_review_next_id")
+        if type(next_id) is not int or next_id <= max(ids, default=-1):
+            _set_review_ids(ids)
+    return tuple(st.session_state.lane_review_ids)
 
 
 def _review_mode() -> str | None:
@@ -91,6 +120,12 @@ def start_lane_review() -> None:
     annotation_ui.reset_annotations()
     st.session_state.lane_wells = wells
     st.session_state.lane_right = right
+    resume = st.session_state.get("lane_review_resume_identity")
+    if resume and resume["source"] is gel and resume["result"] is result:
+        _set_review_ids(resume["ids"], resume["next_id"])
+    else:
+        _set_review_ids(tuple(range(len(wells))))
+    st.session_state.lane_review_resume_identity = None
     # Freeze the original guide, including uncertain candidates, while the
     # user reviews boundaries. Late guide events cannot replace this review.
     st.session_state.well_editing = False
@@ -181,6 +216,7 @@ def accept_lane_event(event: object) -> None:
         well.bounds for well in st.session_state.lane_wells
     ):
         return
+    review_ids = _review_ids()
     st.session_state.lane_wells = wells
     st.session_state.lane_right = int(right)
     st.session_state.lane_revision = revision
@@ -189,6 +225,8 @@ def accept_lane_event(event: object) -> None:
     if action == "delete":
         annotation_ui.delete_lane_label(index)
         st.session_state.lane_wells = wells[:index] + wells[index + 1:]
+        _set_review_ids(review_ids[:index] + review_ids[index + 1:],
+                        st.session_state.lane_review_next_id)
         _sync_reviewed_count()
         # A structural edit invalidates every event from the old collection,
         # including clicks which still use its former lane numbering.
@@ -245,11 +283,17 @@ def define_boundary_wells() -> None:
     st.session_state.lane_boundary_backup = {
         "lane_wells": st.session_state.lane_wells, "lane_right": st.session_state.lane_right,
     }
+    # The geometry backup is merged into project saves; keep presentation-only
+    # metadata separate so the saved result format remains unchanged.
+    st.session_state.lane_boundary_identity_backup = (
+        _review_ids(), st.session_state.lane_review_next_id,
+    )
     count = st.session_state.get("well_expected_count")
     st.session_state.lane_boundary_count = max(2, count if type(count) is int and count > 0
                                              else len(st.session_state.lane_wells))
     st.session_state.lane_boundary_last = None
     st.session_state.lane_wells = (first,)
+    _set_review_ids((0,), 2)
     st.session_state.lane_boundary_stage = "first"
     _set_stage("borders")
 
@@ -280,6 +324,7 @@ def confirm_first_well() -> None:
     bounds[cross], bounds[cross + 2] = start, start + width
     last = Well(tuple(bounds), ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2))
     st.session_state.lane_wells = (first, last)
+    _set_review_ids((0, 1), 2)
     st.session_state.lane_boundary_stage = "last"
     _set_stage("borders")
 
@@ -290,6 +335,7 @@ def back_to_first_well() -> None:
     _consume_latest_event()
     st.session_state.lane_boundary_last = st.session_state.lane_wells[1]
     st.session_state.lane_wells = st.session_state.lane_wells[:1]
+    _set_review_ids((0,), 2)
     st.session_state.lane_boundary_stage = "first"
     _set_stage("borders")
 
@@ -300,6 +346,11 @@ def cancel_boundary_wells() -> None:
     backup = st.session_state.lane_boundary_backup
     st.session_state.lane_wells = backup["lane_wells"]
     st.session_state.lane_right = backup["lane_right"]
+    identity = st.session_state.get("lane_boundary_identity_backup")
+    if identity is not None:
+        _set_review_ids(*identity)
+    else:
+        _set_review_ids(tuple(range(len(st.session_state.lane_wells))))
     _clear_boundary_draft()
     _set_stage("borders")
 
@@ -326,6 +377,7 @@ def generate_boundary_lanes() -> None:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_wells = wells
+    _set_review_ids(tuple(range(len(wells))))
     st.session_state.well_expected_count = st.session_state.lane_boundary_count
     st.session_state.well_result = DetectionResult(wells, _lanes())
     annotation_ui.reset_annotations()
@@ -350,7 +402,10 @@ def add_lane() -> None:
     except lane_crop.LaneAdjustmentError as exc:
         st.session_state.lane_error = str(exc)
         return
+    review_ids = _review_ids()
+    next_id = st.session_state.lane_review_next_id
     st.session_state.lane_wells = wells
+    _set_review_ids(review_ids + (next_id,), next_id + 1)
     _sync_reviewed_count()
     annotation_ui.add_lane_label(len(wells))
     _set_stage("borders")
@@ -374,10 +429,16 @@ def back_to_well_review() -> None:
     if st.session_state.lane_wells:
         _sync_reviewed_count()
         st.session_state.well_editing = False
+        identity = {
+            "source": st.session_state.lane_source, "result": st.session_state.well_result,
+            "ids": _review_ids(), "next_id": st.session_state.lane_review_next_id,
+        }
     else:
         st.session_state.well_result = None
         st.session_state.well_editing = True
+        identity = None
     reset_lane_review()
+    st.session_state.lane_review_resume_identity = identity
 
 
 def back_to_lane_borders() -> None:
@@ -427,9 +488,11 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
 
     with image_panel:
         wells = st.session_state.lane_wells
+        review_ids = _review_ids()
         event = render_well_component(
             gel.preview_png, gel.preview_width, gel.preview_height,
-            points=(), wells=[{"bounds": well.bounds, "center": well.center} for well in wells],
+            points=(), wells=[{"bounds": well.bounds, "center": well.center, "review_id": review_id}
+                              for well, review_id in zip(wells, review_ids)],
             lanes=_lanes(), editable=True,
             token=st.session_state.lane_token, key=f"lane_overlay_{st.session_state.lane_token}",
             review_mode=_review_mode(), right_edge=st.session_state.lane_right,

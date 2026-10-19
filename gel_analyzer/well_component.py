@@ -36,8 +36,11 @@ def render_well_component(
 ) -> dict[str, Any] | None:
     """Show the overlay and return its last ``{token, revision, points}`` event.
 
-    ``wells`` contain ``bounds`` and optionally ``center``; each bounds/lanes
-    tuple is ``(left, top, right, bottom)`` in the confirmed image coordinates.
+    ``wells`` contain ``bounds`` and optionally ``center``; manual review also
+    supplies a nonnegative ``review_id`` that survives resizing and deletion of
+    other wells, so presentation colors do not depend on the current lane index.
+    This identity is UI metadata, separate from saved geometry and analysis.
+    Each bounds/lanes tuple is ``(left, top, right, bottom)`` in image coordinates.
     A stable key preserves in-progress drags during ordinary Streamlit reruns.
     Initial rendering emits no value, so it cannot erase accepted endpoints.
     Review modes ``borders`` and ``extent`` edit image-coordinate lane geometry and
