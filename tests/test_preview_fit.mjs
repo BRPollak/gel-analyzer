@@ -27,6 +27,19 @@ test("small images stay at native size and the lane-review gutter is additional 
   assert.equal(fit.overflowHeight, 0);
 });
 
+test("lane crop reserves room for the full enlarged target at either image edge", () => {
+  for (const workflowOrientation of ["wells_left", "wells_top"]) {
+    const fit = fitPreviewGeometry({imageWidth: 1200, imageHeight: 1200, availableWidth: 400,
+      viewportHeight: 500, chromeHeight: 60, reviewMode: "extent", workflowOrientation});
+    const top = workflowOrientation === "wells_top";
+    assert.equal(fit.rightGutter, top ? 0 : 30);
+    assert.equal(fit.bottomGutter, top ? 30 : 0);
+    assert.ok(fit.wrapperWidth <= 400);
+    assert.ok(fit.totalHeight <= fit.heightBudget + 1e-10);
+    assert.equal(fit.width / 1200, fit.height / 1200);
+  }
+});
+
 test("reserved gutter participates in width fitting and status text participates in height fitting", () => {
   const input = {imageWidth: 2000, imageHeight: 1000, availableWidth: 540,
     viewportHeight: 600, chromeHeight: 80, reviewMode: "borders", laneCount: 6};

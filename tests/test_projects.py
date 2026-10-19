@@ -70,6 +70,38 @@ def test_round_trip_preserves_axes_annotations_and_source_identity(orientation, 
         assert reopened[f"{editor}_revision"] == 0
 
 
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+def test_manual_ladder_project_round_trip_keeps_labels_positions_and_independent_draft(orientation):
+    state = project_state(orientation)
+    crop = state["lane_crop"]
+    confirmed = {"mode": "manual", "placements": [
+        {"id": "custom-1", "label": "500 bp", "x": 0.125, "y": 0.5},
+        {"id": "custom-2", "label": "25 kDa", "x": crop.width - 0.25, "y": crop.height - 0.125},
+    ]}
+    draft = {"mode": "manual", "placements": [
+        {"id": "custom-1", "label": "750 bp", "x": 12.625, "y": 6.875},
+    ]}
+    state.update(ladder_data=confirmed, ladder_draft=draft, ladder_step="markers")
+    restored = load_project(save_project(state))
+    assert restored["ladder_data"] == confirmed
+    assert restored["ladder_draft"] == draft
+    assert restored["ladder_step"] == "markers"
+    restored["ladder_draft"]["placements"][0]["label"] = "Changed"
+    assert restored["ladder_data"] == confirmed
+    assert state["ladder_draft"] == draft
+
+
+@pytest.mark.parametrize("change", [
+    {"id": "unsafe id"}, {"label": ""}, {"label": "two\nlines"}, {"x": -1},
+])
+def test_manual_ladder_project_rejects_invalid_saved_markers(change):
+    state = project_state()
+    marker = {"id": "custom-1", "label": "500 bp", "x": 0.125, "y": 0.5, **change}
+    state.update(ladder_data={"mode": "manual", "placements": [marker]}, ladder_draft=None)
+    with pytest.raises(ProjectError):
+        load_project(save_project(state))
+
+
 # Axis/angle behavior is covered above; each additional source format needs one round trip.
 @pytest.mark.parametrize("image_format,orientation", [("PNG", "wells_left"), ("JPEG", "wells_top")])
 def test_png_and_jpeg_projects_preserve_original_source_and_edits(image_format, orientation):
@@ -104,7 +136,7 @@ def test_new_source_formats_still_require_matching_source_dimensions(image_forma
     source = image_bytes(Image.new("L", (120, 90), 64), image_format)
     gel = load_image(source, f"experiment.{image_format.lower()}")
     gel = replace(gel, width=gel.width + 1)
-    with pytest.raises(ProjectError, match="dimensions"):
+    with pytest.raises(ProjectError, match="selections do not match its image"):
         load_project(save_project({"gel_image": gel}))
 
 
@@ -328,3 +360,44 @@ def test_restored_state_renders_crop_editor_angle_and_navigation(orientation):
     assert all(popover.proto.popover.label != "Project" for popover in app.get("popover"))
     assert app.subheader[0].value == "Annotate lanes"
     assert [app.button(key=f"workflow_step_{index}").disabled for index in range(4)] == [False, False, False, True]
+
+
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+def test_legacy_project_adopts_validated_well_count_without_losing_annotations(orientation):
+    state = project_state(orientation)
+    state.pop("well_expected_count")
+    restored = load_project(save_project(state))
+    assert restored["well_expected_count"] == 2
+    for key in ("well_result", "lane_crop", "annotation_data", "ladder_data"):
+        assert restored[key] == state[key]
+
+
+@pytest.mark.parametrize("count", [1, 3, 0, -1, True, 1.5])
+def test_project_rejects_invalid_or_mismatched_well_count(count):
+    state = project_state()
+    state["well_expected_count"] = count
+    with pytest.raises(ProjectError, match="well count"):
+        load_project(save_project(state))
+
+
+def test_legacy_empty_detection_reopens_guide_with_required_count_blank():
+    state = project_state()
+    state = {"gel_image": state["gel_image"], "well_points": state["well_points"],
+             "well_result": DetectionResult((), ())}
+    restored = load_project(save_project(state))
+    assert restored["well_result"] is None
+    assert restored["well_expected_count"] is None
+    assert restored["well_editing"]
+    assert restored["well_points"] == state["well_points"]
+
+
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+@pytest.mark.parametrize("result", [None, DetectionResult((), ())])
+def test_legacy_empty_detection_preserves_completed_manual_lanes_and_annotations(orientation, result):
+    state = project_state(orientation)
+    state.update(well_expected_count=None, well_result=result)
+    restored = load_project(save_project(state))
+    assert restored["well_expected_count"] == 2
+    assert restored["well_result"].wells == state["lane_wells"]
+    for key in ("lane_crop", "annotation_data", "ladder_data"):
+        assert restored[key] == state[key]

@@ -128,7 +128,7 @@ def _size(value):
     if (not isinstance(value, (tuple, list)) or len(value) != 2
             or any(type(number) is not int or not 1 <= number <= 32767 for number in value)
             or value[0] * value[1] > 64_000_000):
-        raise ProjectError("The project contains invalid image dimensions.")
+        raise ProjectError("The project's image could not be read. Try opening another saved copy.")
     return tuple(value)
 
 
@@ -158,7 +158,7 @@ def _image(data, size, image_formats, *, source=False):
             else:
                 image.load()
             if image.size != tuple(size):
-                raise ProjectError("The project's image dimensions do not match its geometry.")
+                raise ProjectError("The project's saved selections do not match its image. Try opening another saved copy.")
 
 
 def _orientation(value):
@@ -282,6 +282,16 @@ def _validate(state):
         _lanes(result.wells, result.lanes, size, orientation)
         if not isinstance(result.warnings, tuple) or any(not isinstance(item, str) for item in result.warnings):
             raise ProjectError("The project has invalid detection notes.")
+        if count is None:
+            # Older projects counted wells automatically. Preserve completed
+            # analysis by adopting its validated geometry as the entered count.
+            if result.wells:
+                state["well_expected_count"] = len(result.wells)
+            elif state["lane_stage"] is None:
+                state["well_result"] = None
+                state["well_editing"] = True
+        elif len(result.wells) != count or len(result.lanes) != count:
+            raise ProjectError("The project's detection does not match its required well count. Redefine the wells and save again.")
     if state["lane_stage"] not in (None, "borders", "extent", "cropped"):
         raise ProjectError("The project contains an unknown lane step.")
     _wells(state["lane_wells"], size)
@@ -296,6 +306,14 @@ def _validate(state):
                       (well.bounds[0], well.bounds[1], right, well.bounds[3])
                       for well in state["lane_wells"])
         _lanes(state["lane_wells"], lanes, size, orientation)
+        if count is None and (result is None or not result.wells):
+            if state["lane_wells"]:
+                # Legacy automatic detection could find nothing before manual
+                # Add lane edits produced a completed, annotated analysis.
+                state["well_result"] = DetectionResult(state["lane_wells"], lanes, result.warnings if result else ())
+                state["well_expected_count"] = len(state["lane_wells"])
+            elif state["lane_stage"] == "borders":
+                state.update(well_result=None, well_editing=True, lane_stage=None, lane_right=None)
     crop = state["lane_crop"]
     if crop is not None:
         if not isinstance(crop, LaneCrop) or crop.workflow_orientation != orientation:
@@ -303,7 +321,7 @@ def _validate(state):
         crop_size = _size((crop.width, crop.height))
         left, top, right, bottom = _bounds(crop.crop_box, size, raster=True)
         if crop_size != (right - left, bottom - top):
-            raise ProjectError("The project's crop dimensions are inconsistent.")
+            raise ProjectError("The project's saved crop does not match its image. Try opening another saved copy.")
         _image(crop.preview_png, crop_size, "PNG")
         _lanes(crop.wells, crop.lanes, crop_size, orientation)
         if len(crop.lanes) != len(state["lane_wells"]):

@@ -76,6 +76,7 @@ def detect_and_crop(workflow):
     app = workflow.app
     pixels = confirm_top(workflow)
     app.button(key="define_wells").click().run()
+    app.number_input(key="expected_well_count").set_value(4).run()
     workflow.well_event = {"token": app.session_state["well_token"], "revision": 1,
                            "points": [[26, 45], [280, 45]]}
     app.run()

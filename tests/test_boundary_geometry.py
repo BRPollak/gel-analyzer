@@ -151,12 +151,12 @@ def test_half_pixel_lane_width_is_rejected_by_edit_and_generation(geometry):
         bounds[axis + 2] = bounds[axis] + .5
         narrow.append(well(bounds))
     lanes = tuple(lane_bounds(item.bounds, 210, orientation) for item in narrow)
-    with pytest.raises(LaneAdjustmentError, match="at least one pixel"):
+    with pytest.raises(LaneAdjustmentError, match="too narrow"):
         validate_lane_adjustments(endpoints, lanes, 210, size, workflow_orientation=orientation)
-    with pytest.raises(LaneAdjustmentError, match="at least one pixel"):
+    with pytest.raises(LaneAdjustmentError, match="too narrow"):
         validate_boundary_adjustments(endpoints[:1], lanes[:1], 210, size, "boundary_first",
                                       workflow_orientation=orientation)
-    with pytest.raises(LaneAdjustmentError, match="at least one pixel"):
+    with pytest.raises(LaneAdjustmentError, match="too narrow"):
         generate_boundary_lanes(*narrow, 15, 210, size, workflow_orientation=orientation)
 
 

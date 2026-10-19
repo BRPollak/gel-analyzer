@@ -36,7 +36,7 @@ def oriented_sample():
 def test_sample_ladder_and_six_preps_are_separate_under_small_guide_changes(oriented_sample, dx, dy):
     image = oriented_sample
     before = image.tobytes()
-    result = detect_wells(image, ((184 + dx, 190 + dy), (174 + dx, 1130 + dy)))
+    result = detect_wells(image, ((184 + dx, 190 + dy), (174 + dx, 1130 + dy)), expected_count=7)
 
     assert len(result.wells) == 7
     assert len(set(result.wells)) == 7

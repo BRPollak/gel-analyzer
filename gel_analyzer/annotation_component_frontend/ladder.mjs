@@ -1,4 +1,5 @@
 import {cursorForMarker, ladderImagePoint, laneAtPoint, moveLadderCursor, movedPastTap, placeLadderMarker} from "./ladder_geometry.mjs";
+import {createManualLadderEditor} from "./manual_ladder.mjs";
 
 /** Local interaction state lives outside the clean, exportable canvas. */
 export function createLadderEditor({getState, getLayout, canvas, onChange, onAction, status, onLayout = () => {}}) {
@@ -27,8 +28,11 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   const active = () => getState()?.mode === "ladder";
   const editable = () => active() && !disabled && !pendingChange;
   const placements = () => getState()?.ladder?.placements ?? [];
-  const markerLabel = () => getState()?.ladder?.preset.labels[selectedMarker];
+  const manual = () => getState()?.ladder?.mode === "manual";
+  const markerLabel = () => getState()?.ladder?.preset?.labels[selectedMarker];
   const isPlaced = index => placements().some(item => item.markerIndex === index);
+  const manualEditor = createManualLadderEditor({getState, getLayout, canvas, editable,
+    canConfirm: () => !previewError, onChange, status});
 
   function changed(message = "") {
     onChange();
@@ -38,6 +42,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
 
   function go(step) {
     if (!editable()) return;
+    if (manual() && !manualEditor.commit()) return;
     getState().ladderStep = step;
     changed();
     byId("ladder-heading").focus();
@@ -45,6 +50,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
 
   function setPreset(preset) {
     const state = getState();
+    manualEditor.reset();
     state.ladder = {preset: {id: preset.id, name: preset.name, labels: [...preset.labels],
       ...(preset.referenceImage ? {referenceImage: preset.referenceImage} : {}),
       ...(preset.referenceNote ? {referenceNote: preset.referenceNote} : {})},
@@ -52,6 +58,17 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     selectedMarker = null;
     cursor = null;
     changed(`${preset.name} selected.`);
+  }
+
+  function setManual() {
+    getState().ladder = {mode: "manual", placements: []};
+    getState().ladderStep = "markers";
+    selectedMarker = null;
+    cursor = null;
+    candidatesVisible = false;
+    manualEditor.reset();
+    changed("Click a ladder band to add a marker label.");
+    byId("ladder-heading").focus();
   }
 
   function setLane(index) {
@@ -115,8 +132,8 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   }
 
   function renderMarkers(state) {
-    const labels = state.ladder?.preset.labels ?? [];
-    const signature = JSON.stringify([state.ladder?.preset.id, labels]);
+    const labels = state.ladder?.preset?.labels ?? [];
+    const signature = JSON.stringify([state.ladder?.preset?.id, labels]);
     if (signature !== markerSignature) {
       markerSignature = signature;
       markerNodes.clear();
@@ -156,7 +173,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
       candidates().forEach((candidate, index) => {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = `Band ${index + 1} · ${Math.round(top() ? candidate.y : candidate.x)} px`;
+        button.textContent = `Band ${index + 1}`;
         button.disabled = selectedMarker === null || !editable();
         button.addEventListener("click", () => place({x: candidate.x, y: candidate.y}));
         byId("ladder-detected-bands").appendChild(button);
@@ -214,8 +231,10 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     if (!shown) return;
     overlay.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
     overlay.dataset.step = state.ladderStep;
+    overlay.setAttribute("aria-label", manual() ? "Click a ladder band to add a marker label." : "Select a ladder lane or place its size markers");
     const layer = byId("ladder-lane-outlines");
     layer.replaceChildren();
+    if (manual()) { cursorNode.setAttribute("visibility", "hidden"); cursorNode.setAttribute("tabindex", "-1"); return; }
     state.lanes.forEach((lane, index) => {
       if (state.ladderStep === "markers" && index !== state.ladder?.laneIndex) return;
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -240,12 +259,12 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     cursorNode.setAttribute("tabindex", showCursor && !disabled && !pendingChange ? "0" : "-1");
     cursorNode.setAttribute("aria-disabled", String(disabled || Boolean(pendingChange)));
     if (!showCursor) return;
-    cursorNode.setAttribute("aria-label", `${markerLabel()} position. ${directions()} move one pixel; Shift moves ten. Enter places the marker. Escape returns to its size button.`);
+    cursorNode.setAttribute("aria-label", `${markerLabel()} position. ${directions()} move the marker; hold Shift for larger steps. Enter places the marker. Escape returns to its size button.`);
     cursorNode.setAttribute("aria-orientation", top() ? "vertical" : "horizontal");
     cursorNode.setAttribute("aria-valuemin", lane[top() ? 1 : 0]);
     cursorNode.setAttribute("aria-valuemax", lane[top() ? 3 : 2]);
     cursorNode.setAttribute("aria-valuenow", top() ? cursor.y : cursor.x);
-    cursorNode.setAttribute("aria-valuetext", `${(top() ? cursor.y : cursor.x).toFixed(2)} pixels from the ${top() ? "top" : "left"} of the gel`);
+    cursorNode.setAttribute("aria-valuetext", `${Math.round(100 * (top() ? cursor.y / state.height : cursor.x / state.width))}% from the ${top() ? "top" : "left"} of the gel`);
     const x = layout.gelX + cursor.x;
     const y = layout.gelY + cursor.y;
     const line = byId("ladder-cursor-line");
@@ -270,43 +289,52 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     const step = state.ladderStep ?? "preset";
     const presets = state.presets ?? [];
     const choices = [...presets];
-    if (state.ladder && !choices.some(preset => preset.id === state.ladder.preset.id)) choices.push(state.ladder.preset);
+    if (state.ladder?.preset && !choices.some(preset => preset.id === state.ladder.preset.id)) choices.push(state.ladder.preset);
     const signature = JSON.stringify(choices.map(preset => [preset.id, preset.name]));
     if (signature !== presetSignature) {
       presetSignature = signature;
       options(byId("ladder-preset"), choices.map(preset => ({value: preset.id, label: preset.name})), "Choose a preset…");
     }
-    byId("ladder-preset").value = state.ladder?.preset.id ?? "";
+    byId("ladder-preset").value = state.ladder?.preset?.id ?? "";
     if (laneSignature !== String(state.lanes.length)) {
       laneSignature = String(state.lanes.length);
       options(byId("ladder-lane"), state.lanes.map((_, index) => ({value: index, label: `Lane ${index + 1}`})), "Choose a lane…");
     }
     byId("ladder-lane").value = state.ladder?.laneIndex == null ? "" : String(state.ladder.laneIndex);
-    byId("ladder-heading").textContent = {preset: "Choose a ladder preset", lane: "Select the ladder lane", markers: "Place ladder size markers"}[step];
+    byId("ladder-heading").textContent = manual() && step === "markers" ? "Manual ladder"
+      : {preset: "Choose a ladder", lane: "Select the ladder lane", markers: "Place ladder size markers"}[step];
     for (const [name, id] of [["preset", "ladder-preset-step"], ["lane", "ladder-lane-step"], ["markers", "ladder-marker-step"]]) byId(id).hidden = step !== name;
     byId("ladder-preset-hint").textContent = choices.length ? "Choose the ladder used in this gel."
-      : "No ladder presets are configured yet. Choose Skip ladder to continue.";
+      : "No ladder presets are configured. Choose Manual ladder to add your own labels.";
     byId("ladder-back").hidden = step === "preset";
     byId("ladder-change-preset").hidden = step !== "markers";
-    byId("ladder-change-lane").hidden = step !== "markers";
+    byId("ladder-change-lane").hidden = step !== "markers" || manual();
+    byId("ladder-change-preset").textContent = manual() ? "Change ladder" : "Change preset";
     byId("ladder-confirm").hidden = step !== "markers";
     byId("ladder-skip").hidden = Boolean(state.confirmedLadder);
     byId("ladder-remove").hidden = !state.confirmedLadder;
     byId("ladder-guard").hidden = !pendingChange;
     byId("ladder-guard-message").textContent = pendingChange?.message ?? "";
     byId("ladder-accept-change").textContent = pendingChange?.kind === "remove" ? "Remove ladder" : "Change and clear markers";
-    renderMarkers(state);
+    for (const id of ["ladder-detect-bands", "ladder-keyboard", "ladder-remove-marker", "ladder-detected-bands"]) byId(id).hidden = manual();
+    byId("ladder-manual").textContent = manual() ? "Continue manual ladder" : "Manual ladder";
+    if (manual()) markerSignature = "";
+    else {
+      renderMarkers(state);
+      byId("ladder-marker-help").textContent = "Place any sizes you need. Select a placed size to move or remove it.";
+    }
+    drawOverlay(state);
+    manualEditor.render();
     for (const container of [byId("ladder-panel"), byId("ladder-actions")]) {
-      container.querySelectorAll("button, select").forEach(node => { node.disabled = disabled || Boolean(pendingChange); });
+      container.querySelectorAll("button, select, input").forEach(node => { node.disabled = disabled || Boolean(pendingChange); });
     }
     byId("ladder-detected-bands").querySelectorAll("button").forEach(node => { node.disabled ||= selectedMarker === null; });
     for (const name of ["ladder-accept-change", "ladder-keep-current"]) byId(name).disabled = disabled;
-    byId("ladder-continue").disabled ||= !state.ladder;
+    byId("ladder-continue").disabled ||= !state.ladder?.preset;
     byId("ladder-use-lane").disabled ||= state.ladder?.laneIndex == null;
-    byId("ladder-confirm").disabled ||= !placements().length || previewError;
+    byId("ladder-confirm").disabled ||= (!placements().length && !(manual() && manualEditor.hasDraft())) || previewError;
     byId("ladder-keyboard").disabled ||= selectedMarker === null;
     byId("ladder-confirm").textContent = disabled ? "Composing ladder annotations…" : "Confirm ladder annotations";
-    drawOverlay(state);
   }
 
   byId("ladder-reference-toggle").addEventListener("click", () => {
@@ -328,18 +356,24 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   byId("ladder-preset").addEventListener("change", event => {
     if (!editable()) return;
     const preset = (getState().presets ?? []).find(item => item.id === event.target.value);
-    if (!preset || preset.id === getState().ladder?.preset.id) { render(); return; }
+    if (!preset || preset.id === getState().ladder?.preset?.id) { render(); return; }
     if (placements().length) guard({kind: "preset", preset,
       message: "Changing the preset clears its placed markers. Your lane labels and groups are kept."});
     else setPreset(preset);
+  });
+  byId("ladder-manual").addEventListener("click", () => {
+    if (!editable()) return;
+    if (manual()) { go("markers"); return; }
+    if (placements().length) guard({kind: "manual", message: "Switching to Manual ladder clears the preset markers. Your lane labels and groups are kept."});
+    else setManual();
   });
   byId("ladder-lane").addEventListener("change", event => {
     if (event.target.value !== "") chooseLane(Number(event.target.value));
     else render();
   });
-  byId("ladder-continue").addEventListener("click", () => { if (getState()?.ladder) go("lane"); });
+  byId("ladder-continue").addEventListener("click", () => { if (getState()?.ladder?.preset) go("lane"); });
   byId("ladder-use-lane").addEventListener("click", () => { if (getState()?.ladder?.laneIndex != null) go("markers"); });
-  byId("ladder-back").addEventListener("click", () => go(getState().ladderStep === "markers" ? "lane" : "preset"));
+  byId("ladder-back").addEventListener("click", () => go(getState().ladderStep === "markers" && !manual() ? "lane" : "preset"));
   byId("ladder-change-preset").addEventListener("click", () => go("preset"));
   byId("ladder-change-lane").addEventListener("click", () => go("lane"));
   byId("ladder-accept-change").addEventListener("click", () => {
@@ -347,6 +381,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     const change = pendingChange;
     pendingChange = null;
     if (change.kind === "preset") setPreset(change.preset);
+    else if (change.kind === "manual") setManual();
     else if (change.kind === "lane") setLane(change.index);
     else { render(); onAction("remove"); }
     if (change.kind !== "remove") byId("ladder-heading").focus();
@@ -375,7 +410,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   byId("ladder-keyboard").addEventListener("click", () => {
     if (!editable() || selectedMarker === null) return;
     cursorNode.focus();
-    status(`Use ${directions()} to position the marker; Shift moves ten pixels. Press Enter to place it, or Escape to return.`);
+    status(`Use ${directions()} to position the marker; hold Shift for larger steps. Press Enter to place it, or Escape to return.`);
   });
   cursorNode.addEventListener("keydown", event => {
     if (!editable() || !cursor || selectedMarker === null) return;
@@ -393,6 +428,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     }
   });
   for (const action of ["confirm", "cancel", "skip"]) byId(`ladder-${action}`).addEventListener("click", () => {
+    if (action === "confirm" && manual() && editable() && !manualEditor.commit()) return;
     if (editable() && (action !== "confirm" || placements().length > 0 && !previewError)) onAction(action);
   });
   byId("ladder-remove").addEventListener("click", () => {
@@ -400,20 +436,24 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   });
 
   overlay.addEventListener("pointerdown", event => {
+    if (manual()) return;
     suppressClick = false;
     if (event.isPrimary === false) { suppressClick = true; return; }
     if (!editable() || event.button !== 0) return;
     pointer = {id: event.pointerId, x: event.clientX, y: event.clientY};
   });
   overlay.addEventListener("pointermove", event => {
+    if (manual()) return;
     if (pointer?.id === event.pointerId && movedPastTap(pointer, event)) suppressClick = true;
   });
-  overlay.addEventListener("pointercancel", () => { pointer = null; suppressClick = true; });
+  overlay.addEventListener("pointercancel", () => { if (!manual()) { pointer = null; suppressClick = true; } });
   overlay.addEventListener("pointerup", event => {
+    if (manual()) return;
     if (pointer?.id === event.pointerId && movedPastTap(pointer, event)) suppressClick = true;
     pointer = null;
   });
   overlay.addEventListener("click", event => {
+    if (manual()) return;
     if (!editable() || suppressClick || event.button !== 0) return;
     const point = ladderImagePoint(event.clientX, event.clientY, canvas.getBoundingClientRect(), getLayout());
     const state = getState();
@@ -425,6 +465,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   });
 
   function reset() {
+    manualEditor.reset();
     candidatesVisible = false;
     selectedMarker = null;
     cursor = null;

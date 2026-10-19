@@ -71,7 +71,7 @@ class Node {
   set src(value) { this.setAttribute("src", value); }
   showModal() { this.open = true; }
   close() { this.open = false; }
-  appendChild(child) { this.children.push(child); child.parent = this; return child; }
+  appendChild(child) { this.children.push(child); child.parent = this; child.parentNode = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   replaceChildren(...children) { this.children = []; this.append(...children); }
   querySelectorAll(selector) {
@@ -115,7 +115,15 @@ function harness(run, overrides = {}) {
   const edits = [];
   const messages = [];
   const layoutChanges = [];
-  const controller = createLadderEditor({getState: () => state, getLayout: () => layout, canvas: nodes.preview,
+  // Fixed off-gel hit boxes isolate interaction tests from the shared renderer.
+  const getLayout = () => {
+    layout.ladderLabels = state.ladder?.mode === "manual" ? state.ladder.placements.map(marker => ({id: marker.id,
+      ...(state.workflow_orientation === "wells_top"
+        ? {left: 15, right: 65, top: 70 + marker.y - 5, bottom: 70 + marker.y + 5}
+        : {left: 80 + marker.x - 5, right: 80 + marker.x + 5, top: 15, bottom: 55})})) : [];
+    return layout;
+  };
+  const controller = createLadderEditor({getState: () => state, getLayout, canvas: nodes.preview,
     onChange() { edits.push(structuredClone(state)); controller.render(); },
     onAction(action) { actions.push(action); }, status(...message) { messages.push(message); },
     onLayout() { layoutChanges.push(true); }});
@@ -130,14 +138,14 @@ function harness(run, overrides = {}) {
     clickImage(40, 20);
     nodes["ladder-use-lane"].dispatch("click");
   }
-  try { controller.render(); run({state, nodes, actions, edits, messages, layoutChanges, controller, select, clickImage, marker, enterMarkers}); }
+  try { controller.render(); run({state, nodes, layout, actions, edits, messages, layoutChanges, controller, select, clickImage, marker, enterMarkers}); }
   finally {
     if (previousDocument === undefined) delete globalThis.document;
     else globalThis.document = previousDocument;
   }
 }
 
-test("manual workflow has no default preset; selected markers replace rather than duplicate, and outside clicks do nothing", () => harness(h => {
+test("preset placement has no default preset; selected markers replace rather than duplicate, and outside clicks do nothing", () => harness(h => {
   assert.equal(h.state.ladder, null);
   assert.equal(h.nodes["ladder-continue"].disabled, true);
   h.enterMarkers();
@@ -361,3 +369,164 @@ test("top ladder keyboard follows downward migration and detected proposals pres
 }, {workflow_orientation: "wells_top", width: 100, height: 200,
   lanes: [[5, 10, 25, 190], [40, 10, 60, 190]],
   bandCandidates: [[{x: 15, y: 44.25}, {x: 15, y: 150}], []]}));
+
+function manualMarker(h, label, x, y) {
+  h.clickImage(x, y);
+  h.nodes["ladder-manual-label"].value = label;
+  h.nodes["ladder-manual-save"].dispatch("click");
+  return h.state.ladder.placements.at(-1);
+}
+
+test("Manual ladder is independent of presets and lanes and supports add, edit, move and delete", () => harness(h => {
+  h.nodes["ladder-manual"].dispatch("click");
+  assert.deepEqual(h.state.ladder, {mode: "manual", placements: []});
+  assert.equal(h.state.ladderStep, "markers");
+  assert.equal(h.nodes["ladder-placement-hint"].textContent, "Click a ladder band to add a marker label.");
+  assert.equal(h.nodes["ladder-change-lane"].hidden, true);
+  assert.equal(h.nodes["ladder-reference"].hidden, true);
+  assert.equal(h.nodes["ladder-detect-bands"].hidden, true);
+  const first = manualMarker(h, "500 bp", 20.25, 35.75); // gap outside any lane is valid
+  const second = manualMarker(h, "25 kDa", 80.5, 62.25);
+  assert.equal(h.state.ladder.placements.length, 2);
+  assert.deepEqual([first.label, first.x, first.y], ["500 bp", 20.25, 35.75]);
+  h.marker(0).dispatch("click");
+  h.nodes["ladder-manual-label"].value = "750 bp";
+  h.nodes["ladder-manual-save"].dispatch("click");
+  assert.deepEqual(h.state.ladder.placements[0], {...first, label: "750 bp"});
+  h.nodes["ladder-manual-move"].dispatch("click");
+  h.clickImage(100.375, 70.125);
+  assert.deepEqual(h.state.ladder.placements[0], {...first, label: "750 bp", x: 100.375, y: 70.125});
+  h.nodes["ladder-manual-delete"].dispatch("click");
+  assert.deepEqual(h.state.ladder.placements, [second]);
+  h.nodes["ladder-confirm"].dispatch("click");
+  assert.deepEqual(h.actions, ["confirm"]);
+}, {presets: []}));
+
+test("manual labels validate empty and multiline input and cancel pending labels without touching saved data", () => harness(h => {
+  h.nodes["ladder-manual"].dispatch("click");
+  h.clickImage(-1, 50);
+  assert.equal(h.nodes["ladder-manual-form"].hidden, true);
+  h.clickImage(20, 35);
+  for (const value of [" ", "500\nbp", "a".repeat(201)]) {
+    h.nodes["ladder-manual-label"].value = value;
+    h.nodes["ladder-manual-save"].dispatch("click");
+    assert.equal(h.state.ladder.placements.length, 0);
+    assert.equal(h.nodes["ladder-manual-error"].hidden, false);
+  }
+  h.nodes["ladder-manual-cancel"].dispatch("click");
+  assert.equal(h.nodes["ladder-manual-form"].hidden, true);
+  const first = manualMarker(h, "500 bp", 20.25, 35.75);
+  h.clickImage(60, 60);
+  h.nodes["ladder-manual-label"].value = "25 kDa";
+  h.nodes["ladder-confirm"].dispatch("click");
+  assert.deepEqual(h.actions, ["confirm"], "confirmation saves a valid pending label first");
+  assert.equal(h.state.ladder.placements.length, 2);
+  assert.deepEqual(h.state.ladder.placements[0], first);
+}));
+
+test("manual labels cannot be dragged over the gel and touch scrolling cannot place markers", () => harness(h => {
+  h.nodes["ladder-manual"].dispatch("click");
+  const first = manualMarker(h, "500 bp", 20.25, 35.75);
+  const overlay = h.nodes["ladder-overlay"];
+  const label = h.nodes["ladder-manual-points"].children[0];
+  assert.equal(label.children.length, 1);
+  assert.equal(label.children[0].tagName, "rect", "only the off-gel text is a selectable hit target");
+  assert.ok(Number(label.children[0].attributes.y) + Number(label.children[0].attributes.height) < h.layout.gelY);
+  assert.doesNotMatch(label.attributes["aria-label"], /drag/i);
+  const down = {target: label, clientX: 70, clientY: 45};
+  overlay.dispatch("pointerdown", down);
+  overlay.dispatch("pointermove", {clientX: 90, clientY: 90});
+  overlay.dispatch("pointerup", {clientX: 90, clientY: 90});
+  h.clickImage(60, 60);
+  assert.deepEqual(h.state.ladder.placements, [first]);
+  assert.equal(h.nodes["ladder-manual-save"].textContent, "Save label", "a drag's trailing click never starts a new label");
+  overlay.dispatch("pointerdown", {clientX: 90, clientY: 90});
+  overlay.dispatch("pointercancel");
+  h.clickImage(80, 40);
+  assert.deepEqual(h.state.ladder.placements, [first]);
+}));
+
+for (const workflow_orientation of ["wells_left", "wells_top"]) {
+  test(`manual keyboard follows the preset migration axis for ${workflow_orientation}`, () => harness(h => {
+    h.nodes["ladder-manual"].dispatch("click");
+    const first = manualMarker(h, "500 bp", 20.25, 35.75);
+    const layer = h.nodes["ladder-manual-points"];
+    const top = workflow_orientation === "wells_top";
+    layer.dispatch("keydown", {target: layer.children[0], key: top ? "ArrowRight" : "ArrowUp"});
+    assert.deepEqual(h.state.ladder.placements[0], first, "the cross-lane axis does not move an annotation");
+    layer.dispatch("keydown", {target: layer.children[0], key: top ? "ArrowDown" : "ArrowRight", shiftKey: true});
+    assert.deepEqual(h.state.ladder.placements[0], {...first, [top ? "y" : "x"]: first[top ? "y" : "x"] + 10});
+    layer.dispatch("keydown", {target: layer.children[0], key: "Delete"});
+    assert.deepEqual(h.state.ladder.placements, []);
+    assert.equal(h.nodes["ladder-confirm"].disabled, true);
+  }, {workflow_orientation}));
+}
+
+test("manual and preset switching preserves markers until clearing is accepted", () => harness(h => {
+  h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
+  h.nodes["ladder-change-preset"].dispatch("click");
+  h.nodes["ladder-manual"].dispatch("click");
+  assert.equal(h.state.ladder.preset.id, "example");
+  h.nodes["ladder-keep-current"].dispatch("click");
+  h.nodes["ladder-manual"].dispatch("click");
+  h.nodes["ladder-accept-change"].dispatch("click");
+  const first = manualMarker(h, "500 bp", 20.25, 35.75);
+  h.nodes["ladder-back"].dispatch("click");
+  assert.equal(h.state.ladderStep, "preset");
+  h.nodes["ladder-manual"].dispatch("click");
+  assert.deepEqual(h.state.ladder.placements, [first]);
+  h.nodes["ladder-change-preset"].dispatch("click");
+  h.select("ladder-preset", "example");
+  assert.equal(h.state.ladder.mode, "manual");
+  h.nodes["ladder-accept-change"].dispatch("click");
+  assert.equal(h.state.ladder.preset.id, "example");
+  assert.deepEqual(h.state.ladder.placements, []);
+}));
+
+test("reopened manual markers survive zoom and resize and labels remain editable", () => harness(h => {
+  const original = structuredClone(h.state.ladder);
+  h.marker(0).dispatch("click");
+  for (const scale of [0.25, 0.75, 1, 2]) {
+    h.nodes.preview.getBoundingClientRect = () => ({left: -50, top: 30, width: h.layout.width * scale, height: h.layout.height * scale});
+    h.controller.render();
+    const dot = h.nodes["ladder-manual-points"].children.find(node => node.dataset.manualCursor).children[1];
+    assert.equal(Number(dot.attributes.cx), h.layout.gelX + 20.25);
+    assert.equal(Number(dot.attributes.cy), h.layout.gelY + 35.75);
+    assert.equal(Number(dot.attributes.r) * scale, 5, "selected band cursor stays visible at every zoom");
+    assert.deepEqual(h.state.ladder, original);
+  }
+  h.marker(0).dispatch("click");
+  h.nodes["ladder-manual-label"].value = "25 kDa";
+  h.nodes["ladder-manual-save"].dispatch("click");
+  assert.equal(h.state.ladder.placements[0].label, "25 kDa");
+}, {ladderStep: "markers", ladder: {mode: "manual", placements: [{id: "one", label: "500 bp", x: 20.25, y: 35.75}]}}));
+
+test("manual scroll gestures ignore secondary touches and never reposition annotations", () => harness(h => {
+  h.nodes["ladder-manual"].dispatch("click");
+  const first = manualMarker(h, "500 bp", 20.25, 35.75);
+  const overlay = h.nodes["ladder-overlay"];
+  const down = {target: h.nodes["ladder-manual-points"].children[0], clientX: 70, clientY: 83, pointerId: 1};
+  overlay.dispatch("pointerdown", down);
+  overlay.dispatch("pointerdown", {pointerId: 2, isPrimary: false, clientX: 90, clientY: 93});
+  overlay.dispatch("pointermove", {pointerId: 2, clientX: 90, clientY: 93});
+  overlay.dispatch("pointerup", {pointerId: 2, clientX: 90, clientY: 93});
+  overlay.dispatch("pointercancel", {pointerId: 2});
+  assert.deepEqual(h.state.ladder.placements, [first]);
+  overlay.dispatch("pointermove", {pointerId: 1, clientX: 80, clientY: 93});
+  overlay.dispatch("pointerup", {pointerId: 1, clientX: 80, clientY: 93});
+  h.clickImage(50, 60);
+  assert.deepEqual(h.state.ladder.placements, [first]);
+}));
+
+test("confirm can save the first pending label but cannot bypass a failed preview", () => harness(h => {
+  h.nodes["ladder-manual"].dispatch("click");
+  h.clickImage(20, 35);
+  h.nodes["ladder-manual-label"].value = "500 bp";
+  assert.equal(h.nodes["ladder-confirm"].disabled, false);
+  h.controller.setDisabled(false, true);
+  assert.equal(h.nodes["ladder-confirm"].disabled, true);
+  h.controller.setDisabled(false, false);
+  h.nodes["ladder-confirm"].dispatch("click");
+  assert.deepEqual(h.actions, ["confirm"]);
+  assert.equal(h.state.ladder.placements[0].label, "500 bp");
+}));

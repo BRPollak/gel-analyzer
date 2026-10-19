@@ -87,7 +87,7 @@ def test_manual_orientation_preserves_supported_modes_and_exact_axis_aligned_pix
 def test_manual_rectangle_cannot_bypass_unsupported_pixel_format(mode):
     image = Image.new(mode, (80, 80))
     rectangle = rectangle_from_selection(selection(), image.size)
-    with pytest.raises(OrientationError, match="pixel format"):
+    with pytest.raises(OrientationError, match="image format"):
         orient_gel(image, rectangle)
 
 
@@ -118,13 +118,13 @@ def test_missing_selection_reports_draw_instruction(payload):
     ("height", float("nan")), ("angle_degrees", float("nan")),
 ])
 def test_selection_rejects_invalid_numbers(field, value):
-    with pytest.raises(OrientationError, match="finite numeric"):
+    with pytest.raises(OrientationError, match="could not be read"):
         rectangle_from_selection(selection(**{field: value}), (80, 80))
 
 
 @pytest.mark.parametrize("changes", [{"width": 0}, {"height": 1.9}, {"height": -5}])
 def test_selection_requires_two_pixel_sides(changes):
-    with pytest.raises(OrientationError, match="at least 2 pixels"):
+    with pytest.raises(OrientationError, match="too small"):
         rectangle_from_selection(selection(**changes), (80, 80))
 
 

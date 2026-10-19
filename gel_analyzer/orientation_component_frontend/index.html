@@ -40,7 +40,7 @@
 </head>
 <body>
   <main id="component">
-    <p id="caption">Initial crop · manual orientation</p>
+    <p id="caption">Select and straighten the gel</p>
     <div id="toolbar" role="group" aria-label="Rectangle controls">
       <button type="button" id="draw-new">Draw new rectangle</button>
       <label id="angle-label" for="angle">Angle <input id="angle" type="number" step="1" aria-label="Clockwise rectangle angle in degrees" disabled>°</label>
@@ -66,7 +66,7 @@
         </g>
       </svg>
     </div>
-    <p id="status">Press and drag on the image to draw a rectangle. The marked edge becomes the top after orientation.</p>
+    <p id="status">Press and drag on the image to draw a rectangle. The marked edge becomes the top of the finished image.</p>
     <p id="feedback" role="status" aria-live="polite"></p>
   </main>
   <script type="module" src="editor.mjs"></script>

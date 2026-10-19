@@ -28,14 +28,14 @@ def test_auto_detection_locates_columns_and_extends_downward_without_changing_so
     before = image.tobytes()
     guide = ((20, 41), (184, 46))
 
-    result = detect_wells(image, guide, workflow_orientation=TOP)
+    result = detect_wells(image, guide, workflow_orientation=TOP, expected_count=4)
 
     assert len(result.wells) == 4
     for well, expected, lane in zip(result.wells, bounds, result.lanes):
         np.testing.assert_allclose(well.bounds, expected, atol=1)
         assert well.bounds[::2] == expected[::2]
         assert lane == (well.bounds[0], well.bounds[1], well.bounds[2], 240)
-    assert detect_wells(image, guide[::-1], workflow_orientation=TOP) == result
+    assert detect_wells(image, guide[::-1], workflow_orientation=TOP, expected_count=4) == result
     assert image.size == (220, 240)
     assert image.tobytes() == before
 
@@ -103,13 +103,13 @@ def test_downward_band_evidence_expands_vertical_lanes_horizontally(contrast):
     for left, right in columns:
         values[36:54, left:right] += 80
     guide = ((26, 45), (280, 45))
-    original = detect_wells(Image.fromarray(values.astype(np.uint8)), guide, workflow_orientation=TOP)
+    original = detect_wells(Image.fromarray(values.astype(np.uint8)), guide, workflow_orientation=TOP, expected_count=4)
     broad_bands = ((24, 72), (94, 142), (234, 282))
     for left, right in broad_bands:
         values[136:150, left:right] += contrast
         values[230:243, left:right] += contrast
 
-    result = detect_wells(Image.fromarray(values.astype(np.uint8)), guide, workflow_orientation=TOP)
+    result = detect_wells(Image.fromarray(values.astype(np.uint8)), guide, workflow_orientation=TOP, expected_count=4)
 
     assert result.wells == original.wells
     for index, (left, right) in zip((0, 1, 3), broad_bands):

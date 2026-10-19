@@ -288,7 +288,7 @@ def test_rejects_16_bit_color_png_before_precision_is_lost(color_type, channels)
         image.load()
         assert image.mode in ("RGB", "RGBA")
 
-    with pytest.raises(ImageValidationError, match="unsupported pixel format"):
+    with pytest.raises(ImageValidationError, match="unsupported format"):
         load_image(source, "16-bit-color.png")
 
 

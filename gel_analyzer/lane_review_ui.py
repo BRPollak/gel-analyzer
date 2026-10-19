@@ -6,14 +6,13 @@ uploaded TIFF or the confirmed image used for detection.
 """
 
 from io import BytesIO
-from dataclasses import replace
 from uuid import uuid4
 
 from PIL import Image
 import streamlit as st
 
 from . import annotation_ui, lane_crop
-from .wells import SelectionError, Well, validate_line
+from .wells import DetectionResult, SelectionError, Well, validate_line
 from .workflow_orientation import is_top, lane_bounds
 
 
@@ -71,11 +70,12 @@ def _set_stage(stage: str) -> None:
 def start_lane_review() -> None:
     gel = _confirmed_image()
     result = st.session_state.well_result
-    if gel is None or result is None:
+    count = st.session_state.get("well_expected_count")
+    if (gel is None or result is None or type(count) is not int or count < 1
+            or len(result.wells) != count or len(result.lanes) != count):
         return
     orientation = _orientation(gel)
-    right = (result.lanes[0][3 if is_top(orientation) else 2] if result.lanes
-             else gel.preview_height if is_top(orientation) else gel.preview_width)
+    right = result.lanes[0][3 if is_top(orientation) else 2]
     try:
         validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height),
                       workflow_orientation=orientation)
@@ -83,7 +83,7 @@ def start_lane_review() -> None:
             result.wells, result.lanes, right,
             (gel.preview_width, gel.preview_height),
             workflow_orientation=orientation,
-        ) if result.wells else ()
+        )
     except (lane_crop.LaneAdjustmentError, SelectionError) as exc:
         st.session_state.lane_error = str(exc)
         return
@@ -95,6 +95,33 @@ def start_lane_review() -> None:
     # user reviews boundaries. Late guide events cannot replace this review.
     st.session_state.well_editing = False
     _set_stage("borders")
+
+
+def restore_legacy_review_count() -> None:
+    """Adopt existing manual review geometry after upgrading a live session."""
+    if (st.session_state.get("well_expected_count") is not None
+            or st.session_state.lane_stage not in ("borders", "extent", "cropped")
+            or st.session_state.get("lane_boundary_stage")):
+        return
+    gel = st.session_state.lane_source
+    if gel is None:
+        return
+    result = st.session_state.well_result
+    wells = st.session_state.lane_wells
+    lanes = _lanes()
+    if not wells and result is not None:
+        wells, lanes = result.wells, result.lanes
+    if not wells:
+        return
+    try:
+        lane_crop.validate_lane_adjustments(
+            wells, lanes, st.session_state.lane_right,
+            (gel.preview_width, gel.preview_height), workflow_orientation=_orientation(gel),
+        )
+    except (lane_crop.LaneAdjustmentError, TypeError, ValueError):
+        return
+    st.session_state.well_expected_count = len(wells)
+    st.session_state.well_result = DetectionResult(wells, lanes, result.warnings if result else ())
 
 
 def _lanes():
@@ -162,9 +189,20 @@ def accept_lane_event(event: object) -> None:
     if action == "delete":
         annotation_ui.delete_lane_label(index)
         st.session_state.lane_wells = wells[:index] + wells[index + 1:]
+        _sync_reviewed_count()
         # A structural edit invalidates every event from the old collection,
         # including clicks which still use its former lane numbering.
         _set_stage("borders")
+
+
+def _sync_reviewed_count() -> None:
+    """Explicit manual additions/removals establish the revised well count."""
+    if st.session_state.lane_wells:
+        st.session_state.well_expected_count = len(st.session_state.lane_wells)
+        result = st.session_state.well_result
+        st.session_state.well_result = DetectionResult(
+            st.session_state.lane_wells, _lanes(), result.warnings if result else (),
+        )
 
 
 def _consume_latest_event() -> None:
@@ -208,7 +246,8 @@ def define_boundary_wells() -> None:
         "lane_wells": st.session_state.lane_wells, "lane_right": st.session_state.lane_right,
     }
     count = st.session_state.get("well_expected_count")
-    st.session_state.lane_boundary_count = count if count is not None else max(2, len(st.session_state.lane_wells))
+    st.session_state.lane_boundary_count = max(2, count if type(count) is int and count > 0
+                                             else len(st.session_state.lane_wells))
     st.session_state.lane_boundary_last = None
     st.session_state.lane_wells = (first,)
     st.session_state.lane_boundary_stage = "first"
@@ -288,7 +327,7 @@ def generate_boundary_lanes() -> None:
         return
     st.session_state.lane_wells = wells
     st.session_state.well_expected_count = st.session_state.lane_boundary_count
-    st.session_state.well_result = replace(st.session_state.well_result, wells=wells, lanes=_lanes(), warnings=())
+    st.session_state.well_result = DetectionResult(wells, _lanes())
     annotation_ui.reset_annotations()
     _clear_boundary_draft()
     _set_stage("borders")
@@ -312,6 +351,7 @@ def add_lane() -> None:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_wells = wells
+    _sync_reviewed_count()
     annotation_ui.add_lane_label(len(wells))
     _set_stage("borders")
 
@@ -331,10 +371,12 @@ def back_to_well_review() -> None:
     _consume_latest_event()
     if _confirmed_image() is not st.session_state.lane_source:
         return
-    st.session_state.well_result = replace(
-        st.session_state.well_result, wells=st.session_state.lane_wells, lanes=_lanes(),
-    )
-    st.session_state.well_editing = False
+    if st.session_state.lane_wells:
+        _sync_reviewed_count()
+        st.session_state.well_editing = False
+    else:
+        st.session_state.well_result = None
+        st.session_state.well_editing = True
     reset_lane_review()
 
 
@@ -403,9 +445,9 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
         if boundary:
             st.subheader("1. First well" if boundary == "first" else "2. Last well")
             st.caption(
-                f"Position the {'leftmost' if top_mode else 'topmost'} loaded well and adjust its width."
+                f"Position the {'leftmost' if top_mode else 'topmost'} well and adjust its width."
                 if boundary == "first" else
-                f"Drag the highlighted lane to the {'rightmost' if top_mode else 'bottommost'} loaded well. Width matches the first."
+                f"Drag the highlighted lane to the {'rightmost' if top_mode else 'bottommost'} well. Width matches the first."
             )
             st.session_state.boundary_lane_count = st.session_state.lane_boundary_count
             st.number_input(
@@ -447,11 +489,10 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
             )
             st.button(
                 "Add lane", key="add_lane", on_click=add_lane,
-                help=("Fits a smaller lane into remaining space. At the image right edge, nearby borders move by one pixel to make room."
-                      if top_mode else "Fits a smaller lane into remaining space. At the image bottom, nearby borders move by one pixel to make room."),
+                help="Adds a lane in the available space. Nearby borders may move slightly to make room.",
             )
             st.button("Define boundary wells", key="define_boundary_wells", on_click=define_boundary_wells)
-            st.caption("Arrow keys move a focused handle one pixel; Shift moves ten.")
+            st.caption("Use arrow keys to move a selected handle. Hold Shift to move it farther.")
         else:
             st.subheader("Define bottom of lanes" if top_mode else "Define bottom of lane (right edge)")
             st.caption(
@@ -459,15 +500,7 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
                  "Drag the right boundary to choose how much gel to keep. ") +
                 "The shaded area will be removed. All wells stay inside the crop."
             )
-            margin = max(3, round(gel.preview_width * 0.01))
-            vertical_margin = max(3, round(gel.preview_height * 0.01))
-            st.caption(
-                (f"Bottom edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
-                 f"{margin:,} pixels left and right of the lanes and {vertical_margin:,} pixels above the wells.")
-                if top_mode else
-                (f"Right edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
-                 f"{vertical_margin:,} pixels above and below the lanes and {margin:,} pixels left of the wells.")
-            )
+            st.caption("The crop leaves a small margin around the wells and lanes.")
             st.button(
                 "Confirm lanes and crop", key="confirm_lane_crop", type="primary",
                 on_click=confirm_lane_crop,

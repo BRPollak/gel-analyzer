@@ -103,8 +103,8 @@ def orient_gel_image(
 _PREVIEW_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B", "I;16L"}
 _CORRUPT_MESSAGE = "This image is incomplete or damaged, or cannot be decoded. Please choose another TIFF, PNG, or JPEG image."
 _UNSUPPORTED_MESSAGE = (
-    "This image uses an unsupported pixel format. Please choose an unsigned "
-    "8-bit grayscale/color or 16-bit grayscale image."
+    "This image uses an unsupported format. Save a copy as a standard PNG or "
+    "JPEG image, then open that copy."
 )
 
 

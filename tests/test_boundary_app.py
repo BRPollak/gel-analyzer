@@ -70,6 +70,7 @@ def boundary_workflow(monkeypatch, request):
     app.button(key="confirm_orientation").click().run()
     harness.pixels = pixels if orientation == "wells_top" else pixels.T
     app.button(key="define_wells").click().run()
+    app.number_input(key="expected_well_count").set_value(2).run()
     harness.event = {
         "token": app.session_state["well_token"], "revision": 1,
         "points": [[20, 38], [112, 40]] if orientation == "wells_top" else [[38, 20], [40, 112]],
@@ -111,8 +112,8 @@ def _event(workflow, cross_bounds, *, revision=1, run=True, **overrides):
 
 def _start(workflow, count=15):
     app = workflow.app
-    app.session_state["well_expected_count"] = count
     app.button(key="define_boundary_wells").click().run()
+    app.number_input(key="boundary_lane_count").set_value(count).run()
     assert not app.exception
     assert app.session_state["lane_boundary_stage"] == "first"
     assert len(_canonical(workflow)) == 1
@@ -159,7 +160,7 @@ def test_generate_exact_total_and_spacing_then_edit_crop_and_analyze(boundary_wo
     assert workflow.detection_count == 1
 
     # The completed collection is an ordinary manual review: adjust a lane,
-    # crop the unchanged 16-bit source, and use all lanes in band analysis.
+    # crop the unchanged 16-bit source, and export all annotated lanes.
     adjusted = [(bounds[1], bounds[3]) for bounds in generated]
     adjusted[0] = (9, 17)
     _event(workflow, adjusted)
@@ -182,8 +183,10 @@ def test_generate_exact_total_and_spacing_then_edit_crop_and_analyze(boundary_wo
     app.run()
     app.button(key="skip_ladder").click().run()
     assert not app.exception
-    assert len(app.session_state["band_data"]) == count
-    assert app.session_state["band_geometry"][1] == tuple(crop.lanes)
+    assert app.session_state["annotation_stage"] == "final"
+    assert app.session_state["band_data"] is None
+    assert app.get("download_button")[0].label == "Download annotated PNG"
+    assert app.session_state["band_geometry"] is None
 
 
 def test_back_keeps_both_positions_and_relinks_width(boundary_workflow):
@@ -273,11 +276,10 @@ def test_invalid_count_requires_valid_total_before_confirmation(boundary_workflo
     assert _canonical(workflow)[0][1::2] == (10, 16)
 
 
-def test_boundary_recovery_can_begin_when_detection_found_no_lanes(boundary_workflow):
+def test_boundary_recovery_can_begin_after_manually_removing_all_lanes(boundary_workflow):
     workflow = boundary_workflow
     app = workflow.app
     app.session_state["lane_wells"] = ()
-    app.session_state["well_result"] = wells.DetectionResult((), ())
     app.run()
     _start(workflow, 15)
     first = _first(workflow)
@@ -446,3 +448,20 @@ def test_confirming_changed_orientation_clears_boundary_draft_safely(boundary_wo
     app.run()
     assert app.session_state["lane_wells"] == ()
     assert app.session_state["well_result"] is None
+
+
+@pytest.mark.parametrize("has_result", [False, True])
+def test_active_legacy_review_recovers_count_before_boundary_edit(boundary_workflow, has_result):
+    workflow = boundary_workflow
+    app = workflow.app
+    app.session_state["well_expected_count"] = None
+    if not has_result:
+        app.session_state["well_result"] = None
+    app.run()
+    assert not app.exception
+    assert app.session_state["well_expected_count"] == 2
+    assert app.session_state["well_result"].wells == app.session_state["lane_wells"]
+    app.button(key="define_boundary_wells").click().run()
+    assert not app.exception
+    assert app.number_input(key="boundary_lane_count").value == 2
+    assert workflow.detection_count == 1

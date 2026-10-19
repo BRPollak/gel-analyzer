@@ -115,6 +115,9 @@ export function createLaneReview({svg, getState: displayState, pointerPosition: 
       });
     }
     if (state.reviewMode === "extent") {
+      // Keep the larger grip reachable when the crop reaches the image edge.
+      wrap.style.paddingBottom = `${isTop() ? 30 : 0}px`;
+      wrap.style.paddingRight = `${isTop() ? 0 : 30}px`;
       excluded.setAttribute("visibility", "visible");
       excluded.setAttribute("x", isTop() ? 0 : state.rightEdge);
       excluded.setAttribute("y", isTop() ? state.rightEdge : 0);
@@ -153,13 +156,14 @@ export function createLaneReview({svg, getState: displayState, pointerPosition: 
         for (const [attribute, coordinate] of Object.entries(lineXY(linePoints))) node.setAttribute(attribute, coordinate);
       }
       [x, y] = pointXY([x, y]);
+      const gripScale = edge === "right" ? 2 : 1;
       for (const node of [grip, gripHit]) {
         node.setAttribute("cx", x);
         node.setAttribute("cy", y);
-        node.setAttribute("r", (node === grip ? 7 : 15) * unit);
+        node.setAttribute("r", (node === grip ? 7 : 15) * unit * gripScale);
       }
       // Direction arrows distinguish top/bottom grips even when a lane is thin.
-      symbol.setAttribute("transform", `translate(${x} ${y}) scale(${unit})${isTop() ? " rotate(90)" : ""}`);
+      symbol.setAttribute("transform", `translate(${x} ${y}) scale(${unit * gripScale})${isTop() ? " rotate(90)" : ""}`);
       symbol.setAttribute("d", edge === "right"
         ? "M-5 0 L-1 -3 L-1 3 Z M5 0 L1 -3 L1 3 Z"
         : edge === "position" ? "M0 -5 L-3 -1 L3 -1 Z M0 5 L-3 1 L3 1 Z"
@@ -172,12 +176,15 @@ export function createLaneReview({svg, getState: displayState, pointerPosition: 
       group.setAttribute("aria-valuemin", limits[0]);
       group.setAttribute("aria-valuemax", limits[1]);
       group.setAttribute("aria-valuenow", value);
+      const alongWidth = (edge === "right") !== isTop();
+      const imageExtent = edge === "right" ? state.width : state.height;
+      group.setAttribute("aria-valuetext", `${Math.round(100 * value / imageExtent)}% from the ${alongWidth ? "left" : "top"} of the image`);
       group.setAttribute("aria-label", edge === "right"
-        ? (isTop() ? "Shared bottom boundary. Use Up and Down arrows; Shift moves ten pixels." : "Shared right boundary. Use Left and Right arrows; Shift moves ten pixels.")
+        ? (isTop() ? "Shared bottom boundary. Use Up and Down arrows; hold Shift for larger steps." : "Shared right boundary. Use Left and Right arrows; hold Shift for larger steps.")
         : edge === "position"
-        ? `${index === 0 ? "First" : "Last"} boundary well position. Use ${isTop() ? "Left and Right" : "Up and Down"} arrows; Shift moves ten pixels.`
-        : (isTop() ? `Lane ${index + 1} ${edge === "top" ? "left" : "right"} boundary. Use Left and Right arrows; Shift moves ten pixels.`
-          : `Lane ${index + 1} ${edge} boundary. Use Up and Down arrows; Shift moves ten pixels.`));
+        ? `${index === 0 ? "First" : "Last"} boundary well position. Use ${isTop() ? "Left and Right" : "Up and Down"} arrows; hold Shift for larger steps.`
+        : (isTop() ? `Lane ${index + 1} ${edge === "top" ? "left" : "right"} boundary. Use Left and Right arrows; hold Shift for larger steps.`
+          : `Lane ${index + 1} ${edge} boundary. Use Up and Down arrows; hold Shift for larger steps.`));
     });
   }
 
@@ -233,7 +240,7 @@ export function createLaneReview({svg, getState: displayState, pointerPosition: 
     const nearest = point && nearestHandle(handles.map(handle => ({
       handle, x: pointXY([Number(handle.group.dataset.x), Number(handle.group.dataset.y)])[0],
       y: pointXY([Number(handle.group.dataset.x), Number(handle.group.dataset.y)])[1],
-    })), point, screenRadius(15, svg.getBoundingClientRect(), displayState().width));
+    })), point, screenRadius(state.reviewMode === "extent" ? 30 : 15, svg.getBoundingClientRect(), displayState().width));
     const handle = nearest ? nearest.handle.group : event.target.closest("[data-review-edge]");
     if (!handle || !point) return;
     event.preventDefault();

@@ -16,6 +16,57 @@ export function laneAtPoint(point, lanes) {
   return lanes.findIndex(lane => pointInLane(point, lane));
 }
 
+/** Manual labels belong to native image pixels, independently of lane bounds. */
+export function pointInImage(point, width, height) {
+  return Boolean(point && Number.isFinite(point.x) && Number.isFinite(point.y)
+    && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+    && point.x >= 0 && point.x < width && point.y >= 0 && point.y < height);
+}
+
+/** Add or edit one annotation while preserving its identity and list order. */
+export function placeManualLadderMarker(ladder, id, label, point, width, height) {
+  if (ladder?.mode !== "manual" || typeof id !== "string" || !id.trim()
+    || typeof label !== "string" || !label.trim() || !pointInImage(point, width, height)) return null;
+  const placement = {id, label: label.replace(/[\r\n\t]/g, " ").trim(), x: point.x, y: point.y};
+  const placements = [...ladder.placements];
+  const index = placements.findIndex(item => item.id === id);
+  if (index === -1) placements.push(placement);
+  else placements[index] = placement;
+  return {...ladder, placements};
+}
+
+export function removeManualLadderMarker(ladder, id) {
+  return ladder?.mode === "manual"
+    ? {...ladder, placements: ladder.placements.filter(item => item.id !== id)} : null;
+}
+
+/** Keyboard motion preserves fractional clicks and never leaves the image. */
+export function moveManualLadderCursor(cursor, key, shift, width, height) {
+  if (!pointInImage(cursor, width, height)) return null;
+  const direction = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[key];
+  if (!direction) return {...cursor};
+  const next = {...cursor};
+  for (const [index, axis] of ["x", "y"].entries()) {
+    const size = axis === "x" ? width : height;
+    const lastPixel = Math.max(cursor[axis], size - 1);
+    next[axis] = Math.max(0, Math.min(lastPixel, cursor[axis] + direction[index] * (shift ? 10 : 1)));
+  }
+  return next;
+}
+
+/** The caller converts its screen hit radius to native pixels at the current zoom. */
+export function manualMarkerAtPoint(point, placements, tolerance) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)
+    || !Number.isFinite(tolerance) || tolerance < 0) return null;
+  let nearest = null;
+  let distance = Infinity;
+  for (const placement of placements) {
+    const candidate = Math.hypot(point.x - placement.x, point.y - placement.y);
+    if (candidate <= tolerance && candidate < distance) { nearest = placement; distance = candidate; }
+  }
+  return nearest;
+}
+
 export function cursorForMarker(ladder, markerIndex, lanes) {
   const placed = ladder?.placements.find(item => item.markerIndex === markerIndex);
   if (placed) return {x: placed.x, y: placed.y};

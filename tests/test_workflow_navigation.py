@@ -208,6 +208,20 @@ def test_upload_replacement_discards_suspended_orientation_and_analysis(annotate
     assert app.session_state["gel_image"].orientation is None
 
 
+def test_empty_replacement_chooser_retains_finished_analysis(annotated):
+    crop = confirm_ladder(annotated)
+    app = annotated.app
+    saved_png = app.session_state["annotation_png"]
+    saved_labels = deepcopy(app.session_state["annotation_data"])
+    assert app.file_uploader[0].value is None
+    app.file_uploader[0].set_value(None).run()
+    assert not app.exception
+    assert app.session_state["lane_crop"] is crop
+    assert app.session_state["annotation_stage"] == "final"
+    assert app.session_state["annotation_png"] == saved_png
+    assert app.session_state["annotation_data"] == saved_labels
+
+
 def test_orientation_return_restores_exact_initial_crop_without_redetection(workflow, monkeypatch):
     crops = []
 

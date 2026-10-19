@@ -128,7 +128,7 @@ def show_manual_orientation(gel: GelImage, image_panel, controls_panel, retry) -
         if st.session_state.orientation_error:
             st.warning(
                 st.session_state.orientation_error + "\n\n"
-                "Draw the gel outline manually if automatic edge detection failed."
+                "Draw an outline around the gel to adjust it yourself."
             )
         st.caption(
             "Adjust the outline on the initial crop. The gold edge becomes the top "
@@ -137,7 +137,7 @@ def show_manual_orientation(gel: GelImage, image_panel, controls_panel, retry) -
         pending = st.session_state.orientation_preview
         if pending is not None and not getattr(pending.orientation, "outline_complete", True):
             st.caption(
-                "The available-edge preview keeps the full image. Draw an outline here "
+                "The current preview keeps the full image. Draw an outline here "
                 "to choose a crop, or cancel to return to that preview."
             )
         if st.session_state.orientation_manual_error:

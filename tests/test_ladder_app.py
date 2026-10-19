@@ -19,6 +19,13 @@ def ladder_snapshot(x=143.625):
     }
 
 
+def manual_snapshot():
+    return {"mode": "manual", "placements": [
+        {"id": "marker-1", "label": "500 bp", "x": 1.125, "y": 0.25},
+        {"id": "marker-2", "label": "25 kDa", "x": 180.875, "y": 70.5},
+    ]}
+
+
 def open_ladder(annotated):
     crop = crop_gel(annotated)
     annotation_event(annotated, action="confirm")
@@ -215,6 +222,50 @@ def test_invalid_preset_configuration_keeps_skip_available(annotated, monkeypatc
     assert app.session_state["annotation_png"] == app.session_state["annotation_base_png"]
 
 
+def test_manual_ladder_commits_without_presets_and_reopens_for_edit_move_and_delete(annotated, monkeypatch, tmp_path):
+    monkeypatch.setattr("gel_analyzer.ladders.PRESETS_PATH", tmp_path / "missing.json")
+    open_ladder(annotated)
+    app = annotated.app
+    assert annotated.renders[-1][1]["presets"] == []
+    assert any("Manual ladder" in warning.value for warning in app.warning)
+    original = manual_snapshot()
+    ladder_event(annotated, data=original, action="confirm")
+    assert app.session_state["annotation_stage"] == "final"
+    assert app.session_state["ladder_data"] == original
+
+    app.button(key="edit_ladder").click().run()
+    assert annotated.renders[-1][1]["ladder"] == original
+    assert annotated.renders[-1][1]["ladder_step"] == "markers"
+    edited = deepcopy(original)
+    edited["placements"][0].update(label="750 bp", x=120.625, y=30.125)
+    edited["placements"].pop(1)
+    ladder_event(annotated, data=edited)
+    assert app.session_state["ladder_draft"] == edited
+    assert app.session_state["ladder_data"] == original
+    ladder_event(annotated, data=edited, action="confirm", revision=2)
+    assert app.session_state["ladder_data"] == edited
+    assert app.session_state["annotation_stage"] == "final"
+    assert app.session_state["annotation_error"] is None
+
+
+def test_manual_ladder_validation_keeps_last_valid_draft_and_rejects_empty_confirmation(annotated):
+    open_ladder(annotated)
+    app = annotated.app
+    data = manual_snapshot()
+    ladder_event(annotated, data=data)
+    invalid = deepcopy(data)
+    invalid["placements"][0]["label"] = ""
+    ladder_event(annotated, data=invalid, revision=2)
+    assert app.error
+    assert app.session_state["ladder_draft"] == data
+    empty = {"mode": "manual", "placements": []}
+    ladder_event(annotated, data=empty, revision=3, action="confirm")
+    assert app.error
+    assert app.session_state["ladder_draft"] == empty
+    assert app.session_state["ladder_data"] is None
+    assert app.session_state["annotation_stage"] == "ladder"
+
+
 def test_stale_and_unrelated_ladder_events_do_not_change_state(annotated):
     open_ladder(annotated)
     app = annotated.app
@@ -344,7 +395,7 @@ def test_changed_or_cleared_upload_discards_ladder_and_obsolete_events(annotated
     app.button(key="edit_ladder").click().run()
     old_event = ladder_event(annotated, data=ladder_snapshot(50.25))
     if clear:
-        app.file_uploader[0].set_value(None).run()
+        app.button(key="clear_image").click().run()
     else:
         upload(annotated.workflow, offset=1000)
     assert not app.exception

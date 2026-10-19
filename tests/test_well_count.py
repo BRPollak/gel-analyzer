@@ -70,7 +70,7 @@ def test_representative_counts_have_exact_valid_geometry_through_crop(count, ori
 @pytest.mark.parametrize("rows", (ROWS[:1], ROWS[1:2], ROWS[2:3], ROWS[3:], ROWS[:1] + ROWS[3:]))
 def test_missing_positions_use_supported_spacing_and_guide_endpoints(rows, orientation):
     image, result = _detect(_fixture(rows), 4, orientation)
-    _, supported = _detect(_fixture(rows), None, orientation)
+    _, supported = _detect(_fixture(rows), len(rows), orientation)
 
     _assert_valid(image, result, 4, orientation)
     assert all(well in result.wells for well in supported.wells)
@@ -85,7 +85,7 @@ def test_missing_positions_use_supported_spacing_and_guide_endpoints(rows, orien
 def test_excess_candidates_drop_lower_evidence_without_moving_remaining_outlines(orientation):
     rows = (ROWS[0], (80, 92), *ROWS[1:])
     fixture = _fixture(rows, contrasts=(80, 10, 80, 80, 80))
-    _, automatic = _detect(fixture, None, orientation)
+    _, automatic = _detect(fixture, len(rows), orientation)
     image, constrained = _detect(fixture, 4, orientation)
 
     assert len(automatic.wells) == 5
@@ -97,11 +97,15 @@ def test_excess_candidates_drop_lower_evidence_without_moving_remaining_outlines
 
 @pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))
 def test_matching_count_preserves_nonuniform_supported_geometry_exactly(orientation):
-    image = _fixture(((30, 66), (100, 122), (170, 214), (240, 270)))
-    _, automatic = _detect(image, None, orientation)
+    rows = ((30, 66), (100, 122), (170, 214), (240, 270))
+    image = _fixture(rows)
     _, constrained = _detect(image, 4, orientation)
 
-    assert constrained == automatic
+    expected = [(36, top, 54, bottom) for top, bottom in rows]
+    if orientation == "wells_top":
+        expected = [swap_bounds(bounds) for bounds in expected]
+    assert [well.bounds for well in constrained.wells] == expected
+    assert not constrained.warnings
 
 
 @pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))
@@ -112,7 +116,7 @@ def test_inference_uses_available_gaps_before_narrowing_unequal_supported_wells(
         values[top:bottom, 20:30] = 200
     source = Image.fromarray(values)
     guide = ((25, 10), (25, 90))
-    _, supported = _detect(source, None, orientation, guide)
+    _, supported = _detect(source, 3, orientation, guide)
 
     image, result = _detect(source, count, orientation, guide)
 
@@ -143,17 +147,51 @@ def test_fractional_reversed_guide_uses_covering_integer_pixel_span(orientation)
 
     assert backward == forward
     _assert_valid(oriented, forward, 17, orientation)
-    with pytest.raises(SelectionError, match="18 wells cannot fit in this 17-pixel guide span"):
+    with pytest.raises(SelectionError, match="18 wells cannot fit along this guide"):
         _detect(image, 18, orientation, guide)
 
 
-def test_impossible_count_is_rejected_before_any_image_analysis(monkeypatch):
+@pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))
+@pytest.mark.parametrize("count", (None, 0, -1, 2.5, 4.0, True, False, "4", float("nan"), float("inf")))
+def test_invalid_count_is_rejected_before_reading_or_allocating_image_data(monkeypatch, count, orientation):
+    def unexpected_analysis(*args, **kwargs):
+        pytest.fail("Invalid counts must fail before reading or allocating image data.")
+
+    image = _fixture()
+    monkeypatch.setattr("gel_analyzer.wells._analysis_pixels", unexpected_analysis)
+    monkeypatch.setattr("gel_analyzer.wells._detect_supported_wells", unexpected_analysis)
+    monkeypatch.setattr(Image.Image, "transpose", unexpected_analysis)
+
+    with pytest.raises(SelectionError, match="positive integer"):
+        detect_wells(image, GUIDE, expected_count=count, workflow_orientation=orientation)
+
+
+def test_expected_count_is_a_required_keyword_argument():
+    # No image object is needed: the API rejects omitted or positional counts
+    # before executing its body or inspecting image pixels.
+    with pytest.raises(TypeError, match="expected_count"):
+        detect_wells(None, GUIDE)
+    with pytest.raises(TypeError):
+        detect_wells(None, GUIDE, 4)
+
+
+def test_numpy_integer_count_is_accepted():
+    image, result = _detect(_fixture(), np.int64(4), "wells_left")
+    _assert_valid(image, result, 4, "wells_left")
+
+
+@pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))
+def test_impossible_count_is_rejected_before_any_image_analysis(monkeypatch, orientation):
     def unexpected_analysis(*args, **kwargs):
         pytest.fail("Impossible counts must fail before allocating image analysis arrays.")
 
     monkeypatch.setattr("gel_analyzer.wells._detect_supported_wells", unexpected_analysis)
+    monkeypatch.setattr("gel_analyzer.wells._analysis_pixels", unexpected_analysis)
+    monkeypatch.setattr(Image.Image, "transpose", unexpected_analysis)
+    image = Image.new("L", (120, 40) if orientation == "wells_left" else (40, 120))
+    guide = ((45, 0), (45, 40)) if orientation == "wells_left" else ((0, 45), (40, 45))
     with pytest.raises(SelectionError, match="cannot fit"):
-        detect_wells(Image.new("L", (120, 40)), ((45, 0), (45, 40)), expected_count=10**100)
+        detect_wells(image, guide, expected_count=10**100, workflow_orientation=orientation)
 
 
 @pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))

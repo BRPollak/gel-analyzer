@@ -282,7 +282,7 @@ test("missing labels and invalid group members cannot produce invalid geometry",
   assert.deepEqual(layout.groupLabels[0].lanes, [2]);
   assert.equal(layout.brackets[0].ticks.length, 1);
   assertLabelsFit(layout);
-  assert.throws(() => layoutAnnotations({...input, lanes: [[0, NaN, 400, 10]]}, measure), /invalid coordinates/);
+  assert.throws(() => layoutAnnotations({...input, lanes: [[0, NaN, 400, 10]]}, measure), /could not be drawn/);
 });
 
 test("punctuation entirely above or below the baseline remains visually centered", () => {
@@ -552,7 +552,7 @@ test("ladder composition draws all leaders behind white label backings and rotat
 test("invalid ladder coordinates and oversized top gutters fail before canvas allocation", () => {
   for (const placement of [{markerIndex: 0, x: NaN, y: 45}, {markerIndex: 0, x: 10, y: Infinity},
     {markerIndex: 50, x: 10, y: 45}]) {
-    assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([placement])}, measure), /invalid coordinates/);
+    assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([placement])}, measure), /could not be drawn/);
   }
   assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([], {labels: ["M".repeat(20000)]})}, measure),
     /too large to render/);

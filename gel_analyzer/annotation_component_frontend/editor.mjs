@@ -3,7 +3,8 @@ import {annotationSvg} from "./svg.mjs";
 import {createLadderEditor} from "./ladder.mjs";
 import {createGroupEditor} from "./groups.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
-import {cleanText, cleanStyle, labelRuns, textSnapshot, formattingStyle, formatSelection, editText,
+import {selectLabelKeys, selectedFormatting, formatSelectedLabels} from "./label_selection.mjs";
+import {cleanText, cleanStyle, labelRuns, textSnapshot, editText,
   readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
 
 // Streamlit's v1 component protocol keeps the editor self-contained and offline.
@@ -28,6 +29,7 @@ let pendingEdit = null;
 let confirmationTimer = null;
 let confirming = false;
 let selected = "lane:0";
+let selectedKeys = [selected];
 let previewError = "";
 let zoomFrame = null;
 let outerViewportListeners = [];
@@ -48,7 +50,7 @@ function syncMode() {
   byId("confirm").hidden = ladderMode;
   inputLayer.hidden = ladderMode;
   byId("label-angle-field").hidden = ladderMode || state?.workflow_orientation !== "wells_top";
-  byId("auto-size").title = "80% of average lane thickness";
+  byId("auto-size").title = "Choose a text size that fits the lanes";
   const top = state?.workflow_orientation === "wells_top";
   byId("group-set-label").textContent = top ? "Row" : "Column";
   byId("group-set").setAttribute("aria-label", top ? "Group row" : "Group column");
@@ -109,6 +111,11 @@ function selectedLabel() {
   return state.annotations.groups.find(group => `group:${group.id}` === selected) || null;
 }
 
+function selectedTargets() {
+  return selectedKeys.map(key => ({key, label: labelForKey(key),
+    field: key.startsWith("lane:") ? "text" : "label"})).filter(target => target.label);
+}
+
 function setValue(node, value) {
   if (node.value !== String(value)) node.value = value;
 }
@@ -116,14 +123,17 @@ function setValue(node, value) {
 function syncToolbar() {
   const value = selectedLabel();
   const isGroup = selected.startsWith("group:");
-  const range = textSelection?.key === selected ? textSelection : null;
-  const style = value ? formattingStyle(value, isGroup ? "label" : "text", range) : {};
+  const multiple = selectedKeys.length > 1;
+  const range = !multiple && textSelection?.key === selected ? textSelection : null;
+  const style = selectedFormatting(selectedTargets(), range);
   byId("selection-name").textContent = !value ? "Select a label"
-    : isGroup ? `Group · set ${value.set + 1}` : `Lane ${Number(selected.slice(5)) + 1}`;
+    : multiple ? `${selectedKeys.length} lane labels selected`
+      : isGroup ? `Group · set ${value.set + 1}` : `Lane ${Number(selected.slice(5)) + 1}`;
   byId("bold").setAttribute("aria-pressed", String(style.bold === true));
   byId("italic").setAttribute("aria-pressed", String(style.italic === true));
-  byId("formatting-scope").textContent = range && range.start !== range.end
-    ? "Formatting: selected text" : "Formatting: whole label";
+  byId("formatting-scope").textContent = !value ? "Click a label to select it"
+    : multiple ? "Formatting: all selected labels"
+      : range && range.start !== range.end ? "Formatting: selected text" : "Formatting: whole label";
   // Older lane labels use near-black; present those as Black without changing saved colors.
   const color = style.color?.toLowerCase() === "#202020" ? "#000000" : style.color?.toLowerCase();
   const preset = COLOR_PRESETS.find(preset => preset.color === color);
@@ -136,16 +146,19 @@ function syncToolbar() {
   setValue(byId("label-angle"), state.annotations.laneLabelAngle);
   byId("edit-selected-group").hidden = !value || !isGroup;
   for (const name of ["bold", "italic"]) byId(name).disabled = confirming || !value;
-  for (const [key, node] of inputNodes) node.dataset.selected = String(key === selected);
+  for (const [key, node] of inputNodes) node.dataset.selected = String(selectedKeys.includes(key));
 }
 
 function refreshTargets() {
-  if (!selectedLabel()) selected = state.annotations.labels.length ? "lane:0" : "";
+  selectedKeys = selectedKeys.filter(key => labelForKey(key));
+  selected = selectedKeys.at(-1) ?? "";
 }
 
-function selectLabel(key, updateGroup = true) {
-  if (key !== selected) textSelection = null;
-  selected = key;
+function selectLabel(key, updateGroup = true, additive = false) {
+  const next = selectLabelKeys(selectedKeys, key, additive);
+  if (key !== selected || additive || selectedKeys.length !== next.length) textSelection = null;
+  selectedKeys = next;
+  selected = selectedKeys.at(-1) ?? "";
   syncToolbar();
   if (updateGroup && key.startsWith("group:")) {
     const group = selectedLabel();
@@ -170,6 +183,7 @@ function rememberEdit(key) {
 }
 
 function captureSelection() {
+  if (selectedKeys.length !== 1) { textSelection = null; syncToolbar(); return; }
   const node = inputNodes.get(selected);
   // A rerender can collapse an unfocused DOM selection. Keep the saved range
   // while keyboard users move through the toolbar instead of replacing it.
@@ -206,6 +220,18 @@ function updateInputs() {
       node.spellcheck = false;
       node.className = "image-label";
       node.dataset.label = box.key;
+      node.addEventListener("pointerdown", event => {
+        if (confirming || event.button !== 0) return;
+        const additive = box.key.startsWith("lane:") && (event.metaKey || event.ctrlKey);
+        if (additive) {
+          // A modifier click selects the object, without moving a text caret or
+          // letting a subsequent focus event replace the multi-selection.
+          event.preventDefault();
+          if (inputLayer.contains(document.activeElement)) document.activeElement.blur();
+          window.getSelection()?.removeAllRanges();
+        }
+        selectLabel(box.key, true, additive);
+      });
       node.addEventListener("focus", () => selectLabel(box.key));
       let beforeEdit = null;
       let composing = false;
@@ -271,7 +297,7 @@ function updateInputs() {
     renderRuns(node, labelForKey(box.key), box.key.startsWith("lane:") ? "text" : "label");
     node.setAttribute("aria-label", box.accessible);
     node.dataset.placeholder = box.key.startsWith("lane:") ? `Lane ${box.index + 1}` : "Group";
-    node.dataset.selected = String(box.key === selected);
+    node.dataset.selected = String(selectedKeys.includes(box.key));
     node.contentEditable = String(!confirming);
     node.setAttribute("aria-disabled", String(confirming));
     node.style.left = `${(box.rotation ? box.baselineX : box.x) - box.width - 1}px`;
@@ -335,6 +361,8 @@ function updateZoom() {
   const availableWidth = Math.max(1, Math.floor(viewport.clientWidth - paddingX) - 1);
   const availableHeight = Math.max(1, Math.floor(budget - insetY) - 1);
   const scale = fit ? Math.min(1, availableWidth / layout.width, availableHeight / layout.height) : Number(zoom);
+  component.style.setProperty("--selection-outline-width", `${2 / scale}px`);
+  component.style.setProperty("--selection-outline-offset", `${1 / scale}px`);
   byId("preview-stage").style.transform = `scale(${scale})`;
   byId("preview-stage").style.width = `${layout.width}px`;
   byId("preview-stage").style.height = `${layout.height}px`;
@@ -348,8 +376,8 @@ function updateZoom() {
   component.dataset.previewBudget = String(budget);
   const dense = layout.denseFallback ? " Closely spaced labels use extra columns." : "";
   const fitted = state.workflow_orientation === "wells_top" && layout.reducedFont
-    ? ` Lane text fitted to ${Number(layout.laneFontSize.toFixed(1))} px to keep labels aligned.` : "";
-  byId("size-hint").textContent = `${layout.width} × ${layout.height} pixels · ${Math.round(scale * 100)}% view${dense}${fitted}`;
+    ? " Text is sized to keep lane labels aligned." : "";
+  byId("size-hint").textContent = `${Math.round(scale * 100)}% view${dense}${fitted}`;
   ladderEditor.render();
   resizeFrame();
 }
@@ -489,15 +517,14 @@ function setConfirming(value) {
 document.addEventListener("selectionchange", () => { if (state) captureSelection(); });
 
 function applyFormat(name, explicitValue) {
-  const label = selectedLabel();
-  if (!label || confirming) return;
+  const targets = selectedTargets();
+  if (!targets.length || confirming) return;
   // Read the current DOM range as well as the cached range: selectionchange
   // can arrive after a quick toolbar click or keyboard formatting shortcut.
   captureSelection();
-  const key = selected.startsWith("lane:") ? "text" : "label";
-  const range = textSelection?.key === selected ? textSelection : null;
-  rememberEdit(selected);
-  formatSelection(label, key, range, name, explicitValue);
+  const range = targets.length === 1 && textSelection?.key === selected ? textSelection : null;
+  for (const target of targets) rememberEdit(target.key);
+  formatSelectedLabels(targets, range, name, explicitValue);
   changed();
   // Keep the range highlighted for pointer users; keyboard users retain the
   // cached range while moving among toolbar controls.
@@ -623,6 +650,7 @@ window.addEventListener("message", event => {
     histories.clear();
     textSelection = null;
     selected = "lane:0";
+    selectedKeys = [selected];
     groupEditor.reset();
     refreshTargets();
     syncToolbar();

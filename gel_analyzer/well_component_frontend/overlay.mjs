@@ -107,7 +107,7 @@ function drawGuide() {
     handle.setAttribute("aria-disabled", String(!state.editable));
     if (!point) return;
     handle.setAttribute("transform", `translate(${point[0]} ${point[1]})`);
-    handle.setAttribute("aria-label", `Endpoint ${index + 1}, x ${point[0].toFixed(1)}, y ${point[1].toFixed(1)}. ${state.workflowOrientation === "wells_top" ? "Left and Right adjust this endpoint; Up and Down move the horizontal line." : "Up and Down adjust this endpoint; Left and Right move the vertical line."} Shift moves ten pixels.`);
+    handle.setAttribute("aria-label", `Endpoint ${index + 1}. ${state.workflowOrientation === "wells_top" ? "Left and Right adjust this endpoint; Up and Down move the horizontal line." : "Up and Down adjust this endpoint; Left and Right move the vertical line."} Hold Shift for larger steps.`);
     handle.dataset.x = point[0];
     handle.dataset.y = point[1];
     handle.querySelector(".hit").setAttribute("r", screenRadius(18, rect, state.width));
