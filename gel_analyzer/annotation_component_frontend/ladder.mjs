@@ -19,7 +19,11 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   let referenceSignature = "";
   let referenceVisible = true;
   let referenceFailed = false;
+  let candidatesVisible = false;
 
+  const top = () => getState()?.workflow_orientation === "wells_top";
+  const directions = () => top() ? "Up and Down" : "Left and Right";
+  const candidates = () => getState()?.bandCandidates?.[getState()?.ladder?.laneIndex] ?? [];
   const active = () => getState()?.mode === "ladder";
   const editable = () => active() && !disabled && !pendingChange;
   const placements = () => getState()?.ladder?.placements ?? [];
@@ -51,6 +55,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   }
 
   function setLane(index) {
+    candidatesVisible = false;
     getState().ladder = {...getState().ladder, laneIndex: index, placements: []};
     cursor = selectedMarker === null ? null : cursorForMarker(getState().ladder, selectedMarker, getState().lanes);
     changed(`Lane ${index + 1} selected.`);
@@ -145,6 +150,18 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
         : `Click the ${markerLabel()} band in the highlighted lane.`;
     byId("ladder-count").textContent = `${placements().length} of ${labels.length} sizes placed`;
     byId("ladder-remove-marker").hidden = selectedMarker === null || !isPlaced(selectedMarker);
+    byId("ladder-detected-bands").hidden = !candidatesVisible;
+    byId("ladder-detected-bands").replaceChildren();
+    if (candidatesVisible) {
+      candidates().forEach((candidate, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = `Band ${index + 1} · ${Math.round(top() ? candidate.y : candidate.x)} px`;
+        button.disabled = selectedMarker === null || !editable();
+        button.addEventListener("click", () => place({x: candidate.x, y: candidate.y}));
+        byId("ladder-detected-bands").appendChild(button);
+      });
+    }
   }
 
   function renderReference(state) {
@@ -208,20 +225,33 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
       layer.appendChild(rect);
     });
     const lane = state.lanes[state.ladder?.laneIndex];
+    if (candidatesVisible && lane && state.ladderStep === "markers") {
+      for (const candidate of candidates()) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        const coordinates = top()
+          ? {x1: layout.gelX + lane[0], x2: layout.gelX + lane[2], y1: layout.gelY + candidate.y, y2: layout.gelY + candidate.y}
+          : {x1: layout.gelX + candidate.x, x2: layout.gelX + candidate.x, y1: layout.gelY + lane[1], y2: layout.gelY + lane[3]};
+        for (const [key, value] of Object.entries({...coordinates, stroke: "#9333ea", "stroke-width": 1, "stroke-dasharray": "3 3", "vector-effect": "non-scaling-stroke"})) line.setAttribute(key,value);
+        layer.appendChild(line);
+      }
+    }
     const showCursor = state.ladderStep === "markers" && selectedMarker !== null && cursor && lane;
     cursorNode.setAttribute("visibility", showCursor ? "visible" : "hidden");
     cursorNode.setAttribute("tabindex", showCursor && !disabled && !pendingChange ? "0" : "-1");
     cursorNode.setAttribute("aria-disabled", String(disabled || Boolean(pendingChange)));
     if (!showCursor) return;
-    cursorNode.setAttribute("aria-label", `${markerLabel()} position. Left and Right move one pixel; Shift moves ten. Enter places the marker. Escape returns to its size button.`);
-    cursorNode.setAttribute("aria-valuemin", lane[0]);
-    cursorNode.setAttribute("aria-valuemax", lane[2]);
-    cursorNode.setAttribute("aria-valuenow", cursor.x);
-    cursorNode.setAttribute("aria-valuetext", `${cursor.x.toFixed(2)} pixels from the left of the gel`);
+    cursorNode.setAttribute("aria-label", `${markerLabel()} position. ${directions()} move one pixel; Shift moves ten. Enter places the marker. Escape returns to its size button.`);
+    cursorNode.setAttribute("aria-orientation", top() ? "vertical" : "horizontal");
+    cursorNode.setAttribute("aria-valuemin", lane[top() ? 1 : 0]);
+    cursorNode.setAttribute("aria-valuemax", lane[top() ? 3 : 2]);
+    cursorNode.setAttribute("aria-valuenow", top() ? cursor.y : cursor.x);
+    cursorNode.setAttribute("aria-valuetext", `${(top() ? cursor.y : cursor.x).toFixed(2)} pixels from the ${top() ? "top" : "left"} of the gel`);
     const x = layout.gelX + cursor.x;
     const y = layout.gelY + cursor.y;
     const line = byId("ladder-cursor-line");
-    for (const [key, value] of Object.entries({x1: x, x2: x, y1: layout.gelY + lane[1], y2: layout.gelY + lane[3]})) line.setAttribute(key, value);
+    const coordinates = top() ? {x1: layout.gelX + lane[0], x2: layout.gelX + lane[2], y1: y, y2: y}
+      : {x1: x, x2: x, y1: layout.gelY + lane[1], y2: layout.gelY + lane[3]};
+    for (const [key, value] of Object.entries(coordinates)) line.setAttribute(key, value);
     const radius = canvas.getBoundingClientRect().width > 0 ? 5 * layout.width / canvas.getBoundingClientRect().width : 5;
     for (const [key, value] of Object.entries({cx: x, cy: y, r: radius})) byId("ladder-cursor-dot").setAttribute(key, value);
   }
@@ -269,6 +299,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     for (const container of [byId("ladder-panel"), byId("ladder-actions")]) {
       container.querySelectorAll("button, select").forEach(node => { node.disabled = disabled || Boolean(pendingChange); });
     }
+    byId("ladder-detected-bands").querySelectorAll("button").forEach(node => { node.disabled ||= selectedMarker === null; });
     for (const name of ["ladder-accept-change", "ladder-keep-current"]) byId(name).disabled = disabled;
     byId("ladder-continue").disabled ||= !state.ladder;
     byId("ladder-use-lane").disabled ||= state.ladder?.laneIndex == null;
@@ -333,17 +364,25 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     changed(`${markerLabel()} removed. Click its band to place it again.`);
     markerNodes.get(selectedMarker)?.button.focus();
   });
+  byId("ladder-detect-bands").addEventListener("click", () => {
+    if (!editable()) return;
+    candidatesVisible = !candidatesVisible;
+    render();
+    status(candidatesVisible ? (candidates().length
+      ? `${candidates().length} candidate bands detected. Choose a size, then a detected band. Check assignments before confirming.`
+      : "No candidate bands detected in this lane. Place markers manually on the gel.") : "Detected band guides hidden.");
+  });
   byId("ladder-keyboard").addEventListener("click", () => {
     if (!editable() || selectedMarker === null) return;
     cursorNode.focus();
-    status("Use Left and Right to position the marker; Shift moves ten pixels. Press Enter to place it, or Escape to return.");
+    status(`Use ${directions()} to position the marker; Shift moves ten pixels. Press Enter to place it, or Escape to return.`);
   });
   cursorNode.addEventListener("keydown", event => {
     if (!editable() || !cursor || selectedMarker === null) return;
-    const direction = {ArrowLeft: -1, ArrowRight: 1}[event.key];
+    const direction = (top() ? {ArrowUp: -1, ArrowDown: 1} : {ArrowLeft: -1, ArrowRight: 1})[event.key];
     if (direction) {
       event.preventDefault();
-      cursor = moveLadderCursor(cursor, direction, event.shiftKey, getState().lanes[getState().ladder.laneIndex]);
+      cursor = moveLadderCursor(cursor, direction, event.shiftKey, getState().lanes[getState().ladder.laneIndex], getState().workflow_orientation);
       drawOverlay(getState());
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -386,6 +425,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   });
 
   function reset() {
+    candidatesVisible = false;
     selectedMarker = null;
     cursor = null;
     pendingChange = null;

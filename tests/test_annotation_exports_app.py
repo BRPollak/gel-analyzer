@@ -19,7 +19,10 @@ if "annotation_stage" not in st.session_state:
     st.session_state.annotation_dimensions = (210, 44)
     st.session_state.annotation_stage = "final"
     st.session_state.annotation_completed = True
-crop = SimpleNamespace(width=30, height=20, crop_box=(0,0,30,20), lanes=((0,0,30,20),))
+crop_buffer = BytesIO()
+Image.new("RGB", (30, 20), "white").save(crop_buffer, format="PNG")
+crop = SimpleNamespace(width=30, height=20, crop_box=(0,0,30,20), lanes=((0,0,30,20),),
+                       wells=(), preview_png=crop_buffer.getvalue())
 show_annotations(crop, "my gel.tiff")
 ''').run()
 

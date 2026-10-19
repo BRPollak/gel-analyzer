@@ -230,3 +230,17 @@ def test_png_dimensions_must_match_claimed_canvas():
     event["width"] += 1
     with pytest.raises(AnnotationError):
         validate_composition(event, crop)
+
+
+def test_top_font_uses_lane_width_and_saved_angles_are_compatible():
+    data = default_annotations(2, [(0, 0, 20, 400), (40, 0, 80, 400)], "wells_top")
+    assert data["fontSize"] == 24
+    assert data["laneLabelAngle"] == 90
+    data["laneLabelAngle"] = 45
+    assert validate_annotations(data, 2)["laneLabelAngle"] == 45
+    del data["laneLabelAngle"]
+    assert validate_annotations(data, 2)["laneLabelAngle"] == 90
+    for invalid in (0, -90, 89, "45", True):
+        data["laneLabelAngle"] = invalid
+        with pytest.raises(AnnotationError):
+            validate_annotations(data, 2)

@@ -51,6 +51,8 @@ def test_orientation_uses_first_crop_pixels_and_keeps_tiff_source(
             image=cropped.transpose(Image.Transpose.TRANSPOSE).crop((1, 1, 4, 5)),
             rectangle=SimpleNamespace(corners=corners),
             counterclockwise_degrees=87.25,
+            outline_complete=True,
+            supported_edges=(),
         )
 
     monkeypatch.setattr(image_io, "orient_gel", orient)

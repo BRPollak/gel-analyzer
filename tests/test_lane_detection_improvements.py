@@ -1,4 +1,4 @@
-"""Outcome-based fixtures for automatic lane recovery and count guidance."""
+"""Outcome-based fixtures for automatic recovery and exact well counts."""
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -244,41 +244,47 @@ def test_expected_count_recovers_a_faint_missing_well_with_local_rim_evidence():
     _assert_ordered_lanes(result)
 
 
-def test_smaller_expected_count_cannot_merge_clear_full_height_wells():
+def test_smaller_expected_count_retains_exactly_requested_supported_wells():
     image = _image(_gel())
     unchanged = detect_wells(image, GUIDE)
 
     result = detect_wells(image, GUIDE, expected_count=3)
 
-    assert result.wells == unchanged.wells
-    assert result.lanes == unchanged.lanes
-    assert result.warnings
+    assert len(result.wells) == len(result.lanes) == 3
+    assert all(well in unchanged.wells for well in result.wells)
+    assert any("omitted 1" in warning for warning in result.warnings)
+    _assert_ordered_lanes(result)
 
 
-def test_expected_count_does_not_fill_a_gap_with_no_well_evidence():
+def test_expected_count_fills_a_gap_and_discloses_inferred_position():
     values = _gel()
     values[170:206, 36:54] = 120
 
     result = detect_wells(_image(values), GUIDE, expected_count=4)
 
-    assert len(result.lanes) == 3
-    assert result.warnings
-    assert [well.bounds[1::2] for well in result.wells] == [WELL_ROWS[i] for i in (0, 1, 3)]
+    assert len(result.lanes) == 4
+    assert [well.bounds[1::2] for well in result.wells] == list(WELL_ROWS)
+    assert any("inferred" in warning and "wells 3" in warning and "not confirmed by image evidence" in warning
+               for warning in result.warnings)
+    _assert_ordered_lanes(result)
 
 
 @pytest.mark.parametrize("seed", (None, 5, 19))
-def test_expected_count_does_not_generate_lanes_on_blank_or_noisy_gels(seed):
+def test_expected_count_proposes_exact_count_on_blank_or_noisy_gels(seed):
     values = np.full((310, 360), 120.0)
     if seed is not None:
         values += np.random.default_rng(seed).normal(0, 3, values.shape)
 
     result = detect_wells(_image(values), GUIDE, expected_count=4)
 
-    assert result.wells == result.lanes == ()
-    assert result.warnings
+    assert len(result.wells) == len(result.lanes) == 4
+    assert any("4 position(s) were inferred" in warning and "not confirmed by image evidence" in warning
+               for warning in result.warnings)
+    assert not any("No wells" in warning for warning in result.warnings)
+    _assert_ordered_lanes(result)
 
 
-def test_downstream_bands_alone_do_not_invent_wells_to_match_expected_count():
+def test_downstream_bands_refine_count_based_lanes_without_claiming_well_evidence():
     values = np.full((310, 360), 120.0)
     for top, bottom in WELL_ROWS:
         values[top:bottom, 135:149] -= 70
@@ -286,8 +292,9 @@ def test_downstream_bands_alone_do_not_invent_wells_to_match_expected_count():
 
     result = detect_wells(_image(values), GUIDE, expected_count=4)
 
-    assert result.wells == result.lanes == ()
-    assert result.warnings
+    assert len(result.wells) == len(result.lanes) == 4
+    assert any("4 position(s) were inferred" in warning for warning in result.warnings)
+    _assert_ordered_lanes(result)
 
 
 @pytest.mark.parametrize("invalid_count", (0, -1, 2.5, True, "4"))

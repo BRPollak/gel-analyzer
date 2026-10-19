@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveGuideEndpoint, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {laneAxisState, clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveGuideEndpoint, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
 import {createLaneReview} from "../gel_analyzer/well_component_frontend/lane_review.mjs";
 
 test("pointer mapping is independent of scale and page offset", () => {
@@ -305,10 +305,95 @@ test("guide stays vertical through edits and preserves confirmed results across 
       assert.equal(values().length, before, "finishing or cancelling the old drag cannot emit geometry");
       assert.ok(elements.results.children.length > 0, "delayed editable renders cannot hide the result");
     }
+    render({token: "top-guide", width: 400, height: 200, workflow_orientation: "wells_top",
+      editable: true, points: [], wells: [], lanes: [], image_src: ""});
+    svg.dispatch("pointerdown", pointer(20, 35));
+    svg.dispatch("pointerdown", pointer(380, 80));
+    assert.deepEqual(values().at(-1).points, [[20, 35], [380, 35]]);
+    const first = elements["endpoint-0"];
+    svg.dispatch("pointerdown", pointer(20, 35, first));
+    svg.dispatch("pointermove", pointer(30, 50, first));
+    assert.equal(elements.guide.attributes.y1, elements.guide.attributes.y2);
+    assert.deepEqual(shownPoints(), [[30, 50], [380, 50]]);
+    svg.dispatch("pointerup", pointer(30, 50, first));
+    assert.deepEqual(values().at(-1).points, [[30, 50], [380, 50]]);
+    svg.dispatch("keydown", {target: first, key: "ArrowUp", shiftKey: true});
+    assert.deepEqual(values().at(-1).points, [[30, 40], [380, 40]]);
+    svg.dispatch("keydown", {target: first, key: "ArrowRight"});
+    assert.deepEqual(values().at(-1).points, [[31, 40], [380, 40]]);
+    assert.match(elements.status.textContent, /horizontal line/);
   } finally {
     for (const [name, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete globalThis[name];
     }
+  }
+});
+
+
+test("wells-top guide edits stay horizontal and axis views return display-coordinate updates", () => {
+  assert.deepEqual(readPoints([[180, 13], [15, 11]], 200, 400, "wells_top"), [[180, 13], [15, 13]]);
+  assert.deepEqual(moveGuideEndpoint([[180, 13], [15, 13]], 1, [25, 45], 200, 400, "wells_top"), [[180, 45], [25, 45]]);
+  const display = {workflowOrientation: "wells_top", width: 200, height: 400,
+    lanes: [[10, 11, 24, 350], [38, 13, 55, 350]],
+    wells: [{bounds: [10, 11, 24, 35], center: [17, 23]}, {bounds: [38, 13, 55, 41]}]};
+  const axes = laneAxisState(display);
+  assert.equal(axes.width, 400);
+  assert.equal(axes.height, 200);
+  axes.lanes = moveLaneBorder(axes.lanes, 1, "top", 5, axes.height);
+  axes.wells = wellsWithLaneBorders(axes.wells, axes.lanes);
+  assert.deepEqual(display.lanes[1], [24, 13, 55, 350]);
+  assert.deepEqual(display.wells[1].bounds, [24, 13, 55, 41]);
+});
+
+test("wells-top review draws vertical borders and emits displayed XY for keyboard, pointer, deletion and bottom extent", () => {
+  const originalDocument = globalThis.document;
+  const svg = new ReviewNode();
+  const elements = Object.fromEntries(["lane-review", "excluded-right", "image-wrap"].map(id => [id, new ReviewNode()]));
+  globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+  try {
+    const state = {width: 400, height: 200, workflowOrientation: "wells_top", reviewMode: "borders", editable: true,
+      lanes: [[10, 10, 24, 180], [26, 12, 42, 180]],
+      wells: [{bounds: [10, 10, 24, 30]}, {bounds: [26, 12, 42, 33]}], rightEdge: 180};
+    const events = [];
+    let point = [10, 66];
+    const review = createLaneReview({svg, getState: () => state, pointerPosition: () => point,
+      repaint: () => review.draw(), emit: event => events.push(event)});
+    const findHandle = (edge, index = 0) => elements["lane-review"].descendants().find(node => node.attributes.role === "slider" && node.dataset.reviewEdge === edge && node.dataset.laneIndex === String(index));
+    review.reset();
+    review.draw();
+    const handle = findHandle("top");
+    assert.equal(handle.attributes["aria-orientation"], "horizontal");
+    assert.match(handle.attributes["aria-label"], /left boundary/);
+    assert.equal(Number(handle.dataset.x), 10);
+    assert.equal(Number(handle.dataset.y), 10 + 170 / 3);
+    svg.dispatch("keydown", {target: handle, key: "ArrowRight", shiftKey: true});
+    assert.deepEqual(events.at(-1).lanes[0], [20, 10, 24, 180]);
+    assert.deepEqual(state.wells[0].bounds, [20, 10, 24, 30]);
+    point = [20, 10 + 170 / 3];
+    svg.dispatch("pointerdown", {target: handle});
+    point = [18, 130];
+    svg.dispatch("pointerup", {target: handle});
+    assert.deepEqual(events.at(-1).lanes[0], [18, 10, 24, 180]);
+    const button = elements["lane-review"].descendants().find(node => node.dataset.deleteLane === "1");
+    svg.dispatch("click", {target: button});
+    assert.deepEqual(events.at(-1), {kind: "lane_review", mode: "borders", action: "delete", lane_index: 1,
+      lanes: [[18, 10, 24, 180], [26, 12, 42, 180]], right_edge: 180});
+    state.reviewMode = "extent";
+    review.reset();
+    review.draw();
+    const bottom = findHandle("right", -1);
+    assert.match(bottom.attributes["aria-label"], /bottom boundary/);
+    assert.equal(bottom.attributes["aria-orientation"], "vertical");
+    svg.dispatch("keydown", {target: bottom, key: "ArrowUp", shiftKey: true});
+    assert.deepEqual(events.at(-1).lanes, [[18, 10, 24, 170], [26, 12, 42, 170]]);
+    assert.equal(events.at(-1).right_edge, 170);
+    assert.equal(elements["excluded-right"].attributes.x, "0");
+    assert.equal(elements["excluded-right"].attributes.y, "170");
+    assert.equal(elements["excluded-right"].attributes.height, "30");
+    assert.equal(elements["excluded-right"].attributes.width, "400");
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
   }
 });

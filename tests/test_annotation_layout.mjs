@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {annotationSvg} from "../gel_analyzer/annotation_component_frontend/svg.mjs";
 import {annotationFont, drawAnnotations, layoutAnnotations} from "../gel_analyzer/annotation_component_frontend/layout.mjs";
 
 // Deliberately model italic ink extending past both ends of its advance width.
@@ -21,6 +22,21 @@ const input = {width: 400, height: 100, lanes,
 function rectanglesIntersect(a, b) {
   return a.hasInk && b.hasInk && a.inkLeft < b.inkRight && b.inkLeft < a.inkRight &&
     a.inkTop < b.inkBottom && b.inkTop < a.inkBottom;
+}
+
+// Rotated text shares two orthogonal axes. Project actual glyph bounds onto
+// those axes rather than treating diagonal text's large screen-aligned box as ink.
+function rotatedInkIntersects(a, b) {
+  const cos = Math.cos(a.rotation), sin = Math.sin(a.rotation);
+  const bounds = label => {
+    const u = cos * label.baselineX + sin * label.baselineY;
+    const v = -sin * label.baselineX + cos * label.baselineY;
+    return {left: u - label.advance + label.inkOffsetLeft,
+      right: u - label.advance + label.inkOffsetRight,
+      top: v - label.ascent, bottom: v + label.descent};
+  };
+  const x = bounds(a), y = bounds(b);
+  return a.hasInk && b.hasInk && x.left < y.right && y.left < x.right && x.top < y.bottom && y.top < x.bottom;
 }
 
 function assertLabelsFit(layout) {
@@ -580,3 +596,136 @@ test("invalid ladder coordinates and oversized top gutters fail before canvas al
   assert.throws(() => layoutAnnotations({...input, ladder: ladderWith([], {labels: ["M".repeat(20000)]})}, measure),
     /too large to render/);
 });
+
+for (const angle of [90, 45]) {
+  test(`wells at top ${angle}° labels, sparse groups and left ladder fit without touching the gel`, () => {
+    const specification = {width: 220, height: 400, workflow_orientation: "wells_top",
+      lanes: [[0, 0, 18, 400], [22, 0, 40, 400], [202, 0, 220, 400]],
+      annotations: {fontSize: 24, laneLabelAngle: angle, labels: [
+        {text: "Very long treatment label", bold: true, italic: true},
+        {text: "Control", italic: true}, {text: "Right edge", bold: true}], groups: [
+        {id: "sparse", set: 0, label: "Replicate group", lanes: [0, 2], italic: true},
+        {id: "nested", set: 1, label: "All samples", lanes: [0, 1, 2]}]},
+      ladder: {preset: {labels: ["10 kb", "2 kb", "100 bp"]}, laneIndex: 0,
+        placements: [{markerIndex: 0, x: 9.25, y: .25}, {markerIndex: 1, x: 10.75, y: 30.5},
+          {markerIndex: 2, x: 8, y: 399.5}]}};
+    const original = structuredClone(specification);
+    const layout = layoutAnnotations(specification, measure);
+    assert.equal(layout.imageWidth, 220);
+    assert.equal(layout.imageHeight, 400);
+    for (const label of layout.labels) {
+      assert.equal(label.rotationDegrees, angle);
+      assert.ok(label.inkLeft >= 0 && label.inkRight <= layout.width);
+      assert.ok(label.inkTop >= 0 && label.inkBottom < layout.gelY);
+      assert.ok(label.editorTop >= 0 && label.editorRight <= layout.width);
+      for (const other of layout.labels.filter(other => other !== label)) {
+        assert.equal(rotatedInkIntersects(label, other), false, `${label.text} overlaps ${other.text}`);
+      }
+    }
+    for (const [index, label] of layout.laneLabels.entries()) {
+      assert.equal(label.anchor - layout.gelX, (specification.lanes[index][0] + specification.lanes[index][2]) / 2);
+    }
+    const bracket = layout.brackets.find(item => item.id === "sparse");
+    assert.equal(bracket.horizontal, true);
+    assert.equal(bracket.left, layout.gelX);
+    assert.equal(bracket.right, layout.gelX + 220);
+    assert.deepEqual(bracket.ticks, [layout.gelX + 9, layout.gelX + 211]);
+    assert.ok(bracket.y + bracket.depth < Math.min(...layout.laneLabels.map(label => label.inkTop)));
+    for (const [index, label] of layout.ladderLabels.entries()) {
+      assert.equal(label.rotation, 0);
+      assert.ok(label.left >= 0 && label.right < layout.gelX);
+      assert.ok(label.top >= 0 && label.bottom <= layout.height);
+      assert.ok(Math.abs((label.inkTop + label.inkBottom) / 2 - layout.gelY - specification.ladder.placements[index].y) < 1e-9);
+    }
+    assert.deepEqual(specification, original);
+  });
+}
+
+test("top lane font follows width and missing angle retains the 90° default", () => {
+  const layout = layoutAnnotations({width: 100, height: 400, workflow_orientation: "wells_top",
+    lanes: [[0, 0, 20, 400], [60, 0, 100, 400]], annotations: {labels: [{text: "A"}, {text: "B"}]}}, measure);
+  assert.equal(layout.fontSize, 24);
+  assert.equal(layout.laneLabelAngle, 90);
+});
+
+
+for (const angle of [45, 90]) {
+  test(`top ${angle}° default-sized long labels end on one line without false diagonal collisions`, () => {
+    const lanes = Array.from({length: 6}, (_, index) => [index * 60, 0, index * 60 + 24, 400]);
+    const annotations = {laneLabelAngle: angle, labels: lanes.map((_, index) =>
+      ({text: index % 2 ? `Lane ${index + 1}` : `A long treatment label ${index + 1}`, italic: index === 2}))};
+    const layout = layoutAnnotations({width: 324, height: 400, lanes, annotations,
+      workflow_orientation: "wells_top"}, measure);
+    assert.equal(layout.requestedFontSize, 19, "uses the real default,80% of lane width");
+    assert.equal(layout.laneFontSize, 19, "ordinary spacing does not shrink text because its length is large");
+    assert.equal(layout.reducedFont, false);
+    assert.equal(layout.denseFallback, false);
+    assert.equal(new Set(layout.laneLabels.map(label => label.anchorY)).size, 1);
+    for (const [index, label] of layout.laneLabels.entries()) {
+      assert.equal(label.anchor - layout.gelX, index * 60 + 12);
+      assert.ok(label.inkBottom <= layout.gelY - 14);
+      for (const other of layout.laneLabels.slice(index + 1)) assert.equal(rotatedInkIntersects(label, other), false);
+    }
+    if (angle === 45) assert.ok(rectanglesIntersect(layout.laneLabels[0], layout.laneLabels[1]),
+      "the regression deliberately includes overlapping screen boxes for non-overlapping parallel text");
+  });
+}
+
+test("actual dense diagonal collisions fit the lane font without changing anchors or requested size", () => {
+  const specification = {width: 150, height: 300, workflow_orientation: "wells_top",
+    lanes: Array.from({length: 6}, (_, i) => [i * 25, 0, i * 25 + 24, 300]),
+    annotations: {laneLabelAngle: 45, fontSize: 19,
+      labels: Array.from({length: 6}, (_, i) => ({text: `Long sample ${i + 1}`, bold: i % 2 === 0})),
+      groups: [{id: "g", set: 0, lanes: [0, 2, 4], label: "Sparse group"}]}};
+  const before = structuredClone(specification);
+  const layout = layoutAnnotations(specification, measure);
+  assert.equal(layout.requestedFontSize, 19);
+  assert.ok(layout.laneFontSize < 19 && layout.laneFontSize >= 1);
+  assert.equal(layout.reducedFont, true);
+  assert.equal(layout.groupLabels[0].fontSize, 19, "fitting affects lane text only");
+  assert.equal(new Set(layout.laneLabels.map(label => label.anchorY)).size, 1);
+  for (const [index, label] of layout.laneLabels.entries()) {
+    assert.equal(label.anchor - layout.gelX, index * 25 + 12);
+    for (const other of layout.laneLabels.slice(index + 1)) assert.equal(rotatedInkIntersects(label, other), false);
+  }
+  assert.deepEqual(specification, before, "font preference and lane/group associations remain unchanged");
+});
+
+
+test("fitted diagonal lane text uses identical fonts and anchors in canvas and SVG", () => {
+  const layout = layoutAnnotations({width: 75, height: 200, workflow_orientation: "wells_top",
+    lanes: [[0, 0, 24, 200], [25, 0, 49, 200], [50, 0, 74, 200]],
+    annotations: {fontSize: 19, laneLabelAngle: 45,
+      labels: [{text: "First long label"}, {text: "Second long label"}, {text: "Third long label"}]}}, measure);
+  assert.equal(layout.reducedFont, true);
+  const calls = [];
+  const context = Object.fromEntries(["fillRect", "drawImage", "save", "restore", "translate", "rotate", "fillText"].map(method =>
+    [method, function (...args) { calls.push({method, args, font: this.font}); }]));
+  drawAnnotations({getContext: () => context}, {}, layout);
+  assert.deepEqual(calls.filter(call => call.method === "translate").map(call => call.args),
+    layout.laneLabels.map(label => [label.baselineX, label.baselineY]));
+  assert.deepEqual(calls.filter(call => call.method === "fillText").map(call => call.font),
+    layout.laneLabels.map(label => label.font));
+  const svg = annotationSvg(layout);
+  for (const label of layout.laneLabels) {
+    assert.ok(svg.includes(`font-size="${label.fontSize}"`));
+    assert.ok(svg.includes(`translate(${label.baselineX} ${label.baselineY}) rotate(45)`));
+  }
+});
+
+
+for (const [pitch, thickness] of [[12, 10], [4, 3], [1, 1]]) {
+  test(`narrow ${pitch}px lane spacing fits diagonal text without a fixed editor-size floor`, () => {
+    const lanes = Array.from({length: 6}, (_, i) => [i * pitch, 0, i * pitch + thickness, 100]);
+    const layout = layoutAnnotations({width: pitch * 6, height: 100, lanes, workflow_orientation: "wells_top",
+      annotations: {laneLabelAngle: 45, labels: lanes.map((_, i) => ({text: `Lane ${i + 1}`}))}}, measure);
+    assert.equal(new Set(layout.laneLabels.map(label => label.anchorY)).size, 1);
+    assert.ok(layout.laneFontSize > 0);
+    for (const [index, label] of layout.laneLabels.entries()) {
+      assert.ok(label.boxHeight < pitch * Math.SQRT1_2,
+        "the transformed editable target fits between the parallel labels");
+      assert.equal(label.anchor - layout.gelX, index * pitch + thickness / 2);
+      for (const other of layout.laneLabels.slice(index + 1)) assert.equal(rotatedInkIntersects(label, other), false);
+    }
+  });
+}

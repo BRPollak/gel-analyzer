@@ -90,7 +90,7 @@ export function createGroupEditor({getState, isDisabled, onChange, onSelect, onR
       byId(id).disabled = isDisabled();
     byId("group-hint").textContent = state.annotations.groups.length >= 100 && !group
       ? "The 100-group limit is reached. Edit or delete an existing group."
-      : group ? "Changes save automatically. Both group columns appear together."
+      : group ? `Changes save automatically. Both group ${getState()?.workflow_orientation === "wells_top" ? "rows" : "columns"} appear together.`
       : "Enter a name and lane numbers, then create your group.";
   }
 

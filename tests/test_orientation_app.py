@@ -33,6 +33,8 @@ def orientation_calls(monkeypatch):
                 corners=((0, 0), (image.width, 0), image.size, (0, image.height))
             ),
             counterclockwise_degrees=90.0,
+            outline_complete=True,
+            supported_edges=(),
         )
 
     monkeypatch.setattr(image_io, "orient_gel", orient)

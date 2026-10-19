@@ -29,6 +29,10 @@ def start_manual_orientation() -> None:
     pending = st.session_state.orientation_preview
     if pending is None:
         return
+    # A partial-edge preview retains the entire source. Its expanded envelope
+    # is not a detected gel outline and must not seed a fictitious crop box.
+    if not getattr(pending.orientation, "outline_complete", True):
+        return
     corners = pending.orientation.corners
     cx = sum(point[0] for point in corners) / 4
     cy = sum(point[1] for point in corners) / 4
@@ -115,6 +119,7 @@ def show_manual_orientation(gel: GelImage, image_panel, controls_panel, retry) -
             selection=st.session_state.orientation_selection,
             token=st.session_state.orientation_token,
             revision=st.session_state.orientation_revision,
+            workflow_orientation=gel.workflow_orientation,
             key=f"orientation_overlay_{st.session_state.orientation_token}",
         )
         accept_orientation_event(event, gel)
@@ -129,6 +134,12 @@ def show_manual_orientation(gel: GelImage, image_panel, controls_panel, retry) -
             "Adjust the outline on the initial crop. The gold edge becomes the top "
             "in the preview. Confirm that preview to continue."
         )
+        pending = st.session_state.orientation_preview
+        if pending is not None and not getattr(pending.orientation, "outline_complete", True):
+            st.caption(
+                "The available-edge preview keeps the full image. Draw an outline here "
+                "to choose a crop, or cancel to return to that preview."
+            )
         if st.session_state.orientation_manual_error:
             st.warning(st.session_state.orientation_manual_error)
         st.button(

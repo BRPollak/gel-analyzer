@@ -202,7 +202,7 @@
       <details id="group-panel" class="panel lane-only">
         <summary>Create lane groups <span id="group-count">(0)</span></summary>
         <div id="group-fields">
-          <label class="field">Column<select id="group-set" aria-label="Group column"><option value="0">Set 1 · near lanes</option><option value="1">Set 2 · far left</option></select></label>
+          <label class="field"><span id="group-set-label">Column</span><select id="group-set" aria-label="Group column"><option value="0">Set 1 · near lanes</option><option value="1">Set 2 · far left</option></select></label>
           <label class="field">Group<select id="group-select" aria-label="Group to edit"><option value="">New group</option></select></label>
           <label class="field" id="group-text-field">Group label<input id="group-text" type="text" maxlength="500" placeholder="Enter a group label" autocomplete="off" aria-label="Group label"></label>
           <label class="field" id="group-lanes-field">Lane numbers<input id="group-lanes" type="text" placeholder="e.g. 2-5, 8" autocomplete="off" spellcheck="false" aria-describedby="group-error group-selection-count" aria-invalid="false"></label>
@@ -237,6 +237,7 @@
           <div id="color-presets" role="group" aria-labelledby="color-heading"></div>
         </div>
         <label class="field lane-only">Size<input id="font-size" type="number" min="1" max="4096" step="1" value="18" aria-label="Annotation font size" title="Font size for all annotations"></label>
+        <label class="field lane-only" id="label-angle-field" hidden>Lane label angle<select id="label-angle" aria-label="Lane label angle"><option value="90">90° clockwise · bottom faces left</option><option value="45">45° clockwise</option></select></label>
         <button id="auto-size" class="lane-only" type="button" title="80% of average lane height">Auto size</button>
         <label class="field">Zoom<select id="zoom" aria-label="Preview zoom"><option value="fit">Fit screen</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option><option value="0.25">25%</option></select></label>
         <div class="toolbar-end lane-only">
@@ -266,10 +267,12 @@
           <p class="hint" id="ladder-placement-hint">Choose a size, then click its band in the highlighted lane.</p>
           <div id="ladder-markers" role="group" aria-label="Ladder size markers"></div>
           <div class="row">
+            <button id="ladder-detect-bands" type="button">Detect bands</button>
             <button id="ladder-keyboard" type="button">Position with keyboard</button>
             <button id="ladder-remove-marker" type="button" hidden>Remove marker</button>
             <span class="hint" id="ladder-count"></span>
           </div>
+          <div id="ladder-detected-bands" class="row" role="group" aria-label="Detected candidate bands" hidden></div>
           <p class="hint">Place any sizes you need. Select a placed size to move or remove it.</p>
         </div>
         <div class="row" id="ladder-navigation">

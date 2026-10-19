@@ -1,10 +1,9 @@
 """Validate manual lane bounds and copy their shared crop without resampling.
 
-Inputs use confirmed-image pixel-boundary coordinates. Adjustments keep each
-well's horizontal bounds and change its top/bottom independently; every lane
-shares one right edge. The final crop adds 1% of the image width to the left
-and 1% of its height above/below the outer lanes (at least three pixels each).
-All margins are clipped to the available image pixels.
+Inputs use displayed-image pixel-boundary coordinates. Adjustments keep each
+well's depth and change its cross-lane bounds independently; every lane shares
+one downstream edge. The crop adds 1% margins upstream and on both outer lane
+sides (at least three pixels), clipped to the available source pixels.
 """
 
 from dataclasses import dataclass, is_dataclass
@@ -16,6 +15,7 @@ import numpy as np
 from PIL import Image
 
 from .wells import Bounds, SelectionError, Well, validate_line
+from .workflow_orientation import is_top, lane_bounds, orientation_text, swap_bounds, swap_point, swap_size
 
 
 class LaneAdjustmentError(ValueError):
@@ -32,6 +32,7 @@ class LaneCrop:
     height: int
     wells: tuple[Well, ...]
     lanes: tuple[Bounds, ...]
+    workflow_orientation: str = "wells_left"
 
 
 def _pixel(value, label: str) -> int:
@@ -99,19 +100,31 @@ def _checked_wells(wells, size: tuple[int, int], *, allow_empty: bool = False) -
 
 
 def validate_lane_adjustments(
-    original_wells, lanes, right_edge, size: tuple[int, int]
+    original_wells, lanes, right_edge, size: tuple[int, int], *, workflow_orientation="wells_left",
 ) -> tuple[Well, ...]:
-    """Return wells with accepted heights, or explain the invalid adjustment.
+    """Return wells with accepted cross-lane bounds, or explain invalid edits.
 
     Lane input is one ``(left, top, right, bottom)`` rectangle per original
     well, in the original top-to-bottom order. Left edges are fixed; every
     right bound must equal ``right_edge``. Bounds are finite integer pixel
     boundaries and may touch, but lanes may not overlap or cross. Invalid
     geometry is rejected, never silently rounded, reordered, or clamped.
+    In wells-at-top mode the same rules use left-to-right order, fixed top
+    edges and a shared bottom extent (the legacy ``right_edge`` argument).
     """
     width, height = _size(size)
     originals = _checked_wells(original_wells, (width, height))
     proposed = _sequence(lanes, "Lanes")
+    if is_top(workflow_orientation):
+        try:
+            transformed = validate_lane_adjustments(
+                tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in originals),
+                tuple(swap_bounds(_bounds(lane, f"Lane {number}")) for number, lane in enumerate(proposed, 1)),
+                right_edge, swap_size((width, height)),
+            )
+        except LaneAdjustmentError as exc:
+            raise LaneAdjustmentError(orientation_text(str(exc), workflow_orientation)) from exc
+        return tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in transformed)
     if len(proposed) != len(originals):
         raise LaneAdjustmentError("Keep exactly one lane for each reviewed well.")
     shared_right = _pixel(right_edge, "The shared right edge")
@@ -135,7 +148,7 @@ def validate_lane_adjustments(
     return tuple(adjusted)
 
 
-def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well, ...]:
+def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_orientation="wells_left") -> tuple[Well, ...]:
     """Append an editable lane at the guide's bottom, fitting available rows.
 
     Existing lanes supply the median height, width, and gap. With no lanes,
@@ -148,6 +161,18 @@ def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well,
     """
     width, height = _size(size)
     originals = _checked_wells(wells, (width, height), allow_empty=True)
+    if is_top(workflow_orientation):
+        try:
+            ordered = validate_line(points, (width, height), workflow_orientation=workflow_orientation)
+            transformed = append_lane(
+                tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in originals),
+                tuple(swap_point(point) for point in ordered), right_edge, swap_size((width, height)),
+            )
+        except SelectionError as exc:
+            raise LaneAdjustmentError(str(exc)) from exc
+        except LaneAdjustmentError as exc:
+            raise LaneAdjustmentError(orientation_text(str(exc), workflow_orientation)) from exc
+        return tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in transformed)
     try:
         upper, lower = validate_line(points, (width, height))
     except SelectionError as exc:
@@ -204,7 +229,7 @@ def append_lane(wells, points, right_edge, size: tuple[int, int]) -> tuple[Well,
     return (*originals, new_well)
 
 
-def crop_lanes(image: Image.Image, wells, right_edge) -> LaneCrop:
+def crop_lanes(image: Image.Image, wells, right_edge, *, workflow_orientation="wells_left") -> LaneCrop:
     """Copy one enclosing lane region and return translated overlay geometry.
 
     The crop includes the gaps between lanes, with a left margin of
@@ -213,11 +238,14 @@ def crop_lanes(image: Image.Image, wells, right_edge) -> LaneCrop:
     PNG encoding keeps grayscale/color values and 16-bit intensities exactly;
     big-endian 16-bit input is encoded with equivalent unsigned 16-bit values.
     The input image and the uploaded image model are never changed.
+    Wells-at-top mode adds the upstream margin above and cross-lane margins
+    left/right, then crops directly from the displayed image without rotation.
     """
     originals = _checked_wells(wells, _size(image.size))
     shared_right = _pixel(right_edge, "The shared right edge")
-    proposed = tuple((well.bounds[0], well.bounds[1], shared_right, well.bounds[3]) for well in originals)
-    accepted = validate_lane_adjustments(originals, proposed, shared_right, image.size)
+    proposed = tuple(lane_bounds(well.bounds, shared_right, workflow_orientation) for well in originals)
+    accepted = validate_lane_adjustments(originals, proposed, shared_right, image.size,
+                                         workflow_orientation=workflow_orientation)
     if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16L", "I;16B", "I"}:
         raise LaneAdjustmentError("This image's pixel format cannot be cropped into a lossless PNG preview.")
     margin = max(3, round(image.width * 0.01))
@@ -225,7 +253,11 @@ def crop_lanes(image: Image.Image, wells, right_edge) -> LaneCrop:
     left = max(0, min(well.bounds[0] for well in accepted) - margin)
     top = max(0, min(well.bounds[1] for well in accepted) - vertical_margin)
     bottom = min(image.height, max(well.bounds[3] for well in accepted) + vertical_margin)
-    crop_box = (left, top, shared_right, bottom)
+    if is_top(workflow_orientation):
+        right = min(image.width, max(well.bounds[2] for well in accepted) + margin)
+        crop_box = (left, top, right, shared_right)
+    else:
+        crop_box = (left, top, shared_right, bottom)
     copied = image.crop(crop_box)
     if copied.mode.startswith("I"):
         values = np.asarray(copied)
@@ -243,5 +275,7 @@ def crop_lanes(image: Image.Image, wells, right_edge) -> LaneCrop:
         )
         for well in accepted
     )
-    lanes = tuple((well.bounds[0], well.bounds[1], copied.width, well.bounds[3]) for well in translated)
-    return LaneCrop(encoded.getvalue(), crop_box, copied.width, copied.height, translated, lanes)
+    extent = copied.height if is_top(workflow_orientation) else copied.width
+    lanes = tuple(lane_bounds(well.bounds, extent, workflow_orientation) for well in translated)
+    return LaneCrop(encoded.getvalue(), crop_box, copied.width, copied.height, translated, lanes,
+                    workflow_orientation)

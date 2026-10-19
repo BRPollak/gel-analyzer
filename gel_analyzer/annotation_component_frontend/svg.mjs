@@ -18,12 +18,25 @@ export function annotationSvg(layout) {
     `<image x="${layout.gelX}" y="${layout.gelY}" width="${layout.imageWidth}" height="${layout.imageHeight}"/>`,
   ];
   for (const bracket of layout.brackets) {
-    let path = `M ${bracket.x + bracket.depth} ${bracket.top} L ${bracket.x} ${bracket.top} L ${bracket.x} ${bracket.bottom} L ${bracket.x + bracket.depth} ${bracket.bottom}`;
-    for (const y of bracket.ticks) path += ` M ${bracket.x} ${y} L ${bracket.x + bracket.depth * 0.6} ${y}`;
+    let path;
+    if (bracket.horizontal) {
+      path = `M ${bracket.left} ${bracket.y + bracket.depth} L ${bracket.left} ${bracket.y} L ${bracket.right} ${bracket.y} L ${bracket.right} ${bracket.y + bracket.depth}`;
+      for (const x of bracket.ticks) path += ` M ${x} ${bracket.y} L ${x} ${bracket.y + bracket.depth * 0.6}`;
+    } else {
+      path = `M ${bracket.x + bracket.depth} ${bracket.top} L ${bracket.x} ${bracket.top} L ${bracket.x} ${bracket.bottom} L ${bracket.x + bracket.depth} ${bracket.bottom}`;
+      for (const y of bracket.ticks) path += ` M ${bracket.x} ${y} L ${bracket.x + bracket.depth * 0.6} ${y}`;
+    }
     parts.push(`<path d="${path}" fill="none" stroke="#000000" stroke-width="1.5" stroke-linecap="butt"/>`);
   }
   for (const label of layout.labels) {
     if (!label.text) continue;
+    if (label.rotation) {
+      for (const run of label.runs) if (run.text) {
+        parts.push(text(run.text, -label.advance + run.offset, 0, run, label.fontSize, "start",
+          `translate(${label.baselineX} ${label.baselineY}) rotate(${label.rotationDegrees})`));
+      }
+      continue;
+    }
     if (label.runs.length === 1) {
       parts.push(text(label.text, label.x, label.baseline, label.runs[0], label.fontSize, "end"));
     } else {
@@ -33,14 +46,14 @@ export function annotationSvg(layout) {
     }
   }
   for (const guide of layout.guides ?? []) {
-    parts.push(`<path d="M ${guide.x} ${guide.startY} L ${guide.x} ${guide.endY}" fill="none" stroke="${xml(guide.color)}" stroke-width="1.8" stroke-linecap="butt"/>`);
+    parts.push(`<path d="M ${guide.horizontal ? guide.startX : guide.x} ${guide.horizontal ? guide.y : guide.startY} L ${guide.horizontal ? guide.endX : guide.x} ${guide.horizontal ? guide.y : guide.endY}" fill="none" stroke="${xml(guide.color)}" stroke-width="1.8" stroke-linecap="butt"/>`);
   }
   for (const label of layout.ladderLabels ?? []) {
     parts.push(`<rect x="${label.left}" y="${label.top}" width="${label.right - label.left}" height="${label.bottom - label.top}" fill="#ffffff"/>`);
   }
   for (const label of layout.ladderLabels ?? []) {
     parts.push(text(label.text, 0, 0, label, label.fontSize, "start",
-      `translate(${label.baselineX} ${label.baselineY}) rotate(-90)`));
+      `translate(${label.baselineX} ${label.baselineY}) rotate(${label.rotationDegrees ?? -90})`));
   }
   parts.push("</svg>");
   return parts.join("");
