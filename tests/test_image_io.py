@@ -1,13 +1,14 @@
-"""Generated TIFFs exercise source preservation and the separate PNG preview."""
+"""Generated images exercise source preservation and the separate PNG preview."""
 
 from dataclasses import FrozenInstanceError
 from io import BytesIO
 import struct
+import zlib
 
 from PIL import Image, TiffImagePlugin
 import pytest
 
-from gel_analyzer import ImageValidationError, load_tiff
+from gel_analyzer import ImageValidationError, load_image, load_tiff
 
 
 def make_tiff(mode="L", size=(31, 9), color=0, **save_options):
@@ -172,3 +173,141 @@ def test_surfaces_pillow_decompression_protections_as_validation_errors(monkeypa
 
     with pytest.raises(ImageValidationError, match="too large"):
         load_tiff(source, "large.tif")
+
+
+@pytest.mark.parametrize(
+    "image_format,mode",
+    [("PNG", mode) for mode in ("1", "L", "LA", "P", "RGB", "RGBA", "I;16")]
+    + [("JPEG", mode) for mode in ("L", "RGB", "CMYK")]
+    + [("TIFF", "I;16")],
+)
+def test_supported_inputs_preserve_source_and_decoded_pixels(image_format, mode):
+    original = Image.new(mode, (31, 9), 42)
+    output = BytesIO()
+    original.save(output, format=image_format)
+    source = output.getvalue()
+    filename = f"gel.{image_format.lower()}"
+
+    gel = load_image(source, filename)
+
+    assert gel.source_bytes == source
+    assert gel.filename == filename
+    assert (gel.width, gel.height) == original.size
+    with Image.open(BytesIO(source)) as decoded, Image.open(BytesIO(gel.preview_png)) as preview:
+        expected = decoded.convert("RGB") if mode == "CMYK" else decoded
+        assert preview.mode == expected.mode
+        assert preview.tobytes() == expected.tobytes()
+
+
+def test_png_preserves_16_bit_grayscale_values():
+    original = Image.new("I;16", (4, 1))
+    original.putdata([0, 256, 32768, 65535])
+    output = BytesIO()
+    original.save(output, format="PNG")
+
+    gel = load_image(output.getvalue(), "16-bit.png")
+
+    with Image.open(BytesIO(gel.preview_png)) as preview:
+        assert preview.mode == "I;16"
+        assert [preview.getpixel((x, 0)) for x in range(4)] == [0, 256, 32768, 65535]
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+@pytest.mark.parametrize(
+    "orientation,transpose",
+    [(2, Image.Transpose.FLIP_LEFT_RIGHT), (6, Image.Transpose.ROTATE_270)],
+)
+def test_png_jpeg_exif_orientation_is_applied_once(image_format, orientation, transpose):
+    original = Image.new("L", (3, 2))
+    original.putdata([0, 40, 80, 120, 160, 200])
+    exif = Image.Exif()
+    exif[274] = orientation
+    output = BytesIO()
+    original.save(output, format=image_format, exif=exif)
+    source = output.getvalue()
+
+    gel = load_image(source, f"oriented.{image_format.lower()}")
+
+    assert gel.source_bytes == source
+    with Image.open(BytesIO(source)) as decoded, Image.open(BytesIO(gel.preview_png)) as preview:
+        expected = decoded.transpose(transpose)
+        assert (gel.width, gel.height) == expected.size
+        assert preview.size == expected.size
+        assert preview.tobytes() == expected.tobytes()
+        assert preview.getexif().get(274, 1) == 1
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_new_formats_use_the_same_crop_pipeline(monkeypatch, image_format):
+    from gel_analyzer import image_io
+
+    output = BytesIO()
+    Image.new("RGB", (31, 20), (37, 124, 211)).save(output, format=image_format)
+    source = output.getvalue()
+    monkeypatch.setattr(image_io, "find_gel_crop", lambda image: (4, 3, 25, 15))
+
+    gel = load_image(source, f"gel.{image_format.lower()}")
+
+    assert gel.crop_box == (4, 3, 25, 15)
+    assert gel.auto_cropped
+    with Image.open(BytesIO(source)) as decoded, Image.open(BytesIO(gel.preview_png)) as preview:
+        assert preview.size == (21, 12)
+        assert preview.tobytes() == decoded.crop(gel.crop_box).tobytes()
+
+
+@pytest.mark.parametrize("image_format", ["BMP", "GIF", "WEBP"])
+def test_generic_loader_rejects_unsupported_formats_with_allowed_extension(image_format):
+    output = BytesIO()
+    Image.new("RGB", (8, 8)).save(output, format=image_format)
+
+    with pytest.raises(ImageValidationError, match="TIFF, PNG, or JPEG"):
+        load_image(output.getvalue(), "disguised.png")
+
+
+def test_rejects_animated_png_instead_of_silently_selecting_a_frame():
+    output = BytesIO()
+    first = Image.new("RGB", (8, 8), "black")
+    second = Image.new("RGB", (8, 8), "white")
+    first.save(output, format="PNG", save_all=True, append_images=[second])
+
+    with pytest.raises(ImageValidationError, match="Animated or multiframe"):
+        load_image(output.getvalue(), "animated.png")
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_rejects_truncated_png_and_jpeg(image_format):
+    output = BytesIO()
+    Image.new("RGB", (8, 8)).save(output, format=image_format)
+
+    with pytest.raises(ImageValidationError, match="incomplete or damaged"):
+        load_image(output.getvalue()[:-20], f"damaged.{image_format.lower()}")
+
+
+@pytest.mark.parametrize("color_type,channels", [(2, 3), (4, 2), (6, 4)])
+def test_rejects_16_bit_color_png_before_precision_is_lost(color_type, channels):
+    def chunk(kind, data):
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data)))
+
+    source = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 1, 16, color_type, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00" + b"\x80\x00" * (2 * channels)))
+        + chunk(b"IEND", b"")
+    )
+    with Image.open(BytesIO(source)) as image:
+        image.load()
+        assert image.mode in ("RGB", "RGBA")
+
+    with pytest.raises(ImageValidationError, match="unsupported pixel format"):
+        load_image(source, "16-bit-color.png")
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_new_formats_retain_decompression_protection(monkeypatch, image_format):
+    output = BytesIO()
+    Image.new("L", (11, 10)).save(output, format=image_format)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+
+    with pytest.raises(ImageValidationError, match="too large"):
+        load_image(output.getvalue(), "large.png")

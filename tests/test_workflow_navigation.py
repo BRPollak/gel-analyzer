@@ -228,6 +228,50 @@ def test_orientation_return_restores_exact_initial_crop_without_redetection(work
     assert restored.crop_box == (2, 3, 198, 299)
 
 
+@pytest.mark.parametrize("image_format,extension", [("PNG", "png"), ("JPEG", "jpg")])
+def test_orientation_return_preserves_exif_oriented_first_crop(
+    workflow, monkeypatch, image_format, extension
+):
+    crops = []
+
+    def detect_crop(image):
+        crops.append(image.size)
+        return (2, 3, image.width - 4, image.height - 5)
+
+    monkeypatch.setattr(image_io, "find_gel_crop", detect_crop)
+    pixels = (np.arange(48 * 32).reshape(32, 48) % 256).astype(np.uint8)
+    metadata = Image.Exif()
+    metadata[274] = 6  # Source must rotate 90 degrees clockwise before cropping.
+    output = BytesIO()
+    Image.fromarray(pixels).save(output, format=image_format, exif=metadata)
+    data = output.getvalue()
+    app = workflow.app
+    mime_type = "image/png" if image_format == "PNG" else "image/jpeg"
+    app.file_uploader[0].set_value((f"gel.{extension}", data, mime_type)).run()
+    assert not app.exception
+    assert not app.error
+    initial = app.session_state["gel_image"]
+    assert (initial.width, initial.height) == (32, 48)
+    assert initial.crop_box == (2, 3, 28, 43)
+    with Image.open(BytesIO(data)) as source:
+        expected = np.asarray(
+            source.transpose(Image.Transpose.ROTATE_270).crop(initial.crop_box)
+        )
+    with Image.open(BytesIO(initial.preview_png)) as preview:
+        assert np.array_equal(np.asarray(preview), expected)
+
+    app.button(key="rotate_and_orient").click().run()
+    app.button(key="confirm_orientation").click().run()
+    go(app, 0)
+
+    restored = app.session_state["gel_image"]
+    assert restored == initial
+    assert restored.source_bytes == data
+    assert crops == [(32, 48)]
+    with Image.open(BytesIO(restored.preview_png)) as preview:
+        assert np.array_equal(np.asarray(preview), expected)
+
+
 def test_orientation_return_preserves_last_pointer_edit_in_well_guide(workflow):
     upload(workflow)
     app = workflow.app
