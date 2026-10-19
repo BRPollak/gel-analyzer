@@ -1,13 +1,13 @@
 # Agarose Gel Analyzer
 
-Current project version: **1.0.0**.
+Current project version: **1.0.1**.
 
-[Download the Mac app](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.0)
-· [Release notes and installation guide](docs/release-1.0.0.md)
+[Download the Mac app](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.1)
+· [Release notes and installation guide](docs/release-1.0.1.md)
 
-The revised **1.0.0** build removes the Project dropdown and JSON uploads and
-adds the [Benjamin Pollak | 2026](https://github.com/BRPollak/gel-analyzer) footer.
-It replaces the earlier 1.0.0 downloads without changing the displayed version number.
+Version **1.0.1** adds guided boundary-well lane generation in both orientations,
+preserves fractional lane geometry through cropping and band analysis, and keeps
+the [Benjamin Pollak | 2026](https://github.com/BRPollak/gel-analyzer) footer visible.
 
 **The analysis workflow remains under development.** The well/lane detection, manual border adjustment,
 right-edge selection, and buffered cropping workflow still needs debugging and
@@ -42,8 +42,8 @@ or later**. It opens in its own window and includes Python and its dependencies;
 users do not need Terminal, `uv`, or a separate browser. Analysis runs locally
 and works offline after installation.
 
-1. Download `Gel-Analyzer-1.0.0-macOS-arm64.dmg` from the
-   [v1.0.0 release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.0).
+1. Download `Gel-Analyzer-1.0.1-macOS-arm64.dmg` from the
+   [v1.0.1 release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.1).
 2. Open the DMG and drag **Gel Analyzer.app** onto **Applications**. Eject the DMG,
    then open Gel Analyzer from Applications.
 3. This release is ad-hoc signed and **not Apple-notarized**. If macOS blocks the
@@ -60,8 +60,8 @@ Keep your source image and export the results you need before quitting. Editable
 analysis exists only in the current session; the app has no Project dropdown or
 JSON upload. Exported images and CSV files do not restore an editable session.
 Updates are manual: export your results, quit the app, and replace the app in
-Applications. Download the revised 1.0.0 assets again if you installed the earlier
-1.0.0 build. See the [installation guide](docs/release-1.0.0.md) for release
+Applications. Download the 1.0.1 assets to update an existing 1.0.0 installation.
+See the [installation guide](docs/release-1.0.1.md) for release
 limitations and validation status.
 
 ## Wells at top workflow
