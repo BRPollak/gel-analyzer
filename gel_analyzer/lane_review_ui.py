@@ -86,7 +86,7 @@ def _confirmed_image():
     return None
 
 
-def _set_stage(stage: str) -> None:
+def _set_stage(stage: str | None) -> None:
     """Each stage gets a fresh event identity, including return/back actions."""
     st.session_state.lane_stage = stage
     st.session_state.lane_token = uuid4().hex
@@ -117,13 +117,13 @@ def start_lane_review() -> None:
         st.session_state.lane_error = str(exc)
         return
     st.session_state.lane_source = gel
-    annotation_ui.reset_annotations()
     st.session_state.lane_wells = wells
     st.session_state.lane_right = right
     resume = st.session_state.get("lane_review_resume_identity")
     if resume and resume["source"] is gel and resume["result"] is result:
         _set_review_ids(resume["ids"], resume["next_id"])
     else:
+        annotation_ui.reset_annotations()
         _set_review_ids(tuple(range(len(wells))))
     st.session_state.lane_review_resume_identity = None
     # Freeze the original guide, including uncertain candidates, while the
@@ -437,7 +437,12 @@ def back_to_well_review() -> None:
         st.session_state.well_result = None
         st.session_state.well_editing = True
         identity = None
-    reset_lane_review()
+    if identity is not None:
+        # Suspend the editor without discarding annotations or their geometry.
+        # Re-cropping will invalidate ladder markers if the lanes actually changed.
+        _set_stage(None)
+    else:
+        reset_lane_review()
     st.session_state.lane_review_resume_identity = identity
 
 
