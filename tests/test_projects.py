@@ -313,31 +313,30 @@ def test_malformed_project_is_rejected(payload):
 
 
 @pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
-def test_restored_state_keeps_crop_editor_and_angle_without_project_controls(orientation):
+def test_project_upload_restores_crop_editor_angle_and_navigation(orientation):
     from streamlit.testing.v1 import AppTest
     state = project_state(orientation, 45)
     app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
-    # Serialization stays compatible with earlier saved state; its former
-    # Project popover is no longer part of the application interface.
-    for key, value in load_project(save_project(state)).items():
-        app.session_state[key] = value
-    app.run()
+    app.file_uploader(key="project_upload").set_value(
+        ("experiment.gel.json", save_project(state), "application/json"),
+    ).run()
     assert not app.exception
     assert not app.error
     assert app.session_state["gel_image"].workflow_orientation == orientation
     assert app.session_state["lane_crop"] == state["lane_crop"]
     assert app.session_state["annotation_data"]["laneLabelAngle"] == 45
     assert app.session_state["lane_source"] is app.session_state["gel_image"]
-    assert all(uploader.key != "project_upload" for uploader in app.file_uploader)
-    assert all(button.label != "Save project" for button in app.get("download_button"))
-    assert all(popover.proto.popover.label != "Project" for popover in app.get("popover"))
+    assert any(uploader.key == "project_upload" for uploader in app.file_uploader)
+    assert any(button.label == "Save project" for button in app.get("download_button"))
+    assert any(popover.proto.popover.label == "Project" for popover in app.get("popover"))
     assert app.subheader[0].value == "Annotate lanes"
+    assert [app.button(key=f"workflow_step_{index}").disabled for index in range(4)] == [False, False, False, True]
 
 
-def test_project_controls_are_absent_before_upload():
+def test_project_can_be_opened_before_an_image_is_uploaded():
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
     assert not app.exception
-    assert [uploader.label for uploader in app.file_uploader] == ["Open a gel image"]
-    assert all(popover.proto.popover.label != "Project" for popover in app.get("popover"))
+    assert [uploader.label for uploader in app.file_uploader] == ["Open a gel image", "Open project"]
+    assert any(popover.proto.popover.label == "Project" for popover in app.get("popover"))
     assert all(button.label != "Save project" for button in app.get("download_button"))

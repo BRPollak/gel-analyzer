@@ -11,7 +11,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from gel_analyzer import annotation_component, orientation_ui, well_component
-from gel_analyzer.projects import load_project, save_project
+from gel_analyzer.projects import save_project
 
 
 @pytest.fixture
@@ -157,13 +157,13 @@ def test_selector_remains_available_during_manual_outline_and_keeps_the_live_rec
 def test_real_detection_manual_crop_and_restored_state_keep_lane_group_associations(workflow, angle):
     crop = detect_and_crop(workflow)
     annotations = edit_annotations(workflow, angle)
-    assert all(popover.proto.popover.label != "Project" for popover in workflow.app.get("popover"))
-    assert all(button.label != "Save project" for button in workflow.app.get("download_button"))
+    assert any(popover.proto.popover.label == "Project" for popover in workflow.app.get("popover"))
+    assert any(button.label == "Save project" for button in workflow.app.get("download_button"))
     snapshot = save_project(workflow.app.session_state)
     reopened = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
-    for key, value in load_project(snapshot).items():
-        reopened.session_state[key] = value
-    reopened.run()
+    reopened.file_uploader(key="project_upload").set_value(
+        ("saved.gel.json", snapshot, "application/json"),
+    ).run()
     assert not reopened.exception
     assert not reopened.error
     assert reopened.session_state["gel_image"].workflow_orientation == "wells_top"
