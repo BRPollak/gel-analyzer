@@ -9,7 +9,7 @@ from PIL import Image
 import streamlit as st
 
 from gel_analyzer.image_io import (
-    GelImage, ImageValidationError, load_tiff, orient_gel_image,
+    GelImage, ImageValidationError, decode_source_image, load_image, orient_gel_image,
 )
 from gel_analyzer.orientation import GelRectangle, OrientationError, rectangle_from_selection
 from gel_analyzer.well_component import render_well_component
@@ -395,11 +395,11 @@ def navigate_workflow(stage: int) -> None:
     lane_review_ui._consume_latest_event()
     annotation_ui.consume_latest_event()
     if stage == 0 and gel is not None:
-        # Recreate the first crop directly from the original TIFF. Never
+        # Recreate the first crop directly from the original image. Never
         # resample the accepted orientation or rerun automatic crop detection.
         preview = BytesIO()
         with Image.open(BytesIO(gel.source_bytes)) as source:
-            source.load()
+            source = decode_source_image(source)
             source.crop(gel.crop_box).save(preview, format="PNG")
         st.session_state.gel_image = replace(gel, preview_png=preview.getvalue(), orientation=None)
         st.session_state.orientation_previous_gel = gel
@@ -479,16 +479,16 @@ def main() -> None:
             st.subheader("Start with a gel image")
         st.file_uploader(
             "Open a gel image",
-            type=["tif", "tiff"],
+            type=["tif", "tiff", "png", "jpeg", "jpg"],
             accept_multiple_files=False,
             key=uploader_key,
             on_change=read_upload,
             args=(uploader_key,),
-            help="Upload one single-image TIFF (.tif or .tiff). Choose another file to replace it.",
+            help="Upload one TIFF, PNG, or JPEG (.tif, .tiff, .png, .jpeg, or .jpg). Choose another file to replace it.",
         )
         if has_image:
             st.button("Clear image", key="clear_image", on_click=clear_image)
-        st.caption("Single-image TIFF files (.tif or .tiff).")
+        st.caption("TIFF, PNG, or JPEG files (.tif, .tiff, .png, .jpeg, or .jpg).")
 
     # Replace this same slot immediately, so neither the previous upload nor an
     # uncropped new image is shown while the new source is being processed.
@@ -498,7 +498,7 @@ def main() -> None:
         data, filename = st.session_state.pending_upload
         st.session_state.pending_upload = None
         try:
-            st.session_state.gel_image = load_tiff(data, filename)
+            st.session_state.gel_image = load_image(data, filename)
         except ImageValidationError as exc:
             st.session_state.upload_error = str(exc)
 

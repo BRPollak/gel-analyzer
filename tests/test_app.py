@@ -15,14 +15,22 @@ def app():
     return AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
 
 
-def tiff_bytes(size=(31, 9), mode="L", color=40):
+def image_bytes(image_format, size=(31, 9), mode="L", color=40):
     output = BytesIO()
-    Image.new(mode, size, color).save(output, format="TIFF")
+    Image.new(mode, size, color).save(output, format=image_format)
     return output.getvalue()
 
 
+def tiff_bytes(size=(31, 9), mode="L", color=40):
+    return image_bytes("TIFF", size, mode, color)
+
+
 def upload(app, source, filename="gel.tif"):
-    app.file_uploader[0].set_value((filename, source, "image/tiff")).run()
+    suffix = Path(filename).suffix.lower()
+    mime_type = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}.get(
+        suffix, "image/tiff"
+    )
+    app.file_uploader[0].set_value((filename, source, mime_type)).run()
 
 
 def assert_preview(app, source, size, filename="gel.tif"):
@@ -78,15 +86,16 @@ def test_removing_upload_clears_preview_and_metadata(app):
     assert_empty(app)
 
 
-def test_invalid_replacement_removes_stale_preview_and_recovers(app):
+@pytest.mark.parametrize("filename", ["gel.tif", "gel.png", "gel.jpg", "gel.jpeg"])
+def test_invalid_replacement_removes_stale_preview_and_recovers(app, filename):
     source = tiff_bytes()
     upload(app, source)
 
-    upload(app, b"not a TIFF")
+    upload(app, b"not an image", filename)
 
     assert not app.exception
     assert len(app.error) == 1
-    assert "TIFF" in app.error[0].value
+    assert "TIFF, PNG, or JPEG" in app.error[0].value
     assert not app.get("image")
     assert not app.text
     assert app.session_state["gel_image"] is None
@@ -111,6 +120,48 @@ def test_tiff_filename_extensions(app, filename):
     upload(app, source, filename)
 
     assert_preview(app, source, (31, 9), filename)
+
+
+def test_uploader_accepts_all_supported_image_extensions(app):
+    assert set(app.file_uploader[0].proto.type) == {".tif", ".tiff", ".png", ".jpeg", ".jpg"}
+
+
+@pytest.mark.parametrize(
+    "image_format,filename",
+    [
+        ("PNG", "gel.png"), ("PNG", "gel.PNG"),
+        ("JPEG", "gel.jpg"), ("JPEG", "gel.JPG"),
+        ("JPEG", "gel.jpeg"), ("JPEG", "gel.JPEG"),
+    ],
+)
+def test_png_and_jpeg_filename_extensions(app, image_format, filename):
+    source = image_bytes(image_format)
+
+    upload(app, source, filename)
+
+    assert_preview(app, source, (31, 9), filename)
+    app.run()
+    assert_preview(app, source, (31, 9), filename)
+
+
+def test_cross_format_replacement_clear_and_reupload(app):
+    tiff = tiff_bytes()
+    png = image_bytes("PNG", size=(19, 23), mode="RGBA", color=(13, 53, 103, 143))
+    jpeg = image_bytes("JPEG", size=(25, 13), mode="RGB", color=(70, 80, 90))
+
+    upload(app, tiff)
+    assert_preview(app, tiff, (31, 9))
+    upload(app, png, "gel.png")
+    assert_preview(app, png, (19, 23), "gel.png")
+    upload(app, jpeg, "gel.jpg")
+    assert_preview(app, jpeg, (25, 13), "gel.jpg")
+
+    app.button(key="clear_image").click().run()
+    assert_empty(app)
+    upload(app, jpeg, "gel.jpeg")
+    assert_preview(app, jpeg, (25, 13), "gel.jpeg")
+    upload(app, png, "gel.png")
+    assert_preview(app, png, (19, 23), "gel.png")
 
 
 def test_only_completed_crop_is_stored_and_displayed_with_crop_dimensions(

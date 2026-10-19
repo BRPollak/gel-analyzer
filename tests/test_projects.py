@@ -10,16 +10,16 @@ import pytest
 from PIL import Image
 
 from gel_analyzer.annotations import default_annotations
-from gel_analyzer.image_io import GelImage, GelOrientation
+from gel_analyzer.image_io import GelImage, GelOrientation, load_image
 from gel_analyzer.lane_crop import crop_lanes
 from gel_analyzer.projects import ProjectError, load_project, save_project
 from gel_analyzer.wells import DetectionResult, Well
 from gel_analyzer.workflow_orientation import lane_bounds
 
 
-def image_bytes(image, format):
+def image_bytes(image, format, **save_options):
     stream = BytesIO()
-    image.save(stream, format=format)
+    image.save(stream, format=format, **save_options)
     return stream.getvalue()
 
 
@@ -69,6 +69,70 @@ def test_round_trip_preserves_axes_annotations_and_source_identity(orientation, 
     for editor in ("orientation", "well", "lane", "annotation"):
         assert reopened[f"{editor}_token"] != again[f"{editor}_token"]
         assert reopened[f"{editor}_revision"] == 0
+
+
+@pytest.mark.parametrize("image_format,extension", [("PNG", "png"), ("JPEG", "jpeg"), ("JPEG", "jpg")])
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+def test_png_and_jpeg_projects_preserve_original_source_and_edits(image_format, extension, orientation):
+    state = project_state(orientation, 45)
+    source = image_bytes(Image.new("L", (120, 90), 64), image_format)
+    imported = load_image(source, f"experiment.{extension}")
+    state["gel_image"] = replace(imported, orientation=state["gel_image"].orientation,
+                                 workflow_orientation=orientation)
+    restored = load_project(save_project(state))
+    assert restored["gel_image"] == state["gel_image"]
+    assert restored["gel_image"].source_bytes == source
+    assert restored["lane_source"] is restored["gel_image"]
+    assert restored["lane_crop"] == state["lane_crop"]
+    assert restored["annotation_data"] == state["annotation_data"]
+    assert restored["ladder_data"] == state["ladder_data"]
+
+
+@pytest.mark.parametrize("image_format", ["TIFF", "PNG", "JPEG"])
+def test_source_orientation_is_applied_once_when_reopening_project(image_format):
+    exif = Image.Exif()
+    exif[274] = 6
+    source = image_bytes(Image.new("L", (90, 120), 64), image_format, exif=exif)
+    gel = load_image(source, f"experiment.{image_format.lower()}")
+    assert (gel.width, gel.height) == (120, 90)
+    restored = load_project(save_project({"gel_image": gel}))
+    assert restored["gel_image"] == gel
+    assert restored["gel_image"].source_bytes == source
+
+
+@pytest.mark.parametrize("image_format", ["PNG", "JPEG"])
+def test_new_source_formats_still_require_matching_source_dimensions(image_format):
+    source = image_bytes(Image.new("L", (120, 90), 64), image_format)
+    gel = load_image(source, f"experiment.{image_format.lower()}")
+    gel = replace(gel, width=gel.width + 1)
+    with pytest.raises(ProjectError, match="dimensions"):
+        load_project(save_project({"gel_image": gel}))
+
+
+@pytest.mark.parametrize("image_format", ["GIF", "BMP"])
+def test_project_rejects_unsupported_source_formats(image_format):
+    state = project_state()
+    source = image_bytes(Image.new("L", (120, 90), 64), image_format)
+    state["gel_image"] = replace(state["gel_image"], source_bytes=source)
+    with pytest.raises(ProjectError, match="format"):
+        load_project(save_project(state))
+
+
+def test_project_rejects_animated_png_sources():
+    state = project_state()
+    source = image_bytes(Image.new("L", (120, 90), 64), "PNG", save_all=True,
+                         append_images=[Image.new("L", (120, 90), 128)])
+    state["gel_image"] = replace(state["gel_image"], source_bytes=source)
+    with pytest.raises(ProjectError, match="format"):
+        load_project(save_project(state))
+
+
+def test_project_preview_still_requires_png():
+    state = project_state()
+    preview = image_bytes(Image.new("L", (120, 90), 64), "JPEG")
+    state["gel_image"] = replace(state["gel_image"], preview_png=preview)
+    with pytest.raises(ProjectError, match="format"):
+        load_project(save_project(state))
 
 
 def test_missing_orientation_and_label_angle_restore_legacy_defaults():

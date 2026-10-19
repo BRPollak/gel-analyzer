@@ -12,10 +12,11 @@ automated tests and synthetic browser checks does not establish end-to-end
 correctness. This snapshot preserves the current code for continued development
 and is not a new stable release.
 
-This local app accepts one TIFF gel image (`.tif` or `.tiff`) and automatically
-crops the surrounding background before displaying it. **Rotate and Orient**
-straightens, reorients, and tightly crops the gel for confirmation. Replace or
-clear the image at any time. After confirming orientation, define a line through
+This local app accepts one TIFF (`.tif` or `.tiff`), PNG (`.png`), or JPEG
+(`.jpg` or `.jpeg`) gel image and automatically crops the surrounding background
+before displaying it. **Rotate and Orient** straightens, reorients, and tightly
+crops the gel for confirmation. Replace or clear the image at any time. After
+confirming orientation, define a line through
 selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
@@ -135,8 +136,8 @@ opening their HTML directly with a `file://` URL does not initialize the app.
 
 ## Use
 
-1. Browse for or drop one single-image TIFF into **Open a gel image** on the
-   startup screen. No image-type selection is needed.
+1. Browse for or drop one single-image TIFF, PNG, or JPEG into **Open a gel image**
+   on the startup screen. No image-type selection is needed.
 2. Wait for the automatic crop, then inspect the preview and its cropped pixel
    dimensions. Large images fit the screen's width and height; small images are
    not enlarged. Scrolling and ordinary edits keep the preview size and page position stable.
@@ -181,7 +182,8 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    existing review, or **Edit well line** to detect again. In the guide editor,
    **Back** leaves the editor and preserves your points; **Define wells** reopens
    them for further adjustment.
-11. Open **Change image** to choose another TIFF, even if it has the same filename.
+11. Open **Change image** to choose another TIFF, PNG, or JPEG, even if it has
+   the same filename.
    Use **Clear image** or the uploader's remove button there to start again.
 
 All previews adapt to the browser window without changing source pixels, lane
@@ -246,7 +248,7 @@ Half-open lane bounds are `(well_left, lane_top, image_width, lane_bottom)`;
 the detected well outline stays separate from the expanded lane. Endpoints,
 well bounds, centers, and lane
 rectangles are session data separate from image pixels. All analysis uses
-temporary arrays; the original TIFF bytes and lossless preview, including
+temporary arrays; the original image bytes and lossless preview, including
 16-bit grayscale precision, are preserved.
 
 Editing the guide invalidates the previous result. Detection results freeze the
@@ -316,7 +318,7 @@ height, with a minimum of three pixels on each side, clipped to the image edges.
 
 The cropped preview preserves pixel values, color/alpha channels, and unsigned
 16-bit precision without resizing or normalization. It is stored separately
-from the original TIFF and confirmed orientation. **Revise lanes and crop**
+from the original image and confirmed orientation. **Revise lanes and crop**
 reopens the full confirmed image with your previous adjustments, so even an
 expanded revision recovers the original pixels and never crops an earlier crop.
 Changing the image/orientation or editing the well guide clears this review and
@@ -392,7 +394,7 @@ label. Replacing the image, redefining the well guide, or restarting detection
 clears annotations along with the lane geometry.
 
 Composition uses the browser's Arial font and display-color canvas (8-bit RGBA),
-not the original 16-bit grayscale data. The original TIFF and lossless crop remain
+not the original 16-bit grayscale data. The original image and lossless crop remain
 unchanged. Arial must be installed on the browser's system for exact typography.
 All editing and composition stay local to the app/browser session, without an
 external service or font download.
@@ -561,7 +563,7 @@ from tuning. This is a small validation set, so broader generalization still
 needs additional examples.
 
 The previous preview is replaced by a processing message during upload. Only
-the finished crop (or the full-frame fallback) is then shown. The original TIFF
+the finished crop (or the full-frame fallback) is then shown. The original image
 is always retained unchanged in session memory.
 
 An invalid selection clears the previous preview and shows an error. Valid
@@ -569,19 +571,25 @@ unsigned grayscale (including 16-bit in either byte order), 8-bit RGB/RGBA,
 palette, and bilevel TIFFs are supported. Common TIFF compression such as LZW
 and deflate is supported. Multipage TIFFs, floating-point/signed samples, and
 high-bit-depth color TIFFs are rejected explicitly rather than selecting a page
-or silently reducing precision. PNG is no longer an input format. The standard
+or silently reducing precision. PNG supports common 8-bit grayscale, color,
+alpha, palette, and bilevel images, plus unsigned 16-bit grayscale. Animated or
+multiframe PNGs and 16-bit color PNGs are rejected. JPEG supports grayscale and
+RGB images; CMYK JPEGs are converted to RGB for the preview. The standard
 Streamlit upload limit is 200 MB; Pillow's decompression protection also rejects
 exceptionally large decoded images.
 
 Uploaded bytes are retained unchanged in the current browser session. The app
 does not save images to disk or send them to an external processing service.
-Refreshing the page or ending the session clears the image. A separate lossless
-PNG is generated for the browser, preserving unsigned 16-bit grayscale values.
-The decoder honors TIFF orientation metadata. The first automatic crop copies
-pixels directly from the decoded source without contrast adjustment,
-normalization, or resampling. Rotate and Orient resamples only for straightening;
+Refreshing the page or ending the session clears the image.
+A separate lossless PNG is generated for the browser, preserving
+unsigned 16-bit grayscale values. Using a PNG preview avoids additional JPEG
+compression; it cannot recover detail already lost in a JPEG source.
+The decoder honors TIFF orientation metadata and PNG/JPEG EXIF orientation once,
+before cropping. The first automatic crop copies pixels directly from the
+decoded source without contrast adjustment, normalization, or resampling.
+Rotate and Orient resamples only for straightening;
 it preserves 16-bit grayscale precision and does not adjust contrast. Browser
-display scaling and orientation never alter the original TIFF bytes.
+display scaling and orientation never alter the original uploaded bytes.
 
 ## Development and verification
 
@@ -595,10 +603,12 @@ node --test tests/test_preview_fit.mjs
 The JavaScript unit tests require Node.js 18 or newer. Running the app itself
 requires no Node installation or frontend build.
 
-The Streamlit entry point is `app.py`. `gel_analyzer/image_io.py` handles TIFF
-validation independently of Streamlit and returns an immutable `GelImage` with
-the original bytes, filename, decoded dimensions, mode, crop bounds, and cropped
-PNG preview. `gel_analyzer/auto_crop.py` detects edges on a reduced grayscale
+The Streamlit entry point is `app.py`. `gel_analyzer/image_io.py` validates TIFF,
+PNG, and JPEG through `load_image` independently of Streamlit and returns an
+immutable `GelImage` with the original bytes, filename, decoded dimensions, mode,
+crop bounds, and cropped PNG preview. `load_tiff` remains available for callers
+that require TIFF input.
+`gel_analyzer/auto_crop.py` detects edges on a reduced grayscale
 analysis copy; normalization is confined to that temporary copy.
 `gel_analyzer/orientation.py` fits and transforms the gel rectangle, then flips
 and crops the image. `orient_gel_image` stages an immutable replacement from the
@@ -630,9 +640,9 @@ handles trash buttons and axis-constrained border and extent dragging with the
 shared coordinate helpers.
 
 `crop_box` uses Pillow's half-open `(left, top, right, bottom)` coordinates in
-the full decoded image after TIFF orientation is applied. `width` and `height`
-remain the source dimensions; `preview_width` and `preview_height` describe the
-current preview. Before orientation, bounds are rounded outward when mapped from
+the full decoded image after input orientation metadata is applied. `width` and
+`height` remain the source dimensions; `preview_width` and `preview_height`
+describe the current preview. Before orientation, bounds are rounded outward when mapped from
 analysis to source pixels. After orientation, `crop_box` still records the first
 crop in source coordinates; `orientation` records the fitted corners relative
 to that crop, the counterclockwise angle, and the new preview dimensions.
@@ -855,7 +865,7 @@ gel files and generated previews are excluded from Git.
 
 ### Version roadmap
 
-1. TIFF upload and display
+1. TIFF, PNG, and JPEG upload and display (implemented)
 2. Automatic outer-gel crop and confirmed orientation (implemented)
 3. User-guided automatic well/lane detection, adding/removing lanes, and manual
    height adjustment (implemented); lateral wall correction remains future work

@@ -22,7 +22,7 @@ from PIL import Image
 
 from .annotation_exports import validate_svg_composition
 from .annotations import validate_annotations
-from .image_io import GelImage, GelOrientation
+from .image_io import GelImage, GelOrientation, decode_source_image
 from .lane_crop import LaneCrop, validate_lane_adjustments
 from .ladders import validate_ladder
 from .orientation import rectangle_from_selection
@@ -138,15 +138,20 @@ def _bounds(value, size):
     return tuple(value)
 
 
-def _image(data, size, image_format):
+def _image(data, size, image_formats, *, source=False):
     if not isinstance(data, bytes) or not data:
         raise ProjectError("The project is missing image data.")
+    if isinstance(image_formats, str):
+        image_formats = (image_formats,)
     with warnings.catch_warnings():
         warnings.simplefilter("error", Image.DecompressionBombWarning)
         with Image.open(BytesIO(data)) as image:
-            if image.format != image_format or getattr(image, "n_frames", 1) != 1:
+            if image.format not in image_formats or getattr(image, "n_frames", 1) != 1:
                 raise ProjectError("The project's image format is invalid.")
-            image.load()
+            if source:
+                image = decode_source_image(image)
+            else:
+                image.load()
             if image.size != tuple(size):
                 raise ProjectError("The project's image dimensions do not match its geometry.")
 
@@ -165,7 +170,7 @@ def _gel(value):
     if not isinstance(value.filename, str) or len(value.filename) > 1000:
         raise ProjectError("The project has an invalid source filename.")
     _bounds(value.crop_box, size)
-    _image(value.source_bytes, size, "TIFF")
+    _image(value.source_bytes, size, ("TIFF", "PNG", "JPEG"), source=True)
     if value.orientation is not None:
         geometry = value.orientation
         if not isinstance(geometry, GelOrientation):

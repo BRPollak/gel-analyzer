@@ -47,7 +47,7 @@ def show_project_controls(consume_latest=None):
                 st.download_button("Save project", snapshot, file_name=f"{stem}.gel.json",
                                    mime="application/json", key="save_project",
                                    help="Save source pixels, workflow orientation, lane and ladder annotations, and confirmed exports.")
-        st.caption("Projects include the source TIFF and edits. Save a project to continue in a later session.")
+        st.caption("Projects include the source image and edits. Save a project to continue in a later session.")
     if st.session_state.get("project_error"):
         st.error(st.session_state.project_error)
     if st.session_state.get("project_notice"):

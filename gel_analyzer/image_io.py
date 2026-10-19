@@ -4,14 +4,14 @@ from dataclasses import dataclass, replace
 from io import BytesIO
 import warnings
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .auto_crop import find_gel_crop
 from .orientation import GelRectangle, OrientationError, orient_gel
 
 
 class ImageValidationError(ValueError):
-    """An uploaded file cannot be used as a single-image TIFF gel."""
+    """An uploaded file cannot be used as a single gel image."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,9 +27,9 @@ class GelOrientation:
 
 @dataclass(frozen=True, slots=True)
 class GelImage:
-    """An original TIFF and the current gel pixels in a lossless PNG.
+    """An original image and the current gel pixels in a lossless PNG.
 
-    Source dimensions include TIFF orientation metadata. The first crop copies
+    Source dimensions include orientation metadata. The first crop copies
     pixels exactly; orientation may resample them. The source stays unchanged.
     """
 
@@ -65,9 +65,9 @@ def orient_gel_image(
     fallback_angle_degrees: float | None = None,
     supported_edges: tuple[str, ...] = (),
 ) -> GelImage:
-    """Stage a reoriented first crop without changing the current gel or TIFF.
+    """Stage a reoriented first crop without changing the current gel or source.
 
-    The first preview is a lossless copy of the decoded TIFF crop, including its
+    The first preview is a lossless copy of the decoded source crop, including its
     bit depth. Repeated requests therefore never resample an earlier result.
     """
     if gel.orientation is not None:
@@ -101,53 +101,88 @@ def orient_gel_image(
 
 
 _PREVIEW_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16B", "I;16L"}
-_CORRUPT_MESSAGE = "This TIFF is incomplete or damaged, or cannot be decoded. Please choose another image."
+_CORRUPT_MESSAGE = "This image is incomplete or damaged, or cannot be decoded. Please choose another TIFF, PNG, or JPEG image."
 _UNSUPPORTED_MESSAGE = (
-    "This TIFF uses an unsupported pixel format. Please choose an unsigned "
-    "8-bit grayscale/color or 16-bit grayscale TIFF."
+    "This image uses an unsupported pixel format. Please choose an unsigned "
+    "8-bit grayscale/color or 16-bit grayscale image."
 )
 
 
-def load_tiff(data: bytes, filename: str) -> GelImage:
-    """Decode and safely crop one TIFF before encoding its first PNG preview.
+def decode_source_image(image: Image.Image) -> Image.Image:
+    """Decode source pixels and apply orientation metadata exactly once."""
+    image_format = image.format
+    # TIFF load() applies orientation itself; PNG EXIF may need load() first.
+    image.load()
+    if image_format != "TIFF":
+        image = ImageOps.exif_transpose(image)
+    if image_format == "JPEG" and image.mode == "CMYK":
+        image = image.convert("RGB")
+    return image
 
-    No contrast adjustment, normalization, resizing, or filesystem writes occur.
-    Pillow honors TIFF orientation during decoding; do not transpose it again.
+
+def load_image(data: bytes, filename: str) -> GelImage:
+    """Decode and safely crop a TIFF, PNG, or JPEG for its first PNG preview.
+
+    Source bytes remain unchanged. No contrast adjustment, normalization,
+    resizing, or filesystem writes occur.
     """
+    return _load_image(data, filename, formats={"TIFF", "PNG", "JPEG"})
+
+
+def load_tiff(data: bytes, filename: str) -> GelImage:
+    """Compatibility entry point for callers that require a TIFF source."""
+    return _load_image(data, filename, formats={"TIFF"})
+
+
+def _load_image(data: bytes, filename: str, *, formats: set[str]) -> GelImage:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             # Pillow may otherwise keep reading after corrupt TIFF metadata.
             warnings.simplefilter("error", UserWarning)
             with Image.open(BytesIO(data)) as image:
-                if image.format != "TIFF":
+                if image.format not in formats:
                     raise ImageValidationError(
                         "Please choose a TIFF image (.tif or .tiff). This file is not a TIFF."
+                        if formats == {"TIFF"} else
+                        "Please choose a TIFF, PNG, or JPEG image (.tif, .tiff, .png, .jpg, or .jpeg)."
                     )
-                if image.n_frames != 1:
+                if getattr(image, "n_frames", 1) != 1:
                     raise ImageValidationError(
                         "Multipage TIFFs are not supported yet. Please choose a single-image TIFF."
+                        if image.format == "TIFF" else
+                        "Animated or multiframe images are not supported. Please choose a single-image PNG."
                     )
 
                 # Pillow can reduce high-bit-depth color TIFFs to 8-bit on load.
                 # Check the TIFF tags first rather than silently lose precision.
-                bits = image.tag_v2.get(258, (1,))
-                samples = image.tag_v2.get(339, (1,))
-                if isinstance(bits, int):
-                    bits = (bits,)
-                if isinstance(samples, int):
-                    samples = (samples,)
-                if (
-                    any(sample != 1 for sample in samples)
-                    or max(bits) > 16
-                    or (len(bits) > 1 and max(bits) > 8)
-                    or image.mode not in _PREVIEW_MODES
+                if image.format == "TIFF":
+                    bits = image.tag_v2.get(258, (1,))
+                    samples = image.tag_v2.get(339, (1,))
+                    if isinstance(bits, int):
+                        bits = (bits,)
+                    if isinstance(samples, int):
+                        samples = (samples,)
+                    if (
+                        any(sample != 1 for sample in samples)
+                        or max(bits) > 16
+                        or (len(bits) > 1 and max(bits) > 8)
+                    ):
+                        raise ImageValidationError(_UNSUPPORTED_MESSAGE)
+                elif image.format == "PNG":
+                    # IHDR stores bit depth and color type at bytes 24 and 25.
+                    # Pillow also reduces 16-bit color PNGs to 8-bit on load.
+                    if data[24] == 16 and data[25] != 0:
+                        raise ImageValidationError(_UNSUPPORTED_MESSAGE)
+                    # Check chunk checksums/end markers before decoding pixels.
+                    with Image.open(BytesIO(data)) as check:
+                        check.verify()
+                if image.mode not in _PREVIEW_MODES and not (
+                    image.format == "JPEG" and image.mode == "CMYK"
                 ):
                     raise ImageValidationError(_UNSUPPORTED_MESSAGE)
 
-                # TIFF verify() does not decode the pixels. load() also applies
-                # the file's orientation, so read size only after it completes.
-                image.load()
+                image = decode_source_image(image)
                 width, height = image.size
                 mode = image.mode
                 crop_box = find_gel_crop(image)
@@ -157,7 +192,7 @@ def load_tiff(data: bytes, filename: str) -> GelImage:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ImageValidationError(
-            "This TIFF is too large to open safely. Please choose a smaller image."
+            "This image is too large to open safely. Please choose a smaller image."
         ) from exc
     except (OSError, SyntaxError, ValueError, EOFError, UserWarning) as exc:
         raise ImageValidationError(_CORRUPT_MESSAGE) from exc
