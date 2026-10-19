@@ -7,7 +7,15 @@ macOS WebKit; processing stays on the Mac and works offline after installation.
 
 The release retains TIFF, PNG, and JPEG input; both workflow orientations;
 lane/group/ladder annotations; PNG, JPEG, TIFF, and SVG exports; band-review PNG
-and measurement CSV exports; and portable `.gel.json` projects.
+and measurement CSV exports.
+
+## Revised 1.0.0 build
+
+This rebuild removes the Project dropdown and JSON uploads and adds a small
+**Benjamin Pollak | 2026** footer with a [GitHub](https://github.com/BRPollak/gel-analyzer)
+link that opens in the default browser. The version remains
+**1.0.0**; the DMG, ZIP, and checksums replace the earlier 1.0.0 assets. If you
+already installed that version, download it again and replace the installed app.
 
 ## Download and install
 
@@ -34,17 +42,17 @@ Only grant this exception for the release you intended to download. Managed Macs
 may require assistance from their administrator. See
 [Apple's guidance](https://support.apple.com/en-us/102445).
 
-## Save work and update
+## Export results and update
 
-Use **Project → Save project** before quitting. The `.gel.json` file contains the
-source image and analysis edits; an exported PNG or other image does not replace
-that project file. Use **Project → Open project** to resume. Work is not
-automatically saved when the app closes.
+Keep the original image and export the results you need before quitting. Editable
+analysis exists only in the current session and is lost when the app closes.
+The app no longer exposes project save/open controls or accepts JSON uploads.
+Exported images and CSV files preserve outputs, not an editable session.
 
-Updates are manual. Save the project, quit Gel Analyzer, download the new release,
-and replace **Gel Analyzer.app** in Applications. Keep your project files in a
-separate folder. The application version is 1.0.0; the existing project document
-format remains version 1.
+Updates are manual. Export your results, quit Gel Analyzer, download the updated
+assets, and replace **Gel Analyzer.app** in Applications. Keep your source images
+and exported files in a separate folder. The same replacement procedure applies
+to this rebuild even though the displayed application version remains 1.0.0.
 
 ## Limitations
 
@@ -62,9 +70,23 @@ export behavior, and scientific limitations in more detail.
 
 ## Release validation
 
-Validated on **Apple Silicon, macOS 26.6.2**, using Python 3.12.14,
-PyInstaller 6.22.3, and pywebview 6.2.1. Release assets are rebuilt from tag
-`v1.0.0`; this version adds packaging and does not establish scientific accuracy.
+The revised packaged app was checked on **Apple Silicon, macOS 26.6.2**:
+
+- All 1,180 Python tests passed (9 private-image tests skipped), and all 113
+  JavaScript tests passed. The lockfile is unchanged at version 1.0.0.
+- The Project dropdown and JSON upload controls are absent.
+- The footer renders on the start screen and after importing a 16-bit PNG.
+- The GitHub link opens the repository in the default browser while preserving
+  the local app window and analysis session.
+- The quit dialog reminds users to export results before closing.
+
+The records below describe the original desktop build at commit `a9e3fae`, before
+the Project controls were removed. They are retained as historical evidence;
+the full original native workflow was not repeated for this interface change.
+
+That build was validated on **Apple Silicon, macOS 26.6.2**, using Python 3.12.14,
+PyInstaller 6.22.3, and pywebview 6.2.1. Packaging does not establish scientific
+accuracy.
 
 - **Automated tests:** 1,186 Python tests passed, 9 existing private-image tests
   skipped; all 113 JavaScript tests passed.
@@ -73,9 +95,10 @@ PyInstaller 6.22.3, and pywebview 6.2.1. Release assets are rebuilt from tag
   annotation editing, ladder preset/reference controls, and wells-at-top project
   editing. Native save dialogs produced annotated PNG/JPEG/TIFF/SVG, band-review
   PNG, and measurement CSV files; image dimensions and decoded output were checked.
-- **Projects:** saved an edited wells-at-top project through the native dialog,
-  validated its source/annotations/confirmed export, replaced the active image,
-  and reopened the project at the export step. Existing project format remains 1.
+- **Former Project UI (original build only):** saved an edited wells-at-top project
+  through the native dialog, validated its source/annotations/confirmed export, replaced the active image,
+  and reopened the project at the export step. These controls are absent from
+  the revised build.
 - **Lifecycle:** verified quit cancellation preserves the session, quitting stops
   the server, relaunch works, occupied ports are retried, startup failures and
   timeouts are handled, and parent-process death stops the bundled backend.

@@ -22,11 +22,19 @@ import tomllib
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 from uuid import uuid4
+import webbrowser
 
 
 APP_NAME = "Gel Analyzer"
 LOGGER = logging.getLogger("gel_analyzer.desktop")
-QUIT_MESSAGE = "Quit Gel Analyzer? Save your project before quitting to keep your work."
+QUIT_MESSAGE = "Quit Gel Analyzer? Export any images or measurements you want to keep before quitting."
+
+
+class DesktopAPI:
+    """Expose only the fixed repository destination to the trusted app page."""
+
+    def open_repository(self) -> bool:
+        return webbrowser.open("https://github.com/BRPollak/gel-analyzer", new=2)
 
 
 class BackendError(RuntimeError):
@@ -235,6 +243,7 @@ def run_desktop() -> int:
     window = webview.create_window(
         APP_NAME,
         html=status_page(APP_NAME, "Starting your analysis workspace…"),
+        js_api=DesktopAPI(),
         width=1440, height=960, min_size=(1000, 700),
         background_color="#FAFBFC", text_select=True, confirm_close=True,
         localization={"global.quitConfirmation": QUIT_MESSAGE},
@@ -249,7 +258,7 @@ def run_desktop() -> int:
             window.load_url(url)
             while not backend.stopped.wait(0.5):
                 if backend.process.poll() is not None:
-                    raise BackendError("The analysis workspace stopped unexpectedly. Close the app and reopen your saved project.")
+                    raise BackendError("The analysis workspace stopped unexpectedly. Close the app and reopen your gel image.")
         except Exception as error:
             LOGGER.exception("Analysis workspace failed")
             backend._stop_process()

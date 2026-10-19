@@ -5,6 +5,10 @@ Current project version: **1.0.0**.
 [Download the Mac app](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.0)
 · [Release notes and installation guide](docs/release-1.0.0.md)
 
+The revised **1.0.0** build removes the Project dropdown and JSON uploads and
+adds the [Benjamin Pollak | 2026](https://github.com/BRPollak/gel-analyzer) footer.
+It replaces the earlier 1.0.0 downloads without changing the displayed version number.
+
 **The analysis workflow remains under development.** The well/lane detection, manual border adjustment,
 right-edge selection, and buffered cropping workflow still needs debugging and
 validation on real gels. Automatic well boundaries can be inaccurate; passing
@@ -47,19 +51,20 @@ The matching ZIP is an alternative: extract it and move **Gel Analyzer.app** to
 Applications. While the repository is private, coworkers need repository access
 and must sign in to GitHub to download its release assets.
 
-Use **Project → Save project** before quitting to preserve the source image and
-edits in a `.gel.json` file; reopen it through **Project → Open project**. Updates
-are manual: save your project, quit the app, then replace the app in Applications
-with the newer release. See the [installation guide](docs/release-1.0.0.md) for
-release limitations and validation status.
+Keep your source image and export the results you need before quitting. Editable
+analysis exists only in the current session; the app has no Project dropdown or
+JSON upload. Exported images and CSV files do not restore an editable session.
+Updates are manual: export your results, quit the app, and replace the app in
+Applications. Download the revised 1.0.0 assets again if you installed the earlier
+1.0.0 build. See the [installation guide](docs/release-1.0.0.md) for release
+limitations and validation status.
 
 ## Wells at top workflow
 
 At the start of **Rotate and orient**, choose **Workflow orientation → Wells at
 top**. This setting remains available during manual outline adjustment and is
 independent of the rectangle's rotation controls. **Wells at left**
-retains the existing workflow described below. New images and projects missing
-an orientation setting use that default.
+retains the existing workflow described below. New images use that default.
 
 In Wells at top, automatic/manual preparation only straightens the selected
 outline and crops it; it does not apply the default quarter-turn or reflection.
