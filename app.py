@@ -14,7 +14,7 @@ from gel_analyzer.image_io import (
 from gel_analyzer.orientation import GelRectangle, OrientationError, rectangle_from_selection
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
-from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui, project_ui
+from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui
 from gel_analyzer.viewport import install_preview_viewport
 
 
@@ -385,7 +385,7 @@ def workflow_stage() -> int | None:
 
 
 def consume_latest_component_events() -> None:
-    """Capture the final pointer event before navigation or a project snapshot."""
+    """Capture the final pointer event before workflow navigation."""
     current = st.session_state.gel_image
     if current is not None:
         orientation_ui.accept_orientation_event(
@@ -504,6 +504,8 @@ def main() -> None:
     # Replace this same slot immediately, so neither the previous upload nor an
     # uncropped new image is shown while the new source is being processed.
     preview_slot = st.empty()
+    with st.container(key="gel_footer"):
+        st.caption("Benjamin Pollak | 2026 · [GitHub](https://github.com/BRPollak/gel-analyzer)")
     if st.session_state.pending_upload is not None:
         preview_slot.info("Preparing gel preview…")
         data, filename = st.session_state.pending_upload
@@ -552,8 +554,6 @@ def main() -> None:
                 except (SelectionError, ValueError) as exc:
                     st.session_state.well_error = str(exc)
                     st.session_state.well_editing = True
-
-    project_ui.show_project_controls(consume_latest_component_events)
 
     with progress_slot.container():
         show_workflow_progress()

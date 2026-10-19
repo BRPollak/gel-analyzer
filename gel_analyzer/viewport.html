@@ -91,6 +91,16 @@
   const viewportHeight = () => window.visualViewport?.height || window.innerHeight;
   const frameSelector = 'iframe[src*="well_line_overlay"], iframe[src*="lane_annotations"], iframe[src*="orientation_rectangle"]';
 
+  // Leave downloads in the native window, but open the footer repository in
+  // the default browser. The singleton guard above prevents duplicate handlers.
+  document.addEventListener("click", event => {
+    const link = event.target?.closest?.(".st-key-gel_footer a");
+    if (link?.href !== "https://github.com/BRPollak/gel-analyzer"
+        || typeof window.pywebview?.api?.open_repository !== "function") return;
+    event.preventDefault();
+    window.pywebview.api.open_repository();
+  }, true);
+
   function availableHeight(element) {
     const workspace = element?.closest(".st-key-gel_workspace");
     const anchor = workspace || element?.closest('[data-testid="stElementContainer"]') || element;

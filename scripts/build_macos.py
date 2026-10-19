@@ -140,7 +140,7 @@ def build_archives(version: str) -> None:
         "blocks the first launch, try opening it once, then open System Settings\n"
         "> Privacy & Security and choose Open Anyway for Gel Analyzer.\n\n"
         "No Python installation, Terminal, or browser is required.\n"
-        "Save your .gel.json project before quitting.\n"
+        "Export your results before quitting; analysis sessions are not saved.\n"
         "Logs: ~/Library/Logs/Gel Analyzer/\n"
     )
     # ditto preserves the framework symlinks and resource forks in .app bundles.
