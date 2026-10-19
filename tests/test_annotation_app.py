@@ -218,7 +218,7 @@ def test_vector_snapshot_is_confirmed_and_invalidated_with_the_image(annotated):
     assert app.session_state["annotation_svg"] == svg
     app.selectbox(key="annotation_export_format").select("SVG").run()
     assert not app.exception
-    assert any("keeps labels and brackets as vectors" in caption.value for caption in app.caption)
+    assert any("keeps labels and brackets sharp" in caption.value for caption in app.caption)
     app.button(key="edit_annotations").click().run()
     assert app.session_state["annotation_svg"] is None
     assert app.session_state["annotation_base_svg"] is None
@@ -286,7 +286,7 @@ def test_changed_or_cleared_upload_discards_annotations_and_stale_events(annotat
     old_event = annotation_event(annotated, action="confirm")
     app = annotated.app
     if clear_upload:
-        app.file_uploader[0].set_value(None).run()
+        app.button(key="clear_image").click().run()
     else:
         upload(annotated.workflow, offset=1000)
     assert not app.exception

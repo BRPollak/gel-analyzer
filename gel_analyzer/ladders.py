@@ -1,4 +1,4 @@
-"""Load manual ladder presets and validate crop-relative marker snapshots.
+"""Load ladder presets and validate crop-relative preset and manual markers.
 
 Preset snapshots travel with annotations so editing the configuration cannot
 change the labels in an existing session. Coordinates are native crop pixels;
@@ -66,7 +66,7 @@ def load_presets(path: str | Path | None = None) -> list[dict]:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise LadderError(
             "No usable ladder presets are configured. Check ladder_presets.json and reload the app. "
-            "You can skip ladder annotations."
+            "Choose Manual ladder or skip ladder annotations."
         ) from exc
     try:
         if not isinstance(value, list) or not 1 <= len(value) <= 100:
@@ -76,7 +76,9 @@ def load_presets(path: str | Path | None = None) -> list[dict]:
             raise LadderError("Ladder preset ids must be unique.")
         return presets
     except LadderError as exc:
-        raise LadderError(f"No usable ladder presets are configured. {exc} You can skip ladder annotations.") from exc
+        raise LadderError(
+            f"No usable ladder presets are configured. {exc} Choose Manual ladder or skip ladder annotations."
+        ) from exc
 
 
 def _coordinate(value: object) -> float:
@@ -91,12 +93,42 @@ def _coordinate(value: object) -> float:
     return coordinate
 
 
+def _manual_ladder(value: dict, crop, *, complete: bool) -> dict:
+    placements = value.get("placements", [])
+    if not isinstance(placements, list) or len(placements) > 200:
+        raise LadderError("Manual ladder annotations must contain a list of up to 200 markers.")
+    if complete and not placements:
+        raise LadderError("Place at least one ladder marker before confirming.")
+    checked = []
+    identifiers = set()
+    for placement in placements:
+        if not isinstance(placement, dict):
+            raise LadderError("Each manual ladder marker needs an id, label, and image coordinates.")
+        identifier = placement.get("id")
+        if (
+            not isinstance(identifier, str)
+            or re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", identifier) is None
+            or identifier in identifiers
+        ):
+            raise LadderError(
+                "Each manual ladder marker needs a unique id of 1–80 letters, numbers, hyphens, or underscores."
+            )
+        label = _text(placement.get("label"), "Each manual ladder label", 200)
+        x, y = _coordinate(placement.get("x")), _coordinate(placement.get("y"))
+        if not (0 <= x < crop.width and 0 <= y < crop.height):
+            raise LadderError("Click a ladder band inside the gel image.")
+        identifiers.add(identifier)
+        checked.append({"id": identifier, "label": label, "x": x, "y": y})
+    return {"mode": "manual", "placements": checked}
+
+
 def validate_ladder(value: object, crop, *, complete: bool = False) -> dict | None:
-    """Return a detached snapshot with unique markers inside the selected lane.
+    """Return a detached snapshot with markers at native image coordinates.
 
     ``None`` and unselected preset/lane fields are allowed in working drafts.
-    A complete snapshot requires a preset, lane, and at least one placement.
-    Lane membership uses half-open bounds, matching crop and lane geometry.
+    Preset markers belong to their selected lane; manual labels can be anywhere
+    in the crop. Complete snapshots require at least one placement. Image and
+    lane membership use half-open bounds, matching crop and lane geometry.
     """
     if value is None:
         if complete:
@@ -104,6 +136,12 @@ def validate_ladder(value: object, crop, *, complete: bool = False) -> dict | No
         return None
     if not isinstance(value, dict):
         raise LadderError("Review the ladder annotations and try again.")
+
+    mode = value.get("mode", "preset")
+    if mode == "manual":
+        return _manual_ladder(value, crop, complete=complete)
+    if mode != "preset":
+        raise LadderError("Choose a ladder preset or Manual ladder.")
 
     preset_value = value.get("preset")
     preset = _preset(preset_value) if preset_value is not None else None

@@ -1,3 +1,5 @@
+import {pointInImage} from "./ladder_geometry.mjs";
+
 /** Annotation geometry is expressed in native cropped-image pixels. */
 const OUTER = 12;
 const COLUMN_GAP = 16;
@@ -19,7 +21,7 @@ function browserMeasure(text, font) {
     const canvas = globalThis.document?.createElement("canvas");
     measuringContext = canvas?.getContext("2d");
   }
-  if (!measuringContext) throw new Error("Canvas text measurement is unavailable.");
+  if (!measuringContext) throw new Error("The browser could not prepare the label text. Reload the page and try again.");
   measuringContext.font = font;
   measuringContext.textAlign = "left";
   measuringContext.textBaseline = "alphabetic";
@@ -153,12 +155,12 @@ function layoutLadder(ladder, laneFontSize, annotationTop, measure) {
   for (const placement of placements) {
     if (!Number.isInteger(placement.markerIndex) || !specs[placement.markerIndex]
       || !Number.isFinite(placement.x) || !Number.isFinite(placement.y)) {
-      throw new Error("A ladder marker has invalid coordinates or a missing size label.");
+      throw new Error("A ladder marker could not be drawn. Choose its size and place it again.");
     }
   }
   const ordered = [...placements].sort((a, b) => a.x - b.x || a.markerIndex - b.markerIndex);
   if (ordered.some((placement, index) => index > 0 && placement.x === ordered[index - 1].x)) {
-    throw new Error("Two ladder markers share the same migration position. Move or remove one marker.");
+    throw new Error("Two ladder markers are at the same position. Move or remove one marker.");
   }
   function atSize(fontSize) {
     const scale = fontSize / preferredFontSize;
@@ -218,11 +220,26 @@ function layoutLadder(ladder, laneFontSize, annotationTop, measure) {
  * measureText can be injected for tests; its signature is (text, font).
  */
 export function layoutAnnotations({width, height, lanes = [], annotations = {}, ladder = null, workflow_orientation = "wells_left"}, measureText = browserMeasure) {
+  if (ladder?.mode === "manual") {
+    const preset = manualLadderAsPreset(ladder, width, height);
+    const layout = layoutAnnotations({width, height, lanes, annotations, ladder: preset, workflow_orientation}, measureText);
+    // Editing metadata belongs to the saved native point. Every visible label
+    // and dash uses precisely the same gutter geometry as a preset marker.
+    for (const label of layout.ladderLabels) {
+      const placement = ladder.placements[label.markerIndex];
+      Object.assign(label, {manual: true, id: placement.id,
+        pointX: layout.gelX + placement.x, pointY: layout.gelY + placement.y});
+    }
+    for (const guide of layout.guides) {
+      Object.assign(guide, {manual: true, id: ladder.placements[guide.markerIndex].id});
+    }
+    return layout;
+  }
   if (workflow_orientation === "wells_top") {
     return layoutTopAnnotations({width, height, lanes, annotations, ladder}, measureText);
   }
   if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) {
-    throw new Error("The cropped image must have positive integer dimensions.");
+    throw new Error("The cropped image could not be loaded. Return to the crop step and try again.");
   }
   const measure = typeof measureText === "function" ? measureText : (text, font) => {
     measureText.font = font;
@@ -232,7 +249,7 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   };
   const laneGeometry = lanes.map((lane, index) => {
     if (!Array.isArray(lane) || lane.length !== 4 || !lane.every(Number.isFinite)) {
-      throw new Error(`Lane ${index + 1} has invalid coordinates.`);
+      throw new Error(`Lane ${index + 1} could not be drawn. Return to the lane step and adjust it.`);
     }
     const top = Math.max(0, Math.min(height, lane[1]));
     const bottom = Math.max(top, Math.min(height, lane[3]));
@@ -368,6 +385,24 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     denseFallback: laneTracks.length > 1, reducedFont: fontSize < requestedFontSize, bracketGap,
     laneLabels, groupLabels, brackets, labels: allLabels,
     ladderLabels, guides, ladderTiers: ladderLayout.tiers};
+}
+
+/** Adapt custom text to the preset renderer without changing saved snapshots. */
+function manualLadderAsPreset(ladder, width, height) {
+  if (!Array.isArray(ladder.placements)) throw new Error("The manual ladder markers could not be drawn.");
+  const ids = new Set();
+  const labels = [];
+  const placements = ladder.placements.map((placement, markerIndex) => {
+    if (!placement || typeof placement.id !== "string" || !placement.id.trim() || ids.has(placement.id)
+      || typeof placement.label !== "string" || !placement.label.trim()
+      || !pointInImage(placement, width, height)) {
+      throw new Error("A manual ladder marker could not be drawn. Edit its label or place it inside the gel image.");
+    }
+    ids.add(placement.id);
+    labels.push(placement.label);
+    return {markerIndex, x: placement.x, y: placement.y};
+  });
+  return placements.length ? {preset: {labels}, placements} : null;
 }
 
 /** Reuse measured text, lane membership and group semantics for the top gutter.
@@ -559,7 +594,7 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
   canvas.width = layout.width;
   canvas.height = layout.height;
   const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas rendering is unavailable.");
+  if (!context) throw new Error("The browser could not draw the preview. Reload the page and try again.");
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, layout.width, layout.height);
   // The three-argument form preserves the source gel's pixel dimensions.
@@ -621,8 +656,8 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
       }
     }
   }
-  // All leaders share an endpoint height and retain their clicked x. Backings
-  // and text are drawn last, identically in the preview and exported image.
+  // Leaders retain their native anchors. Backings and text are drawn last,
+  // identically in the preview and exported image.
   context.lineWidth = LADDER_STROKE;
   for (const guide of layout.guides ?? []) {
     context.strokeStyle = guide.color;

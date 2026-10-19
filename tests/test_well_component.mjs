@@ -181,6 +181,55 @@ class ReviewNode {
   descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
 }
 
+test("larger lane crop grip remains selectable across preview scales without jumping the crop", () => {
+  const originalDocument = globalThis.document;
+  try {
+    for (const orientation of ["wells_left", "wells_top"]) {
+      for (const scale of [0.5, 1.25]) {
+        const top = orientation === "wells_top";
+        const displayBounds = bounds => top ? swapBounds(bounds) : [...bounds];
+        const displayPoint = point => top ? swapPoint(point) : point;
+        const svg = new ReviewNode();
+        const elements = Object.fromEntries(["lane-review", "excluded-right", "image-wrap"].map(id => [id, new ReviewNode()]));
+        globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+        const state = {width: top ? 200 : 400, height: top ? 400 : 200, workflowOrientation: orientation,
+          reviewMode: "extent", editable: true, rightEdge: 350,
+          lanes: [[10, 10, 350, 30], [10, 40, 350, 60]].map(displayBounds),
+          wells: [{bounds: displayBounds([10, 10, 30, 30])}, {bounds: displayBounds([10, 40, 30, 60])}]};
+        svg.getBoundingClientRect = () => ({width: state.width * scale, height: state.height * scale, left: 0, top: 0});
+        const events = [];
+        let point = displayPoint([350 - 29 / scale, 100]);
+        const review = createLaneReview({svg, getState: () => state, pointerPosition: () => point,
+          repaint: () => review.draw(), emit: event => events.push(event)});
+        review.reset(); review.draw();
+        const handle = elements["lane-review"].descendants().find(node => node.attributes.role === "slider");
+        assert.ok(Math.abs(Number(handle.querySelector(".review-grip").attributes.r) * scale - 14) < 1e-10);
+        assert.ok(Math.abs(Number(handle.children.find(node => node.attributes.fill === "transparent").attributes.r) * scale - 30) < 1e-10);
+        assert.equal(elements["image-wrap"].style[top ? "paddingBottom" : "paddingRight"], "30px");
+        assert.doesNotMatch(handle.attributes["aria-label"], /pixels?/i);
+        assert.equal(handle.attributes["aria-valuetext"], `88% from the ${top ? "top" : "left"} of the image`);
+        svg.dispatch("pointerdown", {target: svg});
+        assert.equal(svg.captures.size, 1, "outer part of enlarged target starts a drag");
+        svg.dispatch("pointerup", {target: svg});
+        assert.equal(state.rightEdge, 350, "clicking near the grip leaves the crop unchanged");
+        svg.dispatch("pointerdown", {target: svg});
+        point = displayPoint([330 - 29 / scale, 100]);
+        svg.dispatch("pointermove", {target: svg});
+        svg.dispatch("pointerup", {target: svg});
+        assert.equal(events.at(-1).right_edge, 330);
+        assert.deepEqual(events.at(-1).lanes, [[10, 10, 330, 30], [10, 40, 330, 60]].map(displayBounds));
+        svg.dispatch("keydown", {target: handle, key: top ? "ArrowDown" : "ArrowRight", shiftKey: true});
+        assert.equal(events.at(-1).right_edge, 340, "keyboard crop steps are unchanged");
+        assert.equal(handle.attributes["aria-valuenow"], "340");
+        assert.equal(handle.attributes["aria-valuetext"], `85% from the ${top ? "top" : "left"} of the image`);
+      }
+    }
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+});
+
 test("boundary review reuses resize and offset-preserving drag in both orientations at zoomed and panned scales", () => {
   const originalDocument = globalThis.document;
   try {
@@ -214,8 +263,12 @@ test("boundary review reuses resize and offset-preserving drag in both orientati
         assert.equal(nodes().some(node => node.dataset.deleteLane), false);
         assert.match(handle("position").attributes["aria-label"], /First boundary well position/);
         assert.equal(handle("position").attributes["aria-orientation"], top ? "horizontal" : "vertical");
+        assert.equal(handle("position").attributes["aria-valuetext"], `25% from the ${top ? "left" : "top"} of the image`);
+        assert.equal(handle("top").attributes["aria-valuetext"], `20% from the ${top ? "left" : "top"} of the image`);
+        assert.equal(handle("bottom").attributes["aria-valuetext"], `30% from the ${top ? "left" : "top"} of the image`);
         svg.dispatch("keydown", {target: handle("top"), key: top ? "ArrowLeft" : "ArrowUp", shiftKey: true});
         assert.deepEqual(axes().lanes[0], [15, 30, 350, 60]);
+        assert.equal(handle("top").attributes["aria-valuetext"], `15% from the ${top ? "left" : "top"} of the image`);
         const target = body();
         const before = events.length;
         svg.dispatch("pointerdown", pointer([50, 40], target));

@@ -87,7 +87,7 @@ def validate_annotations(value: object, count: int) -> dict:
     if not isinstance(labels, list) or len(labels) != count:
         raise AnnotationError("Keep one label for each cropped lane.")
     if type(size) is not int or not 1 <= size <= 4096:
-        raise AnnotationError("Choose a font size from 1 to 4096 pixels.")
+        raise AnnotationError("Choose a font size from 1 to 4096.")
     if not isinstance(groups, list) or len(groups) > 100:
         raise AnnotationError("Use at most 100 groups across the two sets.")
     angle = value.get("laneLabelAngle", 90)
@@ -139,7 +139,7 @@ def validate_composition(event: dict, crop) -> bytes:
         png = b64decode(encoded[len(prefix):], validate=True)
         with Image.open(BytesIO(png)) as image:
             if image.format != "PNG" or image.size != (width, height) or image.mode not in ("RGB", "RGBA"):
-                raise AnnotationError("The annotated PNG does not match its preview dimensions.")
+                raise AnnotationError("The annotated image does not match its preview. Try confirming again.")
             image.verify()
     except (Base64Error, UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError) as exc:
         raise AnnotationError("The annotated PNG could not be read. Try confirming again.") from exc

@@ -35,7 +35,7 @@ def well_workflow(monkeypatch):
         harness.renders.append((args, kwargs))
         return harness.event
 
-    def detect(image, points, *, expected_count=None):
+    def detect(image, points, *, expected_count):
         harness.detections.append((image.copy(), points))
         harness.expected_counts.append(expected_count)
         return harness.result

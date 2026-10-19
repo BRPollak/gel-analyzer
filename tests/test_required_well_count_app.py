@@ -80,23 +80,17 @@ def _start_selection(workflow, orientation, scene):
     }
     app.run()
     assert not app.exception
-    assert app.number_input(key="expected_well_count").label == "Number of wells (optional)"
+    assert app.number_input(key="expected_well_count").label == "Number of wells"
     assert app.number_input(key="expected_well_count").value is None
-    assert not app.button(key="confirm_well_line").disabled
+    assert app.button(key="confirm_well_line").disabled
     return expected
 
 
 @pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
-@pytest.mark.parametrize("scene,automatic_count", [("missing", 3), ("extra", 5), ("noise", 2), ("blank", 0)])
-def test_required_count_survives_review_crop_and_return_to_automatic(workflow, orientation, scene, automatic_count):
+@pytest.mark.parametrize("scene", ["missing", "extra", "noise", "blank"])
+def test_required_count_survives_review_crop_and_clearing_requires_new_input(workflow, orientation, scene):
     app = workflow.app
     expected_pixels = _start_selection(workflow, orientation, scene)
-    app.button(key="confirm_well_line").click().run()
-    assert not app.exception
-    automatic = app.session_state["well_result"]
-    assert len(automatic.wells) == automatic_count
-    assert not app.warning  # Automatic detection retains its existing review behavior.
-    app.button(key="edit_well_line").click().run()
     app.number_input(key="expected_well_count").set_value(4).run()
     assert app.session_state["well_expected_count"] == 4
     assert app.session_state["well_result"] is None
@@ -109,7 +103,7 @@ def test_required_count_survives_review_crop_and_return_to_automatic(workflow, o
     assert any(message.value == f"Prepared 4 wells and 4 {direction} lanes." for message in app.markdown)
     assert not any(message.value.startswith("Detected 4 wells") for message in app.markdown)
     assert result.warnings
-    assert all(warning in [item.value for item in app.warning] for warning in result.warnings)
+    assert not app.warning  # Users judge well and lane quality from the preview.
     if scene != "extra":
         assert any("infer" in warning.lower() for warning in result.warnings)
     cross_axis = 0 if orientation == "wells_top" else 1
@@ -135,12 +129,13 @@ def test_required_count_survives_review_crop_and_return_to_automatic(workflow, o
     app.button(key="edit_well_line").click().run()
     assert app.number_input(key="expected_well_count").value == 4
     app.number_input(key="expected_well_count").set_value(None).run()
-    app.button(key="confirm_well_line").click().run()
+    app.run()
     assert not app.exception
     assert app.session_state["well_expected_count"] is None
-    assert app.session_state["well_result"] == automatic
-    assert not app.warning
-    assert any(message.value.startswith(f"Detected {automatic_count} well") for message in app.markdown)
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_detection_request"] is None
+    assert app.button(key="confirm_well_line").disabled
+    assert any("Enter the number of wells" in message.value for message in app.info)
 
 
 @pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
@@ -162,6 +157,7 @@ def test_impossible_required_count_reports_error_instead_of_accepting_wrong_coun
 def test_retained_old_hint_result_must_be_refitted_before_confirmation(workflow, orientation):
     app = workflow.app
     _start_selection(workflow, orientation, "missing")
+    app.number_input(key="expected_well_count").set_value(3).run()
     app.button(key="confirm_well_line").click().run()
     assert len(app.session_state["well_result"].wells) == 3
     # Simulate a live session from before entered counts became mandatory.
@@ -175,3 +171,44 @@ def test_retained_old_hint_result_must_be_refitted_before_confirmation(workflow,
     assert not app.exception
     assert len(app.session_state["well_result"].wells) == 4
     assert not app.button(key="confirm_detected_lanes").disabled
+
+
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+def test_missing_count_blocks_confirmation_and_injected_pending_request(workflow, orientation):
+    app = workflow.app
+    _start_selection(workflow, orientation, "missing")
+    points = app.session_state["well_points"]
+    assert app.button(key="confirm_well_line").disabled
+    app.number_input(key="expected_well_count").set_value(3).run()
+    # An event from the previously enabled button must still honor server state.
+    app.session_state["well_expected_count"] = None
+    app.button(key="confirm_well_line").click().run()
+    assert not app.exception
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_detection_request"] is None
+    app.session_state["well_detection_request"] = (app.session_state["well_token"], points, None)
+    app.run()
+    assert not app.exception
+    assert app.session_state["well_result"] is None
+    assert app.session_state["well_detection_request"] is None
+    assert app.session_state["well_points"] == points
+    assert app.button(key="confirm_well_line").disabled
+
+
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+@pytest.mark.parametrize("action", ["confirm_detected_lanes", "adjust_lane_borders"])
+def test_live_legacy_result_without_count_cannot_enter_review(workflow, orientation, action):
+    app = workflow.app
+    _start_selection(workflow, orientation, "missing")
+    app.number_input(key="expected_well_count").set_value(3).run()
+    app.button(key="confirm_well_line").click().run()
+    app.session_state["well_expected_count"] = None
+    app.button(key=action).click().run()
+    assert not app.exception
+    assert app.button(key="confirm_detected_lanes").disabled
+    assert app.button(key="adjust_lane_borders").disabled
+    app.run()
+    assert app.session_state["lane_stage"] is None
+    assert any("no required well count" in message.value for message in app.warning)
+    app.button(key="edit_well_line").click().run()
+    assert app.button(key="confirm_well_line").disabled

@@ -220,7 +220,7 @@ def show_annotations(crop, filename: str) -> None:
             st.subheader("Annotate ladder" if stage == "ladder" else "Annotate lanes")
             if stage == "lanes":
                 count = len(crop.lanes)
-                st.caption(f"{count} lane{'s' if count != 1 else ''} · Click a label to edit. Highlight text to format a selection.")
+                st.caption(f"{count} lane{'s' if count != 1 else ''} · Click a label to edit. Command-click (Ctrl-click on Windows) to select several labels.")
     if st.session_state.ladder_notice:
         st.info(st.session_state.ladder_notice)
     if stage in ("ladder_offer", "final"):
@@ -231,7 +231,7 @@ def show_annotations(crop, filename: str) -> None:
                 st.image(BytesIO(st.session_state.annotation_png), width=width, output_format="PNG")
             with controls_column, st.container(border=True, key="gel_workflow_controls"):
                 if stage == "ladder_offer":
-                    st.success(f"Annotations confirmed · {width:,} × {height:,} pixels")
+                    st.success("Annotations confirmed")
                     st.write("Would you like to annotate a ladder?")
                     st.button("Annotate ladder", key="annotate_ladder", type="primary", on_click=start_ladder)
                     st.button("Skip", key="skip_ladder", on_click=skip_ladder)
@@ -242,25 +242,24 @@ def show_annotations(crop, filename: str) -> None:
                                                     key="annotation_export_format")
                         specification = EXPORT_FORMATS[image_format]
                         if image_format == "SVG":
-                            st.selectbox("Resolution (DPI)", ["Vector · resolution independent"],
+                            st.selectbox("Print setting", ["Scalable labels"],
                                          disabled=True, key="annotation_export_vector_resolution")
                             dpi = None
                         else:
-                            dpi = st.selectbox("Resolution (DPI)", specification["dpi"],
+                            dpi = st.selectbox("Print setting (DPI)", specification["dpi"],
                                                index=specification["dpi"].index(300),
                                                key=f"annotation_export_dpi_{image_format}")
-                        st.caption(f"Annotations confirmed · {width:,} × {height:,} pixels")
+                        st.caption("Your annotated image is ready to download.")
                         if image_format == "SVG":
-                            st.caption("SVG keeps labels and brackets as vectors and embeds the gel at its original pixel resolution."
+                            st.caption("SVG keeps labels and brackets sharp when resized and includes the gel image."
                                        if st.session_state.get("annotation_svg") else
-                                       "This SVG embeds the confirmed image. Edit and reconfirm annotations for vector labels and brackets.")
+                                       "This SVG contains the confirmed image. Edit and confirm annotations again to make labels and brackets scalable.")
                         else:
-                            st.caption("DPI sets print size; pixel dimensions stay unchanged."
-                                       + (" JPEG uses lossy compression." if image_format == "JPEG" else ""))
+                            st.caption("Leave the print setting as it is unless you need a particular printed size."
+                                       + (" JPEG makes a smaller file but may lose some image detail." if image_format == "JPEG" else ""))
                         st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
                                   key="edit_ladder", on_click=start_ladder)
                         st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
-                        st.caption("Exports use display colors. Your original TIFF and lossless crop remain in this session.")
                     exported = export_composition(
                         st.session_state.annotation_png, image_format, dpi,
                         svg=st.session_state.get("annotation_svg"),
@@ -272,9 +271,6 @@ def show_annotations(crop, filename: str) -> None:
                             mime=specification["mime"],
                             key="download_annotations", type="primary",
                         )
-        if stage == "final":
-            from .band_ui import show_band_analysis
-            show_band_analysis(crop, st.session_state.ladder_data)
         return
     presets = []
     if stage == "ladder":

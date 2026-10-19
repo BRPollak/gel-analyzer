@@ -68,8 +68,8 @@ export function createOrientationEditor({document: doc, window: host}) {
     const selection = state.selection;
     const visible = Boolean(selection);
     const instructions = visible && !drawMode
-      ? "Drag inside to move, corners to resize, or the round arrow to rotate. Arrow keys adjust a focused handle; Shift uses larger steps. The marked edge becomes the top after orientation."
-      : "Press and drag on the image to draw a rectangle. The marked edge becomes the top after orientation.";
+      ? "Drag inside to move, corners to resize, or the round arrow to rotate. Arrow keys adjust a focused handle; Shift uses larger steps. The marked edge becomes the top of the finished image."
+      : "Press and drag on the image to draw a rectangle. The marked edge becomes the top of the finished image.";
     nodes.status.textContent = instructions;
     fitPreview();
     const unit = screenRadius(1, svg.getBoundingClientRect(), state.width);
@@ -97,7 +97,7 @@ export function createOrientationEditor({document: doc, window: host}) {
         y: labelEdge[1] + inward[1] * 16 * unit, "font-size": 10 * unit, "stroke-width": 3 * unit});
       line(nodes["rotation-line"], edge, point);
       corners.forEach((node, index) => handle(node, points[index], 6, unit,
-        `Resize corner ${index + 1}. Use arrow keys; Shift moves ten pixels.`));
+        `Resize corner ${index + 1}. Use arrow keys; hold Shift for larger steps.`));
       handle(nodes.rotation, point, 10, unit, "Rotate rectangle. Use arrow keys to rotate one degree; Shift rotates ten degrees.");
       attrs(nodes.rotation.querySelector(".rotation-symbol"), {"font-size": 17 * unit});
       if (doc.activeElement !== nodes.angle) nodes.angle.value = String(Math.round(selection.angle_degrees * 100) / 100);
@@ -222,7 +222,7 @@ export function createOrientationEditor({document: doc, window: host}) {
     if (!state?.selection || drag) return;
     const previous = {...state.selection};
     if (Number.isFinite(degrees)) applyRotation(degrees);
-    else feedback("Enter a finite angle in degrees.");
+    else feedback("Enter a number for the angle.");
     nodes.angle.value = String(Math.round(state.selection.angle_degrees * 100) / 100);
     repaint();
     if (!sameSelection(previous, state.selection)) emit();

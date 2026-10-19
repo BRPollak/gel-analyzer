@@ -286,7 +286,7 @@ def test_preview_click_consumes_latest_pointer_up_widget_value(app, editor):
     )
 
 
-@pytest.mark.parametrize("change", ["clear", "remove", "replace", "invalid"])
+@pytest.mark.parametrize("change", ["clear", "replace", "invalid"])
 def test_upload_change_invalidates_outline_and_queued_events(app, editor, change):
     upload(app)
     app.button(key="adjust_orientation_manually").click().run()
@@ -295,8 +295,6 @@ def test_upload_change_invalidates_outline_and_queued_events(app, editor, change
 
     if change == "clear":
         app.button(key="clear_image").click().run()
-    elif change == "remove":
-        app.file_uploader[0].set_value(None).run()
     elif change == "replace":
         upload(app, size=(124, 94))
     else:

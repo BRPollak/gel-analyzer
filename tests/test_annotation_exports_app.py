@@ -44,15 +44,32 @@ def test_file_type_updates_resolution_options_and_download_label():
     app.selectbox(key="annotation_export_format").select("JPEG").run()
     assert app.selectbox(key="annotation_export_dpi_JPEG").options == ["72", "96", "150", "300", "600"]
     assert app.get("download_button")[0].label == "Download annotated JPEG"
-    assert any("lossy compression" in caption.value for caption in app.caption)
+    assert any("may lose some image detail" in caption.value for caption in app.caption)
 
     app.selectbox(key="annotation_export_format").select("SVG").run()
     assert not app.exception
     resolution = app.selectbox(key="annotation_export_vector_resolution")
     assert resolution.disabled
-    assert resolution.value == "Vector · resolution independent"
+    assert resolution.value == "Scalable labels"
     assert app.get("download_button")[0].label == "Download annotated SVG"
 
     app.selectbox(key="annotation_export_format").select("PNG").run()
     assert not app.exception
     assert app.selectbox(key="annotation_export_dpi_PNG").value == 300
+
+
+def test_export_only_offers_annotated_image_without_band_review_or_dimensions():
+    app = final_editor()
+    assert not app.exception
+    assert not app.expander
+    assert not app.get("data_editor")
+    assert len(app.get("download_button")) == 1
+    assert app.session_state["band_data"] is None
+    for image_format in ("PNG", "JPEG", "TIFF", "SVG"):
+        app.selectbox(key="annotation_export_format").select(image_format).run()
+        copy = " ".join(item.value for item in app.caption)
+        assert "pixel" not in copy.lower()
+        assert "210" not in copy and "44" not in copy
+        assert "Exports use display colors" not in copy
+        assert not app.expander
+        assert len(app.get("download_button")) == 1

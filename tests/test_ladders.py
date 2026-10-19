@@ -23,6 +23,10 @@ def ladder():
     return {"preset": preset(), "laneIndex": 0, "placements": [{"markerIndex": 0, "x": 143.625, "y": 28.25}]}
 
 
+def manual_ladder():
+    return {"mode": "manual", "placements": [{"id": "marker-1", "label": "500 bp", "x": 1.625, "y": 0.25}]}
+
+
 def test_bundled_neb_presets_match_reference_band_labels_and_load_independent_snapshots():
     presets = load_presets()
     assert [item["name"] for item in presets] == [
@@ -192,3 +196,75 @@ def test_half_open_shared_boundary_belongs_only_to_lower_lane(crop):
         validate_ladder(data, crop)
     data["laneIndex"] = 1
     assert validate_ladder(data, crop, complete=True)["placements"][0] == {"markerIndex": 0, "x": 5.0, "y": 41.0}
+
+
+def test_explicit_preset_mode_remains_compatible_with_legacy_snapshot(crop):
+    assert validate_ladder({**ladder(), "mode": "preset"}, crop, complete=True) == ladder()
+
+
+@pytest.mark.parametrize("mode", [None, "", "Manual", "unknown", 1, [], {}])
+def test_unknown_explicit_mode_is_rejected(crop, mode):
+    with pytest.raises(LadderError, match="Choose a ladder preset or Manual ladder"):
+        validate_ladder({**ladder(), "mode": mode}, crop)
+
+
+def test_manual_snapshot_preserves_custom_labels_and_exact_image_points_without_a_lane(crop):
+    source = manual_ladder()
+    source["placements"].append({"id": "marker-2", "label": "25 kDa", "x": 202.999, "y": 106.999})
+    expected = deepcopy(source)
+    source["selectedMarker"] = "marker-2"
+    source["placements"][0]["extra"] = "ignored"
+    before = deepcopy(source)
+    checked = validate_ladder(source, crop, complete=True)
+    assert source == before
+    assert checked == expected
+    source["placements"][0].update(label="Changed", x=100)
+    assert checked == expected
+
+
+def test_empty_manual_draft_is_valid_but_cannot_be_confirmed(crop):
+    draft = {"mode": "manual", "placements": []}
+    assert validate_ladder(draft, crop) == draft
+    assert validate_ladder({"mode": "manual"}, crop) == draft
+    with pytest.raises(LadderError, match="at least one"):
+        validate_ladder(draft, crop, complete=True)
+
+
+@pytest.mark.parametrize("changes", [
+    {"id": None}, {"id": ""}, {"id": "two words"}, {"id": "x" * 81}, {"id": 1},
+    {"id": "<marker>"}, {"label": None}, {"label": ""}, {"label": "  "},
+    {"label": "two\nlines"}, {"label": "two\rlines"}, {"label": "two\tlines"},
+    {"label": "two\u2028lines"}, {"label": "two\u2029lines"}, {"label": "nul\x00"},
+    {"label": "delete\x7f"}, {"label": "x" * 201}, {"x": True}, {"x": "5"},
+    {"x": None}, {"x": float("nan")}, {"x": float("inf")}, {"x": 10 ** 1000},
+    {"x": -0.001}, {"x": 203}, {"y": -0.001}, {"y": 107},
+])
+def test_manual_marker_identity_label_and_image_bounds_are_validated(crop, changes):
+    data = manual_ladder()
+    data["placements"][0].update(changes)
+    with pytest.raises(LadderError):
+        validate_ladder(data, crop)
+
+
+@pytest.mark.parametrize("placements", [None, "markers", {}, [None], [{}],
+    [{"id": f"marker-{index}", "label": "500 bp", "x": 0, "y": 0} for index in range(201)]])
+def test_manual_marker_collection_is_bounded_and_structured(crop, placements):
+    with pytest.raises(LadderError):
+        validate_ladder({"mode": "manual", "placements": placements}, crop)
+
+
+def test_manual_marker_ids_are_unique_but_labels_and_coordinates_may_repeat(crop):
+    data = manual_ladder()
+    data["placements"].append(dict(data["placements"][0]))
+    with pytest.raises(LadderError, match="unique id"):
+        validate_ladder(data, crop)
+    data["placements"][1]["id"] = "marker-2"
+    assert validate_ladder(data, crop, complete=True) == data
+
+
+def test_manual_marker_maximum_limits_and_crop_origin_are_accepted(crop):
+    data = {"mode": "manual", "placements": [
+        {"id": str(index).zfill(80), "label": "x" * 200, "x": 0, "y": 0}
+        for index in range(200)
+    ]}
+    assert validate_ladder(data, crop, complete=True) == data

@@ -114,7 +114,7 @@ def test_finite_integer_valued_numeric_coordinates_are_accepted():
 
 @pytest.mark.parametrize("bad", [True, np.bool_(False), "80", None, float("nan"), float("inf"), 79.5])
 def test_right_edge_requires_a_finite_integer_number(bad):
-    with pytest.raises(LaneAdjustmentError, match="whole-pixel"):
+    with pytest.raises(LaneAdjustmentError, match="could not be read"):
         validate_lane_adjustments(WELLS, LANES, bad, SIZE)
 
 
@@ -122,7 +122,7 @@ def test_right_edge_requires_a_finite_integer_number(bad):
 def test_lane_bounds_reject_boolean_text_and_nonfinite_values(bad):
     lanes = ((30, bad, 80, 45), LANES[1])
 
-    with pytest.raises(LaneAdjustmentError, match="finite image coordinate"):
+    with pytest.raises(LaneAdjustmentError, match="could not be read"):
         validate_lane_adjustments(WELLS, lanes, 80, SIZE)
 
 
@@ -145,8 +145,8 @@ def test_adjustment_must_keep_exactly_one_lane_per_well(lanes):
     [
         (((29, 17, 80, 45), LANES[1]), "left edge"),
         (((30, 17, 79, 45), LANES[1]), "same shared right"),
-        (((30, 17, 80, 17), LANES[1]), "one pixel high"),
-        (((30, 46, 80, 45), LANES[1]), "one pixel high"),
+        (((30, 17, 80, 17), LANES[1]), "too narrow"),
+        (((30, 46, 80, 45), LANES[1]), "too narrow"),
         (((30, -1, 80, 45), LANES[1]), "inside the image"),
         ((LANES[0], (35, 61, 80, 111)), "inside the image"),
         (((30, 17, 80, 65), LANES[1]), "without overlapping"),
@@ -238,7 +238,7 @@ def test_other_supported_preview_modes_preserve_pixel_values(mode):
 def test_integer_values_outside_unsigned_sixteen_bit_range_are_not_truncated(value):
     image = Image.new("I", SIZE, value)
 
-    with pytest.raises(LaneAdjustmentError, match="unsigned 16-bit"):
+    with pytest.raises(LaneAdjustmentError, match="cannot be cropped"):
         crop_lanes(image, WELLS, 80)
 
 
@@ -388,7 +388,7 @@ def test_repeated_append_at_image_bottom_keeps_every_lane_editable_and_crop_vali
 def test_append_reports_only_the_physical_one_lane_per_image_row_limit():
     originals = tuple(Well((0, y, 1, y + 1), (0.5, y + 0.5)) for y in range(8))
 
-    with pytest.raises(LaneAdjustmentError, match="Every image row already contains a separate lane"):
+    with pytest.raises(LaneAdjustmentError, match="no room for another lane"):
         append_lane(originals, ((0, 0), (0, 8)), 1, (1, 8))
 
 
@@ -401,8 +401,8 @@ def test_append_reports_only_the_physical_one_lane_per_image_row_limit():
         (APPEND_WELLS, ((36, 15), (42, 75)), 46, (100, 200), "at or beyond"),
         ((), ((36, 15), (42, 75)), 0, (100, 200), "at or beyond"),
         ((), ((36, 15), (42, 75)), 101, (100, 200), "at or beyond"),
-        ((), ((36, 15), (42, 75)), 80.5, (100, 200), "whole-pixel"),
-        ((), ((36, 15), (42, 75)), 90, (100.5, 200), "whole-pixel"),
+        ((), ((36, 15), (42, 75)), 80.5, (100, 200), "could not be read"),
+        ((), ((36, 15), (42, 75)), 90, (100.5, 200), "could not be read"),
         ((), (), 90, (100, 200), "two points"),
         ((), ((36, 15), (42, 15)), 90, (100, 200), "generally vertical"),
         ((), ((36, 15), (42, 17)), 90, (100, 200), "generally vertical"),

@@ -25,7 +25,8 @@
     button:disabled, input:disabled, select:disabled { opacity: .6; cursor: default; }
     button[aria-pressed="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
     #bold { font-weight: bold; }
-    #italic { font-style: italic; }
+    #italic { font-family: Georgia, "Times New Roman", serif; font-style: italic; }
+    #editing-hint { flex-basis: 100%; margin: 0; }
     #formatting-scope { flex-basis: 100%; margin: 0; font-size: 12px; }
     .color-field { flex-basis: 100%; min-width: 0; }
     .color-heading { margin-bottom: 5px; font-size: 12px; }
@@ -74,8 +75,8 @@
     #label-inputs { position: absolute; inset: 0; }
     .image-label { position: absolute; margin: 0; padding: 0; border: 1px dashed #94a3b8a8; border-radius: 2px; background: transparent; color: transparent; caret-color: var(--label-color, #000); text-align: right; box-sizing: content-box; cursor: text; white-space: pre; }
     .image-label:hover { border-color: var(--accent); outline: 1px solid var(--accent); }
-    .image-label[data-selected="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .image-label:focus { color: var(--label-color, #000); outline: 2px solid var(--accent); outline-offset: 1px; }
+    .image-label[data-selected="true"] { outline: var(--selection-outline-width, 2px) solid var(--accent); outline-offset: var(--selection-outline-offset, 1px); }
+    .image-label:focus { color: var(--label-color, #000); outline: var(--selection-outline-width, 2px) solid var(--accent); outline-offset: var(--selection-outline-offset, 1px); }
     .image-label:focus span { color: var(--run-color, #000); background: white; }
     .image-label:empty::before { content: attr(data-placeholder); color: #64748b; font-style: italic; }
     #confirm { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
@@ -105,6 +106,15 @@
     #ladder-cursor line { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
     #ladder-cursor circle { fill: white; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
     #ladder-cursor:focus circle { stroke: #111827; stroke-width: 3; }
+    .manual-marker { cursor: pointer; outline: none; }
+    .manual-band-cursor circle { fill: white; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .manual-band-cursor line { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .manual-marker rect { fill: transparent; stroke: transparent; vector-effect: non-scaling-stroke; }
+    .manual-marker:hover rect, .manual-marker:focus rect, .manual-marker[data-selected="true"] rect { stroke: var(--accent); stroke-dasharray: 3 2; }
+    #ladder-manual { width: 100%; margin-top: 10px; }
+    #ladder-manual-form { margin: 10px 0; }
+    #ladder-manual-form .field { margin-bottom: 8px; }
+    #ladder-manual-error { color: #b42318; }
     #ladder-workspace { min-width: 0; }
     #workflow-panel { min-width: 0; }
     #workflow-scroll { min-width: 0; }
@@ -142,7 +152,8 @@
     @media (min-width: 760px) {
       #component[data-mode="lanes"] #ladder-workspace { grid-template-columns: minmax(0, 1fr) clamp(360px, 43vw, 520px); gap: 18px; }
       #component[data-mode="lanes"] #color-presets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      #component[data-mode="lanes"] #formatting-scope { flex-basis: auto; margin-left: auto; }
+      #component[data-mode="lanes"] #editing-hint { flex-basis: 100%; margin: 0; }
+    #formatting-scope { flex-basis: auto; margin-left: auto; }
       #component[data-mode="lanes"] #toolbar { gap: 8px 10px; }
       #group-text-field, #group-lanes-field { grid-column: auto; }
     }
@@ -182,6 +193,7 @@
           <div id="label-inputs"></div>
           <svg id="ladder-overlay" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Select a ladder lane or place its size markers" aria-describedby="status" hidden>
             <g id="ladder-lane-outlines" pointer-events="none"></g>
+            <g id="ladder-manual-points"></g>
             <g id="ladder-cursor" role="slider" aria-orientation="horizontal" tabindex="-1" visibility="hidden">
               <line id="ladder-cursor-line"></line><circle id="ladder-cursor-dot"></circle>
             </g>
@@ -199,6 +211,28 @@
       </aside>
       <aside id="workflow-panel" aria-label="Current annotation step">
       <div id="workflow-scroll">
+      <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
+        <strong id="selection-name" class="lane-only">Lane 1</strong>
+        <p id="formatting-scope" class="lane-only" aria-live="polite">Formatting: whole label</p>
+        <div class="formatting lane-only" role="group" aria-label="Selected label formatting">
+          <span class="font-family">Arial</span>
+          <button id="bold" type="button" aria-label="Bold" aria-pressed="false" title="Bold">B</button>
+          <button id="italic" type="button" aria-label="Italic" aria-pressed="false" title="Italic">I</button>
+        </div>
+        <div class="color-field lane-only">
+          <div class="color-heading" id="color-heading">Text color <span id="color-state"></span></div>
+          <div id="color-presets" role="group" aria-labelledby="color-heading"></div>
+        </div>
+        <label class="field lane-only">Size for all labels<input id="font-size" type="number" min="1" max="4096" step="1" value="18" aria-label="Annotation font size" title="Font size for all annotations"></label>
+        <label class="field lane-only" id="label-angle-field" hidden>Lane label angle<select id="label-angle" aria-label="Lane label angle"><option value="90">90° clockwise · bottom faces left</option><option value="45">45° clockwise</option></select></label>
+        <button id="auto-size" class="lane-only" type="button" title="Choose a text size that fits the lanes">Auto size</button>
+        <label class="field">Zoom<select id="zoom" aria-label="Preview zoom"><option value="fit">Fit screen</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option><option value="0.25">25%</option></select></label>
+        <div class="toolbar-end lane-only">
+          <button id="edit-selected-group" type="button" hidden>Edit group</button>
+          <button id="open-groups" type="button">Add group</button>
+        </div>
+      <p class="hint lane-only" id="editing-hint">Click a label to edit it. Command-click (Mac) or Ctrl-click (Windows) to add or remove labels from your selection. Formatting applies to every selected label. Highlight text within one label to format just that part.</p>
+      </div>
       <details id="group-panel" class="panel lane-only">
         <summary>Create lane groups <span id="group-count">(0)</span></summary>
         <div id="group-fields">
@@ -224,30 +258,8 @@
         </details>
         <p class="hint" id="group-hint">Enter a name and lane numbers, then create your group.</p>
       </details>
-      <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
-        <strong id="selection-name" class="lane-only">Lane 1</strong>
-        <p id="formatting-scope" class="lane-only" aria-live="polite">Formatting: whole label</p>
-        <div class="formatting lane-only" role="group" aria-label="Selected label formatting">
-          <span class="font-family">Arial</span>
-          <button id="bold" type="button" aria-label="Bold" aria-pressed="false" title="Bold">B</button>
-          <button id="italic" type="button" aria-label="Italic" aria-pressed="false" title="Italic">I</button>
-        </div>
-        <div class="color-field lane-only">
-          <div class="color-heading" id="color-heading">Text color <span id="color-state"></span></div>
-          <div id="color-presets" role="group" aria-labelledby="color-heading"></div>
-        </div>
-        <label class="field lane-only">Size<input id="font-size" type="number" min="1" max="4096" step="1" value="18" aria-label="Annotation font size" title="Font size for all annotations"></label>
-        <label class="field lane-only" id="label-angle-field" hidden>Lane label angle<select id="label-angle" aria-label="Lane label angle"><option value="90">90° clockwise · bottom faces left</option><option value="45">45° clockwise</option></select></label>
-        <button id="auto-size" class="lane-only" type="button" title="80% of average lane height">Auto size</button>
-        <label class="field">Zoom<select id="zoom" aria-label="Preview zoom"><option value="fit">Fit screen</option><option value="1">100%</option><option value="0.75">75%</option><option value="0.5">50%</option><option value="0.25">25%</option></select></label>
-        <div class="toolbar-end lane-only">
-          <button id="edit-selected-group" type="button" hidden>Edit group</button>
-          <button id="open-groups" type="button">Add group</button>
-        </div>
-      </div>
-      <p class="hint lane-only" id="editing-hint">Click a label to edit; highlight text to format part of it. Use ↑ / ↓ to move between labels.</p>
       <section id="ladder-panel" class="panel" aria-label="Ladder annotation steps" hidden>
-        <h2 id="ladder-heading" tabindex="-1">Choose a ladder preset</h2>
+        <h2 id="ladder-heading" tabindex="-1">Choose a ladder</h2>
         <button id="ladder-reference-toggle" type="button" aria-controls="ladder-reference" aria-expanded="true" hidden>Hide reference</button>
         <div id="ladder-preset-step">
           <div class="row">
@@ -255,6 +267,8 @@
             <button id="ladder-continue" type="button">Continue</button>
           </div>
           <p class="hint" id="ladder-preset-hint">Choose the ladder used in this gel.</p>
+          <button id="ladder-manual" type="button">Manual ladder</button>
+          <p class="hint">Add your own marker labels without a preset.</p>
         </div>
         <div id="ladder-lane-step" hidden>
           <p class="hint">Click the ladder lane on the image, or choose its number.</p>
@@ -265,6 +279,16 @@
         </div>
         <div id="ladder-marker-step" hidden>
           <p class="hint" id="ladder-placement-hint">Choose a size, then click its band in the highlighted lane.</p>
+          <div id="ladder-manual-form" hidden>
+            <label class="field">Marker label<input id="ladder-manual-label" type="text" maxlength="200" placeholder="e.g., 500 bp or 25 kDa" aria-describedby="ladder-manual-error" autocomplete="off"></label>
+            <div class="row">
+              <button id="ladder-manual-save" type="button">Add marker</button>
+              <button id="ladder-manual-move" type="button">Move marker</button>
+              <button id="ladder-manual-delete" type="button">Delete annotation</button>
+              <button id="ladder-manual-cancel" type="button">Cancel label</button>
+            </div>
+            <p id="ladder-manual-error" class="hint" role="alert" hidden></p>
+          </div>
           <div id="ladder-markers" role="group" aria-label="Ladder size markers"></div>
           <div class="row">
             <button id="ladder-detect-bands" type="button">Detect bands</button>
@@ -273,7 +297,7 @@
             <span class="hint" id="ladder-count"></span>
           </div>
           <div id="ladder-detected-bands" class="row" role="group" aria-label="Detected candidate bands" hidden></div>
-          <p class="hint">Place any sizes you need. Select a placed size to move or remove it.</p>
+          <p class="hint" id="ladder-marker-help">Place any sizes you need. Select a placed size to move or remove it.</p>
         </div>
         <div class="row" id="ladder-navigation">
           <button id="ladder-back" type="button" hidden>Back</button>

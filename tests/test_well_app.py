@@ -41,6 +41,7 @@ def begin_selection(workflow):
     upload(workflow)
     confirm_orientation(workflow)
     workflow.app.button(key="define_wells").click().run()
+    workflow.app.number_input(key="expected_well_count").set_value(1).run()
 
 
 def button_keys(app):
@@ -148,12 +149,12 @@ def test_clicks_drags_and_reruns_do_not_detect_until_confirmed(workflow):
 def test_detected_summary_has_only_confirm_adjust_and_back_without_count_or_warnings(workflow, warnings):
     begin_selection(workflow)
     app = workflow.app
-    assert app.number_input(key="expected_well_count").value is None
+    assert app.number_input(key="expected_well_count").value == 1
     event(workflow)
     points = app.session_state["well_points"]
     workflow.result = replace(good_result(), warnings=warnings)
     app.button(key="confirm_well_line").click().run()
-    assert workflow.expected_counts == [None]
+    assert workflow.expected_counts == [1]
     assert button_keys(app) - {"clear_image"} == {
         "confirm_detected_lanes", "adjust_lane_borders", "edit_well_line",
     }
@@ -170,7 +171,7 @@ def test_detected_summary_has_only_confirm_adjust_and_back_without_count_or_warn
     assert len(workflow.detections) == 1
 
 
-def test_expected_well_count_requires_confirmation_and_can_return_to_automatic(workflow):
+def test_clearing_required_well_count_disables_confirmation_and_preserves_guide(workflow):
     begin_selection(workflow)
     event(workflow)
     app = workflow.app
@@ -208,9 +209,10 @@ def test_expected_well_count_requires_confirmation_and_can_return_to_automatic(w
     assert app.session_state["well_points"] == ((45.0, 25.0), (45.0, 185.0))
     assert app.session_state["well_result"] is None
     assert workflow.expected_counts == [3]
-    app.button(key="confirm_well_line").click().run()
+    app.run()
     assert not app.exception
-    assert workflow.expected_counts == [3, None]
+    assert workflow.expected_counts == [3]
+    assert app.button(key="confirm_well_line").disabled
 
 
 @pytest.mark.parametrize("change", ["count", "guide", "image"])
@@ -406,7 +408,7 @@ def test_edit_invalidates_detection_and_stale_event_but_preserves_line(workflow)
 
 
 @pytest.mark.parametrize("uncertain", [False, True])
-def test_empty_or_uncertain_detection_freezes_guide_and_can_be_adjusted_without_warnings(workflow, uncertain):
+def test_empty_detection_requires_refit_but_uncertain_matching_result_can_be_reviewed(workflow, uncertain):
     begin_selection(workflow)
     event(workflow)
     workflow.result = good_result()
@@ -424,9 +426,9 @@ def test_empty_or_uncertain_detection_freezes_guide_and_can_be_adjusted_without_
     assert app.session_state["well_editing"] is False
     assert app.session_state["well_points"] == previous_points
     assert app.button(key="confirm_detected_lanes").disabled is (not uncertain)
-    assert not app.button(key="adjust_lane_borders").disabled
+    assert app.button(key="adjust_lane_borders").disabled is (not uncertain)
     assert "confirm_well_line" not in button_keys(app)
-    assert not app.warning
+    assert bool(app.warning) is (not uncertain)
     assert not app.success
     assert len(workflow.detections) == 1
 
@@ -436,7 +438,7 @@ def test_detection_failure_explains_problem_and_preserves_retry(workflow, monkey
     event(workflow)
     previous_points = workflow.app.session_state["well_points"]
 
-    def fail(image, points):
+    def fail(image, points, *, expected_count):
         raise wells.SelectionError("The selected well boundaries are too faint to estimate.")
 
     monkeypatch.setattr(wells, "detect_wells", fail)
@@ -530,7 +532,7 @@ def test_back_leaves_guide_editor_and_define_wells_restores_points(workflow, pen
     assert not workflow.detections
 
 
-@pytest.mark.parametrize("change", ["replace", "clear", "remove", "invalid"])
+@pytest.mark.parametrize("change", ["replace", "clear", "invalid"])
 def test_upload_changes_clear_results_and_reject_previous_image_events(workflow, change):
     begin_selection(workflow)
     event(workflow)
@@ -544,8 +546,6 @@ def test_upload_changes_clear_results_and_reject_previous_image_events(workflow,
         upload(workflow, color=20000)
     elif change == "clear":
         app.button(key="clear_image").click().run()
-    elif change == "remove":
-        app.file_uploader[0].set_value(None).run()
     else:
         app.file_uploader[0].set_value(("gel.tif", b"invalid", "image/tiff")).run()
 

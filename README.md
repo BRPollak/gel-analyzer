@@ -1,9 +1,9 @@
 # Agarose Gel Analyzer
 
 Turn a photo of a gel—a material used to separate DNA pieces by size—into a
-labeled image and a table of results. Straighten and crop images, label samples,
-find **bands** (visible stripes), and estimate their sizes using a reference
-sample. Analysis runs on your computer.
+labeled image for your lab notebook. Straighten and crop your image, label
+samples, and optionally mark a ladder with known sizes. Analysis runs on your
+computer.
 
 ## Install and open the Mac app
 
@@ -54,41 +54,45 @@ image and correct them before relying on the results.
 3. **Find the samples.** Click **Define wells**. Click two points spanning the
    outside edges of the first and last wells, with the guide passing through
    their centers: vertically for wells at left, horizontally for wells at top.
-   Enter **Number of wells (optional)** if you know the count; otherwise leave
-   it blank. Click **Confirm**.
+   Enter the required **Number of wells**, including unloaded wells. Detection
+   fits exactly this many wells within the guide. Click **Confirm**.
+   For faint regular combs, detection compares well spacing and sizes, checks
+   contrast around both well walls, and uses bands farther along the gel to
+   help recover merged or partial outlines. Visible unloaded wells are kept.
 4. **Check and crop.** Each **lane** is one sample's path through the gel.
    Click **Confirm** if the proposed lanes look right, or **Adjust** to drag
    their borders, remove one with its trash button, or **Add lane**, then
    **Confirm**. Drag the shared right edge (wells at left) or bottom edge
    (wells at top) to include the bands you want. Click **Confirm lanes and crop**.
-5. **Label samples.** Click a lane label on the image and type a name. Optionally
-   use **Create lane groups** to label related samples together. Click
-   **Confirm annotations**.
+5. **Label samples.** Click a lane label on the image and type a name.
+   Command-click (Ctrl-click on Windows) to add or remove labels from your
+   selection, then use bold, italic, or text color to format them together.
+   A regular click selects just one label. **Create lane groups**, below the
+   label controls, lets you label related samples together. Click **Confirm annotations**.
 6. **Add a size reference, if available.** A **ladder** is a reference sample
-   with bands of known sizes. Choose **Annotate ladder**, select the
-   **Ladder preset** matching your experiment, and click **Continue**. Select
+   with bands of known sizes. Choose **Annotate ladder**. For a preset, select
+   the **Ladder preset** matching your experiment and click **Continue**. Select
    **Ladder lane**, click **Use this lane**, then choose each size and click its
-   matching band. Finish with **Confirm ladder annotations**. Without a matching
-   ladder, choose **Skip** at the initial offer or **Skip ladder** in the editor.
-   DNA sizes use **bp** (base pairs, a measure of DNA length).
-   Size estimates need at least two different known
-   sizes, with smaller pieces farther along the lane; estimates are limited
-   to the range between marked bands.
-7. **Review measurements, if needed.** Expand **Review bands and estimate
-   sizes** to inspect the proposed bands. Edit **Lane** or **Migration (px)**
-   (distance in image pixels from the crop's left or top edge), then click
-   **Apply band edits**. **Download band measurements (CSV)** saves a table
-   you can open in a spreadsheet; **Download band review (PNG)** saves the
-   image with detected bands marked.
-8. **Save your labeled image.** Choose **Image file type**: PNG, JPEG, TIFF, or
-   SVG. PNG is a simple choice for sharing. Leave **Resolution (DPI)** at its
+   matching band. Or choose **Manual ladder**, click individual bands, and enter
+   your own labels, such as **500 bp** or **25 kDa**, before adding them.
+   Manual markers use the same off-gel dash and label as preset markers.
+   Select a manual label to edit or delete it; choose **Move marker** and click
+   a new band to reposition it. Markers stay aligned with their bands when you
+   zoom or resize the window. Finish with
+   **Confirm ladder annotations**. To omit ladder labels, choose **Skip** at the
+   initial offer or **Skip ladder** in the editor. DNA sizes use **bp** (base
+   pairs, a measure of DNA length).
+7. **Save your labeled image.** Choose **Image file type**: PNG, JPEG, TIFF, or
+   SVG. PNG is a simple choice for your lab notebook. Leave **Print setting (DPI)** at its
    default unless you need a particular print setting, then click
    **Download annotated PNG** (the button name follows your chosen format).
    Use **Edit annotations** if labels need correcting.
 
-**Export before closing the app or changing images.** Editable work lasts only
-for the current session; exported images and CSV files cannot reopen that work.
-Keep your original gel image. Use **Change image** to start another gel.
+**Export before closing the app or replacing the image.** Editable work lasts
+only for the current session; an exported image cannot reopen that work.
+Keep your original gel image. Open **Replace image** to choose a replacement.
+Choosing a new file discards the current analysis, including lanes, crop, and
+labels, and starts over with the new image.
 
 ## Run locally in a browser
 

@@ -41,6 +41,7 @@ def detect_lanes(workflow):
     app.button(key="rotate_and_orient").click().run()
     app.button(key="confirm_orientation").click().run()
     app.button(key="define_wells").click().run()
+    app.number_input(key="expected_well_count").set_value(2).run()
     workflow.event = {
         "token": app.session_state["well_token"], "revision": 1,
         "points": [[38, 20], [40, 112]],
@@ -157,14 +158,12 @@ def test_refined_lane_heights_survive_review_and_final_crop(workflow):
     assert len(workflow.detections) == 1
 
 
-def test_empty_detection_can_add_adjust_and_crop_a_manual_lane(workflow):
-    workflow.result = wells.DetectionResult((), (), ("No wells found.",))
-    detect_lanes(workflow)
+def test_manually_removing_all_lanes_can_add_adjust_and_crop_a_new_lane(workflow):
+    start_review(workflow)
     app = workflow.app
     gel = app.session_state["gel_image"]
-    assert app.button(key="confirm_detected_lanes").disabled
-    assert not app.warning
-    app.button(key="adjust_lane_borders").click().run()
+    lane_event(workflow, action="delete", lane_index=1)
+    lane_event(workflow, lanes=(REVIEWED_LANES[0],), action="delete", lane_index=0)
     assert bounds(workflow) == ()
     assert app.button(key="confirm_lane_borders").disabled
     app.button(key="add_lane").click().run()
@@ -191,7 +190,8 @@ def test_delete_renumbers_survivors_rejects_old_events_and_preserves_latest_drag
     deleted = lane_event(workflow, action="delete", lane_index=0)
     assert bounds(workflow) == ((32, 75, 49, 118),)
     assert app.session_state["lane_token"] != old_token
-    assert app.session_state["well_result"] is original
+    assert app.session_state["well_result"].wells == app.session_state["lane_wells"]
+    assert app.session_state["well_expected_count"] == 1
     assert tuple(well.bounds for well in original.wells) == DETECTED_BOUNDS
     workflow.event = {**deleted, "revision": 999}
     app.run()
@@ -304,7 +304,8 @@ def test_add_lane_ignores_late_guide_event_after_uncertain_detection_is_frozen(w
     assert app.session_state["lane_crop"] is None
     app.button(key="add_lane").click().run()
     assert not app.exception
-    assert app.session_state["well_result"] is workflow.result
+    assert app.session_state["well_result"].wells == app.session_state["lane_wells"]
+    assert app.session_state["well_expected_count"] == 3
     assert app.session_state["well_points"] == points
     assert app.session_state["lane_stage"] == "borders"
     assert len(bounds(workflow)) == 3
@@ -544,7 +545,7 @@ def test_immediate_crop_confirmation_uses_latest_extent_and_exact_16bit_pixels(w
     # above/below the outer lanes, and includes the gap between both lanes.
     assert crop.crop_box == (27, 14, 230, 121)
     assert (crop.width, crop.height) == (203, 107)
-    assert app.text[0].value == "gel.tif · 203 × 107 pixels"
+    assert app.text[0].value == "gel.tif"
     assert crop.lanes == ((3, 3, 203, 41), (5, 61, 203, 104))
     assert tuple(well.bounds for well in crop.wells) == ((3, 3, 19, 41), (5, 61, 22, 104))
     with Image.open(BytesIO(crop.preview_png)) as cropped:
@@ -630,7 +631,7 @@ def test_editing_original_well_line_discards_manual_review(workflow, stage):
     assert app.session_state["well_editing"] is True
 
 
-@pytest.mark.parametrize("change", ["replace", "clear", "remove", "invalid"])
+@pytest.mark.parametrize("change", ["replace", "clear", "invalid"])
 def test_upload_changes_clear_manual_review_and_confirmed_crop(workflow, change):
     start_review(workflow)
     finish_review(workflow)
@@ -641,8 +642,6 @@ def test_upload_changes_clear_manual_review_and_confirmed_crop(workflow, change)
         upload(workflow, offset=50)
     elif change == "clear":
         app.button(key="clear_image").click().run()
-    elif change == "remove":
-        app.file_uploader[0].set_value(None).run()
     else:
         app.file_uploader[0].set_value(("gel.tif", b"invalid", "image/tiff")).run()
 
@@ -658,3 +657,17 @@ def test_upload_changes_clear_manual_review_and_confirmed_crop(workflow, change)
     assert "confirm_lane_crop" not in keys(app)
     assert "revise_lane_crop" not in keys(app)
     assert len(workflow.detections) == 1
+
+
+def test_back_after_removing_all_lanes_reopens_required_count_guide(workflow):
+    start_review(workflow)
+    app = workflow.app
+    lane_event(workflow, action="delete", lane_index=1)
+    lane_event(workflow, lanes=((30, 17, 300, 55),), action="delete", lane_index=0)
+    app.button(key="back_to_well_review").click().run()
+    assert not app.exception
+    assert app.session_state["well_result"] is None
+    assert app.session_state["lane_stage"] is None
+    assert app.session_state["well_editing"]
+    assert app.number_input(key="expected_well_count").value == 1
+    assert not app.button(key="confirm_well_line").disabled

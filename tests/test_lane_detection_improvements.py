@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 import pytest
 
-from gel_analyzer.wells import SelectionError, detect_wells
+from gel_analyzer.wells import _detect_supported_wells, detect_wells
 
 
 WELL_ROWS = ((30, 66), (100, 136), (170, 206), (240, 276))
@@ -38,11 +38,11 @@ def test_downstream_bands_recover_partial_lane_without_rewriting_well_outline(ba
     values = _gel()
     values[170:182, 36:54] = 120
     values[194:206, 36:54] = 120
-    before_bands = detect_wells(_image(values), GUIDE)
+    before_bands = detect_wells(_image(values), GUIDE, expected_count=4)
     for left, right in ((135, 149), (235, 247)):
         values[170:206, left:right] += band_contrast
 
-    recovered = detect_wells(_image(values), GUIDE)
+    recovered = detect_wells(_image(values), GUIDE, expected_count=4)
 
     assert recovered.wells == before_bands.wells
     assert len(recovered.lanes) == 4
@@ -57,7 +57,7 @@ def test_downstream_bands_recover_partial_lane_without_rewriting_well_outline(ba
 def test_clear_unequal_well_heights_are_not_forced_to_a_typical_thickness():
     rows = ((30, 66), (100, 122), (170, 214), (240, 270))
 
-    result = detect_wells(_image(_gel(rows=rows)), GUIDE)
+    result = detect_wells(_image(_gel(rows=rows)), GUIDE, expected_count=4)
 
     assert len(result.lanes) == 4
     assert [well.bounds[1::2] for well in result.wells] == list(rows)
@@ -71,7 +71,7 @@ def test_nearby_guides_recover_fuller_partial_well_outline():
     values[181:195, 36:54] += 8
     values += np.random.default_rng(41).normal(0, 3, values.shape)
 
-    result = detect_wells(_image(values), ((40, 26), (40, 280)))
+    result = detect_wells(_image(values), ((40, 26), (40, 280)), expected_count=4)
 
     assert len(result.wells) == 4
     # The main guide sees only the middle fragment. Neighboring guides should
@@ -90,7 +90,7 @@ def test_typical_thickness_repairs_weak_partial_outline_without_downstream_bands
     values = np.asarray(blurred).astype(float)
     values += np.random.default_rng(14).normal(0, 2, values.shape)
 
-    result = detect_wells(_image(values.clip(0, 255)), GUIDE)
+    result = detect_wells(_image(values.clip(0, 255)), GUIDE, expected_count=4)
 
     assert len(result.lanes) == 4
     well = result.wells[2]
@@ -112,7 +112,7 @@ def test_tall_scratch_does_not_hide_useful_downstream_bands():
     # independently of the finite bands at other x positions.
     values[:, 195:199] -= 65
 
-    result = detect_wells(_image(values), GUIDE)
+    result = detect_wells(_image(values), GUIDE, expected_count=4)
 
     assert len(result.lanes) == 4
     assert _coverage(result.lanes[2], 170, 206) >= 0.90
@@ -122,14 +122,14 @@ def test_tall_scratch_does_not_hide_useful_downstream_bands():
 
 def test_downstream_refinement_expands_both_borders_and_retains_empty_lane():
     values = _gel()
-    unchanged = detect_wells(_image(values), GUIDE)
+    unchanged = detect_wells(_image(values), GUIDE, expected_count=4)
     bands = ((24, 72), (94, 142), (None, None), (234, 282))
     for top, bottom in bands:
         if top is not None:
             values[top:bottom, 136:150] -= 70
             values[top:bottom, 230:243] -= 55
 
-    result = detect_wells(_image(values), GUIDE)
+    result = detect_wells(_image(values), GUIDE, expected_count=4)
 
     assert result.wells == unchanged.wells
     assert len(result.lanes) == 4
@@ -147,7 +147,7 @@ def test_neighboring_broad_bands_cannot_make_lane_rectangles_overlap():
     values[24:90, 135:149] -= 70
     values[78:145, 235:247] -= 60
 
-    result = detect_wells(_image(values), GUIDE)
+    result = detect_wells(_image(values), GUIDE, expected_count=4)
 
     assert len(result.lanes) == 4
     for lane, (top, bottom) in zip(result.lanes, WELL_ROWS):
@@ -163,7 +163,7 @@ def test_small_guide_shifts_keep_the_same_wells_and_band_coverage(dx):
     values[170:206, 135:149] -= 70
     values[170:206, 235:247] -= 60
 
-    result = detect_wells(_image(values), ((45 + dx, 26), (45 + dx, 280)))
+    result = detect_wells(_image(values), ((45 + dx, 26), (45 + dx, 280)), expected_count=4)
 
     assert len(result.lanes) == 4
     for lane, (top, bottom) in zip(result.lanes, WELL_ROWS):
@@ -176,7 +176,7 @@ def test_nearby_guide_search_recovers_one_well_displaced_from_the_others():
     values[170:206, 36:54] = 120
     values[170:206, 40:58] = 200
 
-    result = detect_wells(_image(values), ((35, 26), (35, 280)))
+    result = detect_wells(_image(values), ((35, 26), (35, 280)), expected_count=4)
 
     assert len(result.lanes) == 4
     assert [well.bounds[1::2] for well in result.wells] == list(WELL_ROWS)
@@ -186,9 +186,9 @@ def test_nearby_guide_search_recovers_one_well_displaced_from_the_others():
 
 def test_small_endpoint_cuts_are_completed_with_a_review_warning():
     image = _image(_gel())
-    complete = detect_wells(image, GUIDE)
+    complete = detect_wells(image, GUIDE, expected_count=4)
 
-    result = detect_wells(image, ((45, 34), (45, 272)))
+    result = detect_wells(image, ((45, 34), (45, 272)), expected_count=4)
 
     assert result.wells == complete.wells
     assert result.lanes == complete.lanes
@@ -198,14 +198,14 @@ def test_small_endpoint_cuts_are_completed_with_a_review_warning():
 
 
 def test_endpoint_completion_does_not_add_wells_outside_selected_range():
-    result = detect_wells(_image(_gel()), ((45, 104), (45, 202)))
+    result = detect_wells(_image(_gel()), ((45, 104), (45, 202)), expected_count=2)
 
     assert [well.bounds[1::2] for well in result.wells] == [(100, 136), (170, 206)]
     assert len(result.lanes) == 2
 
 
 def test_endpoint_completion_does_not_search_arbitrarily_far_past_the_guide():
-    result = detect_wells(_image(_gel()), ((45, 60), (45, 280)))
+    result = detect_wells(_image(_gel()), ((45, 60), (45, 280)), expected_count=3)
 
     # The first well's far border is 30px outside the selection. A small
     # automatic adjustment may not silently reinterpret this as a full gel.
@@ -232,7 +232,7 @@ def test_expected_count_recovers_a_faint_missing_well_with_local_rim_evidence():
     values[170:206, 52:54] += 3
     values += np.random.default_rng(41).normal(0, 0.5, values.shape)
     image = _image(values.clip(0, 255))
-    conservative = detect_wells(image, GUIDE)
+    conservative = _detect_supported_wells(image, GUIDE)
 
     result = detect_wells(image, GUIDE, expected_count=4)
 
@@ -246,7 +246,7 @@ def test_expected_count_recovers_a_faint_missing_well_with_local_rim_evidence():
 
 def test_smaller_expected_count_retains_exactly_requested_supported_wells():
     image = _image(_gel())
-    unchanged = detect_wells(image, GUIDE)
+    unchanged = detect_wells(image, GUIDE, expected_count=4)
 
     result = detect_wells(image, GUIDE, expected_count=3)
 
@@ -295,12 +295,6 @@ def test_downstream_bands_refine_count_based_lanes_without_claiming_well_evidenc
     assert len(result.wells) == len(result.lanes) == 4
     assert any("4 position(s) were inferred" in warning for warning in result.warnings)
     _assert_ordered_lanes(result)
-
-
-@pytest.mark.parametrize("invalid_count", (0, -1, 2.5, True, "4"))
-def test_expected_count_requires_a_positive_integer(invalid_count):
-    with pytest.raises((SelectionError, ValueError)):
-        detect_wells(_image(_gel()), GUIDE, expected_count=invalid_count)
 
 
 @pytest.mark.parametrize("dtype", ("<u2", ">u2"))

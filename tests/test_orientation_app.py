@@ -78,7 +78,7 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     candidate = app.session_state["orientation_preview"]
     assert candidate.orientation is not None
     assert app.session_state["gel_image"] is first_crop
-    assert app.text[0].value == "gel.tif · 9 × 15 pixels"
+    assert app.text[0].value == "gel.tif"
     assert app.get("image")[0].proto != first_preview
     assert "confirm_orientation" in button_keys(app)
     assert "rotate_and_orient" not in button_keys(app)
@@ -100,7 +100,7 @@ def test_rotate_previews_without_accepting_and_confirm_keeps_result(app, orienta
     assert accepted.preview_png == candidate.preview_png
     assert accepted.source_bytes == first_crop.source_bytes
     assert app.get("image")[0].proto == staged_preview
-    assert app.text[0].value == "gel.tif · 9 × 15 pixels"
+    assert app.text[0].value == "gel.tif"
     assert "rotate_and_orient" not in button_keys(app)
     assert_orientation_reset(app)
     app.run()
@@ -129,7 +129,7 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
     assert not app.exception
     assert not app.error
     assert len(app.warning) == 1
-    assert "Draw the gel outline" in app.warning[0].value
+    assert "Draw an outline around the gel" in app.warning[0].value
     assert app.session_state["gel_image"] is first_crop
     assert app.session_state["orientation_preview"] is None
     assert app.session_state["orientation_manual"] is True
@@ -153,7 +153,7 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
 # Each upload action uses the same reset callback. Cover every action and
 # orientation state without replaying their full Cartesian product.
 @pytest.mark.parametrize("state,change", [
-    ("staged", "clear"), ("confirmed", "remove"),
+    ("staged", "clear"), ("confirmed", "clear"),
     ("confirmed", "replace"), ("failed", "invalid"),
 ])
 def test_changing_upload_resets_orientation_state(
@@ -171,8 +171,6 @@ def test_changing_upload_resets_orientation_state(
 
     if change == "clear":
         app.button(key="clear_image").click().run()
-    elif change == "remove":
-        app.file_uploader[0].set_value(None).run()
     elif change == "replace":
         upload(app, size=(23, 17), color=120)
     else:

@@ -77,17 +77,17 @@ def rectangle_from_selection(selection: object, size: tuple[int, int]) -> GelRec
         raise OrientationError("Draw a rectangle around the gel before applying it.")
     values = [selection[key] for key in fields]
     if any(isinstance(value, bool) or not isinstance(value, Real) for value in values):
-        raise OrientationError("The selected rectangle must contain finite numeric coordinates.")
+        raise OrientationError("The outline could not be read. Draw it again around the gel.")
     try:
         cx, cy, width, height, angle = map(float, values)
     except (OverflowError, ValueError) as exc:
         raise OrientationError(
-            "The selected rectangle must contain finite numeric coordinates."
+            "The outline could not be read. Draw it again around the gel."
         ) from exc
     if not all(math.isfinite(value) for value in (cx, cy, width, height, angle)):
-        raise OrientationError("The selected rectangle must contain finite numeric coordinates.")
+        raise OrientationError("The outline could not be read. Draw it again around the gel.")
     if min(width, height) < 2:
-        raise OrientationError("The selected rectangle must be at least 2 pixels on each side.")
+        raise OrientationError("The outline is too small. Draw a larger rectangle around the gel.")
     angle = (angle + 180) % 360 - 180
     cosine, sine = _cosine_sine(angle)
     u = np.asarray((cosine, sine))
@@ -121,7 +121,7 @@ def rectangle_from_selection(selection: object, size: tuple[int, int]) -> GelRec
 def _validate_orientation_image(image: Image.Image) -> None:
     """Apply the same source-pixel requirements to manual and detected outlines."""
     if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16L", "I;16B"}:
-        raise OrientationError("This image's pixel format is not supported for orientation.")
+        raise OrientationError("This image format cannot be rotated here. Open a standard PNG or JPEG copy.")
     if "A" in image.getbands() and image.getchannel("A").getextrema() != (255, 255):
         raise OrientationError("Orientation requires a gel image without transparent areas.")
     if image.mode == "P" and "transparency" in image.info:

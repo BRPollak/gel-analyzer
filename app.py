@@ -42,10 +42,15 @@ def confirmed_gel() -> GelImage | None:
     return None
 
 
+def valid_well_count(count: object) -> bool:
+    return type(count) is int and count > 0
+
+
 def request_well_detection() -> None:
     """Capture only an explicitly confirmed, valid guide for this image."""
     gel = confirmed_gel()
-    if gel is None or not st.session_state.well_editing:
+    if (gel is None or not st.session_state.well_editing
+            or not valid_well_count(st.session_state.well_expected_count)):
         return
     # A fast confirmation can arrive with the pointer-up widget value before
     # the preceding script run has consumed it. Confirm that latest value, not
@@ -119,7 +124,8 @@ def start_lane_adjustment() -> None:
 def confirm_detected_lanes() -> None:
     result = st.session_state.well_result
     required = st.session_state.well_expected_count
-    if required is not None and (result is None or len(result.wells) != required or len(result.lanes) != required):
+    if (not valid_well_count(required) or result is None
+            or len(result.wells) != required or len(result.lanes) != required):
         return
     start_lane_adjustment()
     lane_review_ui.confirm_lane_borders()
@@ -144,10 +150,10 @@ def show_expected_well_count() -> None:
     # result review, lane adjustment, or navigation out of the guide editor.
     st.session_state.expected_well_count = st.session_state.well_expected_count
     st.number_input(
-        "Number of wells (optional)", min_value=1, value=None, step=1,
-        placeholder="Automatic", key="expected_well_count",
+        "Number of wells", min_value=1, value=None, step=1,
+        placeholder="Enter the well count", key="expected_well_count",
         on_change=change_expected_well_count,
-        help="Enter the exact number of wells crossed by the guide. The app will prepare that many wells and lanes and tell you when positions were inferred. Leave blank for automatic counting.",
+        help="Required before detection. Count every well crossed by the guide, including unloaded wells. The app fits exactly this many wells and lanes for you to review.",
     )
 
 
@@ -175,23 +181,20 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
         if result is not None:
             count = len(result.wells)
             direction = "vertical" if gel.workflow_orientation == "wells_top" else "horizontal"
-            count_guided = st.session_state.well_expected_count is not None
-            matches_count = not count_guided or count == len(result.lanes) == st.session_state.well_expected_count
-            action = "Prepared" if count_guided else "Detected"
-            st.write(f"{action} {count} well{'s' if count != 1 else ''} and {count} {direction} lane{'s' if count != 1 else ''}.")
+            required = st.session_state.well_expected_count
+            matches_count = valid_well_count(required) and count == len(result.lanes) == required
+            st.write(f"Prepared {count} well{'s' if count != 1 else ''} and {count} {direction} lane{'s' if count != 1 else ''}.")
             if not matches_count:
                 st.warning(
-                    f"This earlier result does not match the required {st.session_state.well_expected_count} wells. "
-                    "Choose Back, then confirm the guide again to fit the exact count."
+                    (f"This earlier result does not match the required {required} wells. "
+                     if valid_well_count(required) else "This earlier result has no required well count. ")
+                    + "Choose Back, enter the well count, then confirm the guide again."
                 )
-            if count_guided:
-                for message in result.warnings:
-                    st.warning(message)
             st.button(
                 "Confirm", key="confirm_detected_lanes", type="primary",
                 on_click=confirm_detected_lanes, disabled=not count or not matches_count,
             )
-            st.button("Adjust", key="adjust_lane_borders", on_click=start_lane_adjustment)
+            st.button("Adjust", key="adjust_lane_borders", on_click=start_lane_adjustment, disabled=not matches_count)
             if st.session_state.lane_error:
                 st.warning(st.session_state.lane_error)
             st.button(
@@ -208,6 +211,9 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             st.warning(st.session_state.well_error)
         if st.session_state.well_editing:
             show_expected_well_count()
+            has_count = valid_well_count(st.session_state.well_expected_count)
+            if not has_count:
+                st.info("Enter the number of wells, including unloaded wells, before detection.")
             valid = False
             try:
                 validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height), **axis_options(gel))
@@ -216,7 +222,7 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
                 st.info(str(exc))
             st.button(
                 "Confirm", key="confirm_well_line", type="primary",
-                disabled=not valid, on_click=request_well_detection,
+                disabled=not valid or not has_count, on_click=request_well_detection,
             )
             st.button(
                 "Back", key="back_from_well_line", on_click=leave_well_selection,
@@ -279,7 +285,7 @@ def show_workflow_orientation(gel: GelImage) -> None:
         "Workflow orientation", ["wells_left", "wells_top"],
         format_func=lambda mode: "Wells at top" if mode == "wells_top" else "Wells at left",
         key="workflow_orientation_choice", on_change=change_workflow_orientation,
-        help="Choose lane and migration directions independently of the manual image rotation controls.",
+        help="Choose whether the wells should appear at the left or top of your finished gel image.",
     )
     st.caption("Vertical lanes · bands migrate downward" if gel.workflow_orientation == "wells_top"
                else "Horizontal lanes · bands migrate to the right")
@@ -364,14 +370,18 @@ def clear_image() -> None:
 
 def read_upload(uploader_key: str) -> None:
     """Stage the source so main can hide the old preview before processing."""
+    uploaded_file = st.session_state.get(uploader_key)
+    if uploaded_file is None:
+        return
     st.session_state.gel_image = None
     st.session_state.upload_error = None
     st.session_state.pending_upload = None
     reset_orientation()
-    uploaded_file = st.session_state.get(uploader_key)
-    if uploaded_file is None:
-        return
     st.session_state.pending_upload = (uploaded_file.getvalue(), uploaded_file.name)
+    # A populated Streamlit uploader says "Add files", even in single-file
+    # mode. Show a fresh replacement chooser; the current filename is already
+    # displayed with the image, and clearing it has its own explicit action.
+    st.session_state.uploader_generation += 1
 
 
 def workflow_stage() -> int | None:
@@ -476,6 +486,7 @@ def main() -> None:
         orientation_ui.reset_manual_orientation()
     if "lane_stage" not in st.session_state:
         lane_review_ui.reset_lane_review()
+    lane_review_ui.restore_legacy_review_count()
 
     with st.container(key="gel_header"):
         st.title("Agarose Gel Analyzer")
@@ -484,21 +495,25 @@ def main() -> None:
 
     uploader_key = f"gel_upload_{st.session_state.uploader_generation}"
     has_image = st.session_state.gel_image is not None or st.session_state.pending_upload is not None
-    upload_panel = st.popover("Change image") if has_image else st.container(key="gel_upload_start")
+    upload_panel = st.popover("Replace image") if has_image else st.container(key="gel_upload_start")
     with upload_panel:
-        if not has_image:
+        if has_image:
+            st.write("**Replacing the image will discard the current analysis and start over with the new image.**")
+            st.caption("Export your annotated image first if you want to keep it. Choosing a replacement file or clearing the image removes your current lanes, crop, and labels.")
+        else:
             st.subheader("Start with a gel image")
         st.file_uploader(
-            "Open a gel image",
+            "Choose a replacement image" if has_image else "Open a gel image",
             type=["tif", "tiff", "png", "jpeg", "jpg"],
             accept_multiple_files=False,
             key=uploader_key,
             on_change=read_upload,
             args=(uploader_key,),
-            help="Upload one TIFF, PNG, or JPEG (.tif, .tiff, .png, .jpeg, or .jpg). Choose another file to replace it.",
+            help=("Choose one TIFF, PNG, or JPEG to replace the current image and start over. Your current analysis will be discarded."
+                  if has_image else "Choose one TIFF, PNG, or JPEG (.tif, .tiff, .png, .jpeg, or .jpg) to begin."),
         )
         if has_image:
-            st.button("Clear image", key="clear_image", on_click=clear_image)
+            st.button("Discard analysis and clear image", key="clear_image", on_click=clear_image)
         st.caption("TIFF, PNG, or JPEG files (.tif, .tiff, .png, .jpeg, or .jpg).")
 
     # Replace this same slot immediately, so neither the previous upload nor an
@@ -534,7 +549,9 @@ def main() -> None:
     if request is not None and confirmed_gel() is not None:
         token, points, expected_count = request
         if (
-            token == st.session_state.well_token
+            valid_well_count(expected_count)
+            and valid_well_count(st.session_state.well_expected_count)
+            and token == st.session_state.well_token
             and points == st.session_state.well_points
             and expected_count == st.session_state.well_expected_count
         ):
@@ -545,9 +562,8 @@ def main() -> None:
             with st.spinner("Detecting wells and refining lane boundaries…"):
                 try:
                     with Image.open(BytesIO(gel.preview_png)) as analysis_source:
-                        result = (
-                            detect_wells(analysis_source, points, expected_count=expected_count, **axis_options(gel))
-                            if expected_count is not None else detect_wells(analysis_source, points, **axis_options(gel))
+                        result = detect_wells(
+                            analysis_source, points, expected_count=expected_count, **axis_options(gel),
                         )
                     st.session_state.well_result = result
                     st.session_state.well_editing = False
@@ -573,9 +589,7 @@ def main() -> None:
             st.session_state.lane_crop
             if confirmed_gel() is not None and st.session_state.lane_stage == "cropped" else None
         )
-        visible_width = final_crop.width if final_crop else gel.preview_width
-        visible_height = final_crop.height if final_crop else gel.preview_height
-        st.text(f"{gel.filename} · {visible_width:,} × {visible_height:,} pixels")
+        st.text(gel.filename)
         if final_crop is not None:
             # The annotation editor owns its preview and controls, including
             # its responsive in-component layout.
@@ -672,7 +686,7 @@ def main() -> None:
                         if pending is None and current_gel.workflow_orientation == "wells_top":
                             st.button("Keep displayed orientation", key="keep_displayed_orientation",
                                       on_click=keep_displayed_orientation,
-                                      help="Use the displayed crop as it is, without rotating or flipping its pixels.")
+                                      help="Keep the image facing the same way as the preview.")
                         if pending is None or st.session_state.orientation_preview_method in ("manual", "confirmed"):
                             st.button(
                                 "Automatic orientation" if pending is not None else "Rotate and Orient",

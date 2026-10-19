@@ -5,8 +5,9 @@ export function fitPreviewGeometry({imageWidth, imageHeight, availableWidth,
     throw new Error("Preview dimensions must be positive finite numbers.");
   }
   const topMode = workflowOrientation === "wells_top";
-  const rightGutter = reviewMode === "borders" && !topMode ? 40 : 0;
-  const bottomGutter = reviewMode === "borders" && topMode ? 40 : 0;
+  const controlGutter = reviewMode === "borders" ? 40 : reviewMode === "extent" ? 30 : 0;
+  const rightGutter = !topMode ? controlGutter : 0;
+  const bottomGutter = topMode ? controlGutter : 0;
   const heightBudget = Math.max(1, viewportHeight - Math.max(0, chromeHeight) - Math.max(0, outerReserve));
   const scale = Math.min(1, Math.max(1, availableWidth - rightGutter) / imageWidth, Math.max(1, heightBudget - bottomGutter) / imageHeight);
   const width = imageWidth * scale;

@@ -122,7 +122,8 @@ def test_legacy_confirmation_still_exports_a_self_contained_svg(crop):
 
 
 @pytest.mark.parametrize("orientation,angle", [("wells_left", 90), ("wells_top", 90), ("wells_top", 45)])
-def test_real_browser_serializer_is_accepted_with_rich_text_groups_and_ladder(crop, orientation, angle):
+@pytest.mark.parametrize("ladder_mode", ["preset", "manual"])
+def test_real_browser_serializer_is_accepted_with_rich_text_groups_and_ladder(crop, orientation, angle, ladder_mode):
     if not shutil.which("node"):
         pytest.skip("Node is required for the browser/server serialization contract.")
     script = """
@@ -141,6 +142,11 @@ const layout=layoutAnnotations(state,measure);
 process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.width,
   height:layout.height,gel_x:layout.gelX,gel_y:layout.gelY}));
 """
+    marker_label = '<25 & "kDa">' if ladder_mode == "manual" else "1 kb"
+    if ladder_mode == "manual":
+        script = script.replace("const layout=layoutAnnotations(state,measure);",
+                                f"state.ladder={json.dumps({'mode': 'manual', 'placements': [{'id': 'custom', 'label': marker_label, 'x': 20, 'y': 10}]})};\n"
+                                "const layout=layoutAnnotations(state,measure);")
     script = script.replace("const layout=layoutAnnotations(state,measure);",
                             f"state.workflow_orientation={json.dumps(orientation)};state.annotations.laneLabelAngle={angle};\n"
                             "const layout=layoutAnnotations(state,measure);")
@@ -149,7 +155,7 @@ process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.widt
     event = json.loads(result.stdout)
     root = ET.fromstring(validate_svg_composition(event, crop))
     labels = root.findall("{http://www.w3.org/2000/svg}text")
-    assert [label.text for label in labels] == ["A ", "& β", "<Control>", "1 kb"]
+    assert [label.text for label in labels] == ["A ", "& β", "<Control>", marker_label]
     assert float(labels[-1].attrib["font-size"]) == pytest.approx(14 * 0.8)
     assert labels[-1].attrib["transform"].endswith(f"rotate({0 if orientation == 'wells_top' else -90})")
     if orientation == "wells_top":

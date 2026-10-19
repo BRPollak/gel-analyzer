@@ -37,7 +37,7 @@ def assert_preview(app, source, size, filename="gel.tif"):
     assert not app.exception
     assert not app.error
     assert len(app.get("image")) == 1
-    assert app.text[0].value == f"{filename} · {size[0]:,} × {size[1]:,} pixels"
+    assert app.text[0].value == filename
     assert app.session_state["gel_image"].source_bytes == source
     gel = app.session_state["gel_image"]
     assert (gel.preview_width, gel.preview_height) == size
@@ -45,6 +45,12 @@ def assert_preview(app, source, size, filename="gel.tif"):
         assert preview.format == "PNG"
         assert preview.size == size
     assert not app.button(key="clear_image").disabled
+    assert app.get("popover")[0].proto.popover.label == "Replace image"
+    assert app.file_uploader[0].label == "Choose a replacement image"
+    assert app.file_uploader[0].value is None
+    assert any("discard the current analysis and start over with the new image" in item.value
+               for item in app.markdown)
+    assert "analysis will be discarded" in app.file_uploader[0].proto.help
 
 
 def assert_empty(app):
@@ -83,6 +89,8 @@ def test_upload_replacement_clear_removal_and_reupload(app):
     upload(app, source, "gel.jpeg")
     assert_preview(app, source, size, "gel.jpeg")
     app.file_uploader[0].set_value(None).run()
+    assert_preview(app, source, size, "gel.jpeg")
+    app.button(key="clear_image").click().run()
     assert_empty(app)
     upload(app, source, "gel.jpeg")
     assert_preview(app, source, size, "gel.jpeg")

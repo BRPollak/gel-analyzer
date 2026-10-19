@@ -38,15 +38,15 @@ class LaneCrop:
 def _pixel(value, label: str) -> int:
     """Accept numeric integer values without coercing text or boolean events."""
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
-        raise LaneAdjustmentError(f"{label} must be a finite whole-pixel number.")
+        raise LaneAdjustmentError(f"{label} could not be read. Adjust the selection and try again.")
     if isinstance(value, Integral):
         return int(value)
     try:
         if not math.isfinite(value) or value != math.floor(value):
-            raise LaneAdjustmentError(f"{label} must be a finite whole-pixel number.")
+            raise LaneAdjustmentError(f"{label} could not be read. Adjust the selection and try again.")
         return int(value)
     except (TypeError, OverflowError, ValueError) as exc:
-        raise LaneAdjustmentError(f"{label} must be a finite whole-pixel number.") from exc
+        raise LaneAdjustmentError(f"{label} could not be read. Adjust the selection and try again.") from exc
 
 
 def _sequence(value, label: str) -> tuple:
@@ -61,11 +61,11 @@ def _sequence(value, label: str) -> tuple:
 def _coordinate(value, label: str) -> int | float:
     """Keep subpixel geometry; raster sampling is rounded only at its boundary."""
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
-        raise LaneAdjustmentError(f"{label} must be a finite image coordinate.")
+        raise LaneAdjustmentError(f"{label} could not be read. Adjust the selection and try again.")
     if isinstance(value, Integral):
         return int(value)
     if not math.isfinite(value):
-        raise LaneAdjustmentError(f"{label} must be a finite image coordinate.")
+        raise LaneAdjustmentError(f"{label} could not be read. Adjust the selection and try again.")
     return int(value) if value == math.floor(value) else float(value)
 
 
@@ -153,7 +153,7 @@ def validate_lane_adjustments(
         lane_height = bottom - top
         if (not (0 <= top < bottom <= height)
                 or (lane_height < 1 and not math.isclose(lane_height, 1, rel_tol=0, abs_tol=1e-10))):
-            raise LaneAdjustmentError(f"Lane {number} must be at least one pixel high and stay inside the image.")
+            raise LaneAdjustmentError(f"Lane {number} is too narrow or extends outside the image. Adjust its edges to enclose a lane inside the image.")
         if adjusted and top < previous_bottom and not math.isclose(top, previous_bottom, rel_tol=0, abs_tol=1e-10):
             raise LaneAdjustmentError("Keep lanes in top-to-bottom order without overlapping or crossing their neighbors.")
         bounds = (left, top, well.bounds[2], bottom)
@@ -306,7 +306,7 @@ def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_or
         gap, previous_bottom = 0, 0
     if height - previous_bottom < 1:
         if len(originals) >= height:
-            raise LaneAdjustmentError("Every image row already contains a separate lane. Delete a lane before adding another.")
+            raise LaneAdjustmentError("There is no room for another lane. Delete a lane before adding another.")
         # Reserve one bottom row with the smallest possible boundary change.
         # A one-pixel lane cannot shrink, so move that trailing lane upward
         # until a gap or a taller lane supplies the required row.
@@ -359,7 +359,7 @@ def crop_lanes(image: Image.Image, wells, right_edge, *, workflow_orientation="w
     accepted = validate_lane_adjustments(originals, proposed, shared_right, image.size,
                                          workflow_orientation=workflow_orientation)
     if image.mode not in {"1", "L", "LA", "P", "RGB", "RGBA", "I;16", "I;16L", "I;16B", "I"}:
-        raise LaneAdjustmentError("This image's pixel format cannot be cropped into a lossless PNG preview.")
+        raise LaneAdjustmentError("This image format cannot be cropped here. Open a standard PNG or JPEG copy.")
     margin = max(3, round(image.width * 0.01))
     vertical_margin = max(3, round(image.height * 0.01))
     left = max(0, math.floor(min(well.bounds[0] for well in accepted) - margin))
@@ -374,7 +374,7 @@ def crop_lanes(image: Image.Image, wells, right_edge, *, workflow_orientation="w
     if copied.mode.startswith("I"):
         values = np.asarray(copied)
         if values.min() < 0 or values.max() > 65535:
-            raise LaneAdjustmentError("The crop contains values outside the supported unsigned 16-bit range.")
+            raise LaneAdjustmentError("This image cannot be cropped here. Open a standard PNG or JPEG copy.")
         # PNG stores 16-bit samples, not an input array's byte order. Casting
         # endian representation preserves every numeric value and low bit.
         copied = Image.fromarray(values.astype(np.uint16))
