@@ -40,10 +40,12 @@ def render_well_component(
     tuple is ``(left, top, right, bottom)`` in the confirmed image coordinates.
     A stable key preserves in-progress drags during ordinary Streamlit reruns.
     Initial rendering emits no value, so it cannot erase accepted endpoints.
-    Review modes ``borders`` and ``extent`` edit pixel-aligned lane geometry and
+    Review modes ``borders`` and ``extent`` edit image-coordinate lane geometry and
     return ``kind='lane_review'`` events instead of guide-point events. Rotate
     the token when entering a different review stage; set editable to enable
     its handles. The extent stage uses one shared right edge for every lane.
+    ``boundary_first`` reuses the border handles on one movable lane;
+    ``boundary_last`` freezes it and allows only translation of its copy.
     """
     return _component(
         image_src="data:image/png;base64," + b64encode(preview_png).decode("ascii"),

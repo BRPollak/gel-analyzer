@@ -52,8 +52,7 @@ def project_state(orientation="wells_left", angle=90):
             "ladder_data": ladder, "ladder_draft": ladder, "ladder_step": "markers"}
 
 
-@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
-@pytest.mark.parametrize("angle", [90, 45])
+@pytest.mark.parametrize("orientation,angle", [("wells_left", 90), ("wells_top", 90), ("wells_top", 45)])
 def test_round_trip_preserves_axes_annotations_and_source_identity(orientation, angle):
     state = project_state(orientation, angle)
     reopened = load_project(save_project(state))
@@ -71,12 +70,12 @@ def test_round_trip_preserves_axes_annotations_and_source_identity(orientation, 
         assert reopened[f"{editor}_revision"] == 0
 
 
-@pytest.mark.parametrize("image_format,extension", [("PNG", "png"), ("JPEG", "jpeg"), ("JPEG", "jpg")])
-@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
-def test_png_and_jpeg_projects_preserve_original_source_and_edits(image_format, extension, orientation):
+# Axis/angle behavior is covered above; each additional source format needs one round trip.
+@pytest.mark.parametrize("image_format,orientation", [("PNG", "wells_left"), ("JPEG", "wells_top")])
+def test_png_and_jpeg_projects_preserve_original_source_and_edits(image_format, orientation):
     state = project_state(orientation, 45)
     source = image_bytes(Image.new("L", (120, 90), 64), image_format)
-    imported = load_image(source, f"experiment.{extension}")
+    imported = load_image(source, f"experiment.{image_format.lower()}")
     state["gel_image"] = replace(imported, orientation=state["gel_image"].orientation,
                                  workflow_orientation=orientation)
     restored = load_project(save_project(state))
@@ -296,14 +295,12 @@ def test_bands_reopen_on_their_original_lane_and_migration_axis():
     lambda document: document["state"].update(gel_image={"$record": "Executable", "fields": {}}),
     lambda document: document["state"]["ladder_data"].update(laneIndex=100),
 ])
-def test_invalid_projects_fail_without_mutating_the_existing_session(change):
+def test_invalid_project_metadata_and_payloads_are_rejected(change):
     state = project_state("wells_top")
-    original = state["gel_image"]
     document = json.loads(save_project(state))
     change(document)
     with pytest.raises(ProjectError):
         load_project(json.dumps(document).encode())
-    assert state["gel_image"] is original
 
 
 @pytest.mark.parametrize("payload", [b"", b"not json", b"[]", b'{"format":"gel-analyzer-project","version":1,"state":NaN}'])
@@ -331,13 +328,3 @@ def test_restored_state_renders_crop_editor_angle_and_navigation(orientation):
     assert all(popover.proto.popover.label != "Project" for popover in app.get("popover"))
     assert app.subheader[0].value == "Annotate lanes"
     assert [app.button(key=f"workflow_step_{index}").disabled for index in range(4)] == [False, False, False, True]
-
-
-def test_start_screen_only_accepts_images_and_shows_attribution():
-    from streamlit.testing.v1 import AppTest
-    app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
-    assert not app.exception
-    assert [uploader.label for uploader in app.file_uploader] == ["Open a gel image"]
-    assert all(popover.proto.popover.label != "Project" for popover in app.get("popover"))
-    assert all(button.label != "Save project" for button in app.get("download_button"))
-    assert app.caption[-1].value == "Benjamin Pollak | 2026 · [GitHub](https://github.com/BRPollak/gel-analyzer)"

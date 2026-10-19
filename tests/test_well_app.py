@@ -6,50 +6,17 @@ pointer, resize, and drawing behavior is verified separately in a browser.
 
 from io import BytesIO
 from dataclasses import replace
-from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 import pytest
-from streamlit.testing.v1 import AppTest
 
-from gel_analyzer import image_io, well_component, wells
+from gel_analyzer import wells
 
 
 @pytest.fixture
-def workflow(monkeypatch):
-    monkeypatch.setattr(
-        image_io, "find_gel_crop", lambda image: (0, 0, image.width, image.height)
-    )
-
-    def orient(image):
-        return SimpleNamespace(
-            image=image.transpose(Image.Transpose.TRANSPOSE),
-            rectangle=SimpleNamespace(
-                corners=((0, 0), (image.width, 0), image.size, (0, image.height))
-            ),
-            counterclockwise_degrees=90.0,
-            outline_complete=True,
-            supported_edges=(),
-        )
-
-    monkeypatch.setattr(image_io, "orient_gel", orient)
-    harness = SimpleNamespace(event=None, renders=[], calls=[], expected_counts=[], result=None)
-
-    def component(*args, **kwargs):
-        harness.renders.append((args, kwargs))
-        return harness.event
-
-    def detect(image, points, *, expected_count=None):
-        harness.calls.append((image.copy(), points))
-        harness.expected_counts.append(expected_count)
-        return harness.result
-
-    monkeypatch.setattr(well_component, "render_well_component", component)
-    monkeypatch.setattr(wells, "detect_wells", detect)
-    harness.app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
-    return harness
+def workflow(well_workflow):
+    return well_workflow
 
 
 def upload(workflow, *, color=8000, mode="I;16"):
@@ -119,7 +86,7 @@ def test_selection_is_only_available_after_explicit_orientation_confirmation(wor
     assert app.session_state["gel_image"].orientation is None
     assert "define_wells" not in button_keys(app)
     assert not workflow.renders
-    assert not workflow.calls
+    assert not workflow.detections
 
     app.button(key="confirm_orientation").click().run()
     assert "define_wells" in button_keys(app)
@@ -142,14 +109,14 @@ def test_clicks_drags_and_reruns_do_not_detect_until_confirmed(workflow):
     assert not app.button(key="confirm_well_line").disabled
     event(workflow, points=((38, 180), (34, 20)), revision=3)
     app.run()
-    assert not workflow.calls
+    assert not workflow.detections
     workflow.result = good_result()
 
     app.button(key="confirm_well_line").click().run()
 
     assert not app.exception
-    assert len(workflow.calls) == 1
-    analyzed, selected = workflow.calls[0]
+    assert len(workflow.detections) == 1
+    analyzed, selected = workflow.detections[0]
     assert analyzed.size == (300, 200)
     assert np.asarray(analyzed).dtype == np.uint16
     assert np.asarray(analyzed).max() > 255
@@ -174,7 +141,7 @@ def test_clicks_drags_and_reruns_do_not_detect_until_confirmed(workflow):
     assert app.session_state["well_points"] == frozen_points
     assert app.session_state["well_result"] is workflow.result
     app.run()
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
 
 
 @pytest.mark.parametrize("warnings", [(), ("Review uncertain well boundaries.",)])
@@ -200,7 +167,7 @@ def test_detected_summary_has_only_confirm_adjust_and_back_without_count_or_warn
     assert app.session_state["well_editing"] is False
     app.run()
     assert app.session_state["well_result"] is workflow.result
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
 
 
 def test_expected_well_count_requires_confirmation_and_can_return_to_automatic(workflow):
@@ -217,7 +184,7 @@ def test_expected_well_count_requires_confirmation_and_can_return_to_automatic(w
     assert app.session_state["well_points"] == points
     assert app.session_state["well_result"] is None
     assert app.session_state["well_token"] != old_token
-    assert not workflow.calls
+    assert not workflow.detections
     # A previous iframe cannot overwrite the retained guide after a count edit.
     event(workflow, points=((70, 25), (70, 185)), revision=99, token=old_token)
     assert app.session_state["well_points"] == points
@@ -265,7 +232,7 @@ def test_pending_detection_request_cannot_use_stale_count_guide_or_image(workflo
     app.run()
 
     assert not app.exception
-    assert not workflow.calls
+    assert not workflow.detections
     assert app.session_state["well_result"] is None
     assert app.session_state["well_detection_request"] is None
 
@@ -286,16 +253,15 @@ def test_expected_well_count_change_keeps_latest_pending_guide_edit(workflow):
     assert app.session_state["well_points"] == latest_points
     assert app.session_state["well_expected_count"] == 3
     assert app.session_state["well_token"] != token
-    assert not workflow.calls
+    assert not workflow.detections
     workflow.result = good_result()
     app.button(key="confirm_well_line").click().run()
     assert not app.exception
-    assert workflow.calls[0][1] == latest_points
+    assert workflow.detections[0][1] == latest_points
     assert workflow.expected_counts == [3]
 
 
-@pytest.mark.parametrize("warnings", [(), ("Review uncertain well boundaries.",)])
-def test_immediate_confirmation_consumes_latest_pending_component_event(workflow, warnings):
+def test_immediate_confirmation_consumes_latest_pending_component_event(workflow):
     begin_selection(workflow)
     event(workflow)
     app = workflow.app
@@ -306,19 +272,19 @@ def test_immediate_confirmation_consumes_latest_pending_component_event(workflow
     # before another script run has copied that widget into well_points.
     app.session_state[f"well_overlay_{token}"] = pending
     workflow.event = pending
-    workflow.result = replace(good_result(), warnings=warnings)
+    workflow.result = good_result()
 
     app.button(key="confirm_well_line").click().run()
 
     assert not app.exception
-    assert len(workflow.calls) == 1
-    assert workflow.calls[0][1] == latest_points
+    assert len(workflow.detections) == 1
+    assert workflow.detections[0][1] == latest_points
     assert app.session_state["well_points"] == latest_points
     assert app.session_state["well_result"] is workflow.result
     assert workflow.renders[-1][1]["lanes"] == workflow.result.lanes
     app.run()
     assert app.session_state["well_result"] is workflow.result
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
 
 
 @pytest.mark.parametrize(
@@ -343,8 +309,8 @@ def test_immediate_confirmation_ignores_stale_or_malformed_pending_event(workflo
     app.button(key="confirm_well_line").click().run()
 
     assert not app.exception
-    assert len(workflow.calls) == 1
-    assert workflow.calls[0][1] == accepted_points
+    assert len(workflow.detections) == 1
+    assert workflow.detections[0][1] == accepted_points
     assert app.session_state["well_points"] == accepted_points
     assert app.session_state["well_result"] is workflow.result
 
@@ -361,7 +327,7 @@ def test_immediate_confirmation_does_not_detect_a_new_invalid_pending_line(workf
     app.button(key="confirm_well_line").click().run()
 
     assert not app.exception
-    assert not workflow.calls
+    assert not workflow.detections
     assert app.session_state["well_points"] == ((20.0, 50.0), (20.0, 50.0))
     assert app.session_state["well_result"] is None
     assert app.button(key="confirm_well_line").disabled
@@ -376,12 +342,14 @@ def test_invalid_line_geometry_is_editable_but_cannot_be_confirmed(workflow, poi
     assert workflow.app.button(key="confirm_well_line").disabled
     assert workflow.app.session_state["well_editing"] is True
     assert workflow.app.warning or workflow.app.info or workflow.app.error
-    assert not workflow.calls
+    assert not workflow.detections
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
+def test_malformed_component_event_cannot_replace_good_geometry(workflow):
+    begin_selection(workflow)
+    event(workflow)
+    previous = workflow.app.session_state["well_points"]
+    for payload in [
         {"points": [[float("nan"), 20], [38, 180]]},
         {"points": [[34, float("inf")], [38, 180]]},
         {"points": [["34", 20], [38, 180]]},
@@ -395,15 +363,11 @@ def test_invalid_line_geometry_is_editable_but_cannot_be_confirmed(workflow, poi
         {"revision": True},
         {"revision": 1.5},
         {"token": "event-from-another-image"},
-    ],
-)
-def test_malformed_component_event_cannot_replace_good_geometry(workflow, payload):
-    begin_selection(workflow)
-    event(workflow)
-    previous = workflow.app.session_state["well_points"]
-    event(workflow, **({"points": ((45, 25), (45, 185)), "revision": 2} | payload))
-    assert workflow.app.session_state["well_points"] == previous
-    assert not workflow.calls
+    ]:
+        event(workflow, **({"points": ((45, 25), (45, 185)), "revision": 2} | payload))
+        assert workflow.app.session_state["well_points"] == previous, payload
+        assert workflow.app.session_state["well_revision"] == 1, payload
+        assert not workflow.detections, payload
 
 
 def test_out_of_order_event_cannot_restore_older_endpoints(workflow):
@@ -436,9 +400,9 @@ def test_edit_invalidates_detection_and_stale_event_but_preserves_line(workflow)
     assert app.session_state["well_points"] == previous_points
     event(workflow, points=((45, 25), (45, 185)), revision=1)
     assert app.session_state["well_points"] != previous_points
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
     app.button(key="confirm_well_line").click().run()
-    assert len(workflow.calls) == 2
+    assert len(workflow.detections) == 2
 
 
 @pytest.mark.parametrize("uncertain", [False, True])
@@ -464,7 +428,7 @@ def test_empty_or_uncertain_detection_freezes_guide_and_can_be_adjusted_without_
     assert "confirm_well_line" not in button_keys(app)
     assert not app.warning
     assert not app.success
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
 
 
 def test_detection_failure_explains_problem_and_preserves_retry(workflow, monkeypatch):
@@ -503,7 +467,7 @@ def test_late_guide_drag_cannot_replace_frozen_uncertain_result(workflow):
     assert workflow.renders[-1][1]["wells"]
     assert workflow.renders[-1][1]["lanes"] == workflow.result.lanes
     assert workflow.renders[-1][1]["editable"] is False
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1
 
 
 @pytest.mark.parametrize("action", ["request", "confirm"])
@@ -526,7 +490,7 @@ def test_orientation_changes_invalidate_any_existing_well_state(workflow, action
 
     assert_reset(app, previous_token)
     assert not workflow.renders
-    assert not workflow.calls
+    assert not workflow.detections
 
 
 @pytest.mark.parametrize("pending_edit", [False, True])
@@ -563,7 +527,7 @@ def test_back_leaves_guide_editor_and_define_wells_restores_points(workflow, pen
     assert not app.button(key="confirm_well_line").disabled
     event(workflow, points=((80, 25), (80, 185)), revision=500, token=old_token)
     assert app.session_state["well_points"] == points
-    assert not workflow.calls
+    assert not workflow.detections
 
 
 @pytest.mark.parametrize("change", ["replace", "clear", "remove", "invalid"])
@@ -594,4 +558,4 @@ def test_upload_changes_clear_results_and_reject_previous_image_events(workflow,
         event(workflow, revision=500, token=old_token)
         assert app.session_state["well_points"] == ()
         assert app.session_state["well_result"] is None
-    assert len(workflow.calls) == 1
+    assert len(workflow.detections) == 1

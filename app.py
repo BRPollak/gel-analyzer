@@ -607,7 +607,7 @@ def main() -> None:
                     current_gel, image_panel=image_panel, controls_panel=controls_panel,
                 )
                 with controls_panel:
-                    if st.session_state.lane_stage == "borders":
+                    if st.session_state.lane_stage == "borders" and not st.session_state.get("lane_boundary_stage"):
                         st.button(
                             "Edit well line", key="edit_well_line", on_click=reset_wells,
                             kwargs={"editing": True, "preserve_points": True},

@@ -74,18 +74,20 @@ def test_cropped_preview_preserves_source_and_exact_pixel_values(
 
 
 @pytest.mark.parametrize(
-    "orientation,transpose",
+    "orientation,transpose,compression",
     [
-        (2, Image.Transpose.FLIP_LEFT_RIGHT),
-        (3, Image.Transpose.ROTATE_180),
-        (4, Image.Transpose.FLIP_TOP_BOTTOM),
-        (5, Image.Transpose.TRANSPOSE),
-        (6, Image.Transpose.ROTATE_270),
-        (7, Image.Transpose.TRANSVERSE),
-        (8, Image.Transpose.ROTATE_90),
+        (2, Image.Transpose.FLIP_LEFT_RIGHT, "raw"),
+        (3, Image.Transpose.ROTATE_180, "raw"),
+        (4, Image.Transpose.FLIP_TOP_BOTTOM, "raw"),
+        (5, Image.Transpose.TRANSPOSE, "raw"),
+        (6, Image.Transpose.ROTATE_270, "raw"),
+        (7, Image.Transpose.TRANSVERSE, "raw"),
+        (8, Image.Transpose.ROTATE_90, "raw"),
+        # The compressed decoder also needs an axis-swapping regression;
+        # repeating every EXIF transform for each codec adds no crop behavior.
+        (6, Image.Transpose.ROTATE_270, "tiff_lzw"),
     ],
 )
-@pytest.mark.parametrize("compression", ["raw", "tiff_lzw"])
 def test_crop_coordinates_follow_tiff_orientation_exactly_once(
     monkeypatch, orientation, transpose, compression
 ):

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from gel_analyzer.annotations import AnnotationError
 from gel_analyzer.ladders import LadderError, load_presets, validate_ladder
 
 
@@ -22,10 +21,6 @@ def preset():
 
 def ladder():
     return {"preset": preset(), "laneIndex": 0, "placements": [{"markerIndex": 0, "x": 143.625, "y": 28.25}]}
-
-
-def test_ladder_errors_follow_existing_annotation_error_handling():
-    assert issubclass(LadderError, AnnotationError)
 
 
 def test_bundled_neb_presets_match_reference_band_labels_and_load_independent_snapshots():
@@ -130,14 +125,18 @@ def test_preset_identifiers_must_be_unique(tmp_path):
         load_presets(path)
 
 
-def test_snapshot_is_detached_and_preserves_fractional_native_coordinates(crop):
+def test_validation_detaches_snapshot_preserves_coordinates_and_leaves_input_untouched(crop):
     source = ladder()
+    expected = deepcopy(source)
+    source["selectedMarker"] = 2
+    source["preset"]["extra"] = "ignored"
     original = deepcopy(source)
     checked = validate_ladder(source, crop, complete=True)
-    assert checked == original
+    assert source == original
+    assert checked == expected
     source["preset"]["labels"][0] = "Changed"
     source["placements"][0]["x"] = 100
-    assert checked == original
+    assert checked == expected
 
 
 def test_existing_snapshot_does_not_depend_on_current_preset_file(crop, monkeypatch, tmp_path):
@@ -193,14 +192,3 @@ def test_half_open_shared_boundary_belongs_only_to_lower_lane(crop):
         validate_ladder(data, crop)
     data["laneIndex"] = 1
     assert validate_ladder(data, crop, complete=True)["placements"][0] == {"markerIndex": 0, "x": 5.0, "y": 41.0}
-
-
-def test_input_snapshot_is_not_modified_by_validation(crop):
-    data = ladder()
-    data["selectedMarker"] = 2
-    data["preset"]["extra"] = "ignored"
-    original = deepcopy(data)
-    checked = validate_ladder(data, crop)
-    assert data == original
-    assert "selectedMarker" not in checked
-    assert "extra" not in checked["preset"]

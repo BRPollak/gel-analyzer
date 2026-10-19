@@ -53,9 +53,14 @@ def _assert_valid(image, result, count, orientation):
     assert len(crop.wells) == len(crop.lanes) == count
 
 
-@pytest.mark.parametrize("orientation", ("wells_left", "wells_top"))
-@pytest.mark.parametrize("count", (1, 2, 3, 4, 6, 16, 254))
-def test_every_feasible_count_has_exact_valid_geometry_through_crop(count, orientation):
+@pytest.mark.parametrize("count,orientation", [
+    # Both axes exercise the minimum and saturated span; intermediate counts
+    # cover dropping, matching and adding wells without duplicating the sweep.
+    (1, "wells_left"), (1, "wells_top"), (2, "wells_left"),
+    (3, "wells_top"), (4, "wells_left"), (6, "wells_top"),
+    (16, "wells_left"), (254, "wells_left"), (254, "wells_top"),
+])
+def test_representative_counts_have_exact_valid_geometry_through_crop(count, orientation):
     image, result = _detect(_fixture(), count, orientation)
 
     _assert_valid(image, result, count, orientation)

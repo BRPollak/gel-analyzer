@@ -129,7 +129,11 @@ function drawGuide() {
   svg.dataset.pointCount = String(state.points.length);
   svg.dataset.workflowOrientation = state.workflowOrientation;
   wrap.dataset.workflowOrientation = state.workflowOrientation;
-  const instructions = state.workflowOrientation === "wells_top"
+  const instructions = state.reviewMode === "boundary_first"
+    ? `1. First well — Drag the gold lane to the ${state.workflowOrientation === "wells_top" ? "leftmost" : "topmost"} loaded well. Adjust its width with the border handles, then confirm.`
+    : state.reviewMode === "boundary_last"
+    ? `2. Last well — Drag the gold lane to the ${state.workflowOrientation === "wells_top" ? "rightmost" : "bottommost"} loaded well, then generate lanes. The first well stays fixed.`
+    : state.workflowOrientation === "wells_top"
     ? state.reviewMode === "borders"
       ? "Adjust each lane’s left and right borders. Use Left/Right keys on a focused handle. Delete a lane with the trash button below it, or use Add lane to insert one at the right of the detection line."
       : state.reviewMode === "extent"
@@ -167,20 +171,25 @@ function drawResults() {
   if (!state) return;
   const rect = svg.getBoundingClientRect();
   const unit = screenRadius(1, rect, state.width);
+  const boundaryMode = ["boundary_first", "boundary_last"].includes(state.reviewMode);
+  const boundaryClass = index => boundaryMode
+    ? ` ${state.reviewMode === "boundary_first" || index === 1 ? "boundary-active" : "boundary-fixed"}` : "";
   function outline(bounds, className, index) {
     if (!Array.isArray(bounds) || bounds.length !== 4 || !bounds.every(Number.isFinite)) return;
     const [left, top] = clipPoint(bounds.slice(0, 2), state.width, state.height);
     const [right, bottom] = clipPoint(bounds.slice(2, 4), state.width, state.height);
     element("rect", {x: left, y: top, width: Math.max(0, right - left),
-      height: Math.max(0, bottom - top), class: `${className} outline`,
+      height: Math.max(0, bottom - top), class: `${className} outline${boundaryClass(index)}`,
       "data-testid": `${className}-${index + 1}`});
   }
   state.lanes.forEach((lane, index) => outline(lane, "lane", index));
-  [...state.wells].sort((a, b) => a.bounds[state.workflowOrientation === "wells_top" ? 0 : 1] - b.bounds[state.workflowOrientation === "wells_top" ? 0 : 1]).forEach((well, index) => {
+  const wells = boundaryMode ? state.wells : [...state.wells].sort((a, b) =>
+    a.bounds[state.workflowOrientation === "wells_top" ? 0 : 1] - b.bounds[state.workflowOrientation === "wells_top" ? 0 : 1]);
+  wells.forEach((well, index) => {
     outline(well.bounds, "well", index);
     const [left, top, right, bottom] = well.bounds;
     const center = well.center || [(left + right) / 2, (top + bottom) / 2];
-    element("circle", {cx: center[0], cy: center[1], r: 2 * unit, class: "center"});
+    element("circle", {cx: center[0], cy: center[1], r: 2 * unit, class: `center${boundaryClass(index)}`});
     const labelX = right + 7 * unit;
     const onRight = labelX + 20 * unit < state.width;
     const topMode = state.workflowOrientation === "wells_top";
@@ -286,10 +295,10 @@ window.addEventListener("message", event => {
     state = {token: args.token, width: args.width, height: args.height,
       workflowOrientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
       points: readPoints(args.points, args.width, args.height, args.workflow_orientation),
-      reviewMode: ["borders", "extent"].includes(args.review_mode) ? args.review_mode : null,
+      reviewMode: ["borders", "extent", "boundary_first", "boundary_last"].includes(args.review_mode) ? args.review_mode : null,
       lanes: Array.isArray(args.lanes) ? args.lanes.map(lane => [...lane]) : [],
       wells: Array.isArray(args.wells) ? args.wells.map(well => ({...well, bounds: [...well.bounds]})) : [],
-      rightEdge: Number.isInteger(args.right_edge) ? args.right_edge : (args.workflow_orientation === "wells_top" ? (args.lanes?.[0]?.[3] ?? args.height) : (args.lanes?.[0]?.[2] ?? args.width))};
+      rightEdge: Number.isFinite(args.right_edge) ? args.right_edge : (args.workflow_orientation === "wells_top" ? (args.lanes?.[0]?.[3] ?? args.height) : (args.lanes?.[0]?.[2] ?? args.width))};
     svg.dataset.token = args.token;
     svg.setAttribute("viewBox", `0 0 ${args.width} ${args.height}`);
     svg.setAttribute("width", args.width);

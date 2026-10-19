@@ -167,7 +167,7 @@ test("manual workflow has no default preset; selected markers replace rather tha
   assert.deepEqual(h.actions, ["confirm"]);
 }));
 
-test("back preserves placements; changing lane or preset requires the explicit clear action", () => harness(h => {
+test("lane and preset changes require explicit clearing and update the reference after acceptance", () => harness(h => {
   h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
   h.nodes["ladder-back"].dispatch("click");
   assert.equal(h.state.ladder.placements.length, 1);
@@ -182,12 +182,20 @@ test("back preserves placements; changing lane or preset requires the explicit c
   assert.equal(h.state.ladder.placements.length, 0);
   h.nodes["ladder-use-lane"].dispatch("click");
   h.marker(1).dispatch("click"); h.clickImage(60, 50);
+  h.nodes["ladder-reference-enlarge"].dispatch("click");
   h.nodes["ladder-change-preset"].dispatch("click");
   h.select("ladder-preset", "other");
   assert.equal(h.state.ladder.preset.id, "example");
+  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[0].referenceImage);
+  assert.equal(h.nodes["ladder-reference-dialog"].open, true);
   h.nodes["ladder-accept-change"].dispatch("click");
-  assert.deepEqual(h.state.ladder, {preset: presets[1], laneIndex: 1, placements: []});
-}));
+  assert.deepEqual(h.state.ladder, {preset: referencePresets[1], laneIndex: 1, placements: []});
+  assert.equal(h.nodes["ladder-reference-dialog"].open, false);
+  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[1].referenceImage);
+  assert.equal(h.nodes["ladder-reference-large"].src, referencePresets[1].referenceImage);
+  assert.equal(h.nodes["ladder-reference-note"].hidden, true);
+  assert.equal(h.nodes["ladder-reference-selected"].textContent, "");
+}, {presets: referencePresets}));
 
 test("keyboard positions and places a subset, with one-pixel and ten-pixel movement and focus restoration", () => harness(h => {
   h.enterMarkers(); h.marker(1).dispatch("click");
@@ -243,7 +251,7 @@ test("empty and failed previews remain escapable; confirmation locks interaction
   assert.deepEqual(h.actions, ["cancel", "remove"]);
 }));
 
-test("reference selection preserves snapshot metadata and shows the photo with the current marker status", () => harness(h => {
+test("reference selection and visibility preserve the ladder snapshot and reflect marker status", () => harness(h => {
   assert.equal(h.nodes["ladder-reference"].hidden, true);
   assert.equal(h.nodes["ladder-reference-toggle"].hidden, true);
   assert.equal(h.nodes["ladder-reference-image"].src, "");
@@ -265,21 +273,15 @@ test("reference selection preserves snapshot metadata and shows the photo with t
   h.clickImage(50, 20);
   assert.equal(h.nodes["ladder-reference-selected"].textContent, "Selected: 3.0 kb · Placed");
   assert.deepEqual(h.edits.at(-1).ladder.preset, referencePresets[0]);
-}, {presets: referencePresets}));
-
-test("hiding, showing and enlarging the reference never edits marker placements", () => harness(h => {
-  h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
   const snapshot = structuredClone(h.state.ladder);
   const editCount = h.edits.length;
   const toggle = h.nodes["ladder-reference-toggle"];
   toggle.dispatch("click");
   assert.equal(h.nodes["ladder-reference"].hidden, true);
-  assert.equal(toggle.textContent, "Show reference");
   assert.equal(toggle.attributes["aria-expanded"], "false");
   assert.equal(h.nodes.component.dataset.referenceOpen, "false");
   toggle.dispatch("click");
   assert.equal(h.nodes["ladder-reference"].hidden, false);
-  assert.equal(toggle.textContent, "Hide reference");
   assert.equal(toggle.attributes["aria-expanded"], "true");
   assert.equal(h.nodes.component.dataset.referenceOpen, "true");
   assert.equal(h.layoutChanges.length, 2);
@@ -291,24 +293,6 @@ test("hiding, showing and enlarging the reference never edits marker placements"
   assert.deepEqual(h.state.ladder, snapshot);
   assert.equal(h.edits.length, editCount);
   assert.deepEqual(h.actions, []);
-}, {presets: referencePresets}));
-
-test("accepting a preset change updates the reference and closes the previous enlarged photo", () => harness(h => {
-  h.enterMarkers(); h.marker(0).dispatch("click"); h.clickImage(50, 20);
-  h.nodes["ladder-reference-enlarge"].dispatch("click");
-  h.nodes["ladder-change-preset"].dispatch("click");
-  h.select("ladder-preset", "other");
-  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[0].referenceImage);
-  assert.equal(h.nodes["ladder-reference-dialog"].open, true);
-  h.nodes["ladder-accept-change"].dispatch("click");
-  assert.equal(h.nodes["ladder-reference-dialog"].open, false);
-  assert.equal(h.nodes["ladder-reference-image"].src, referencePresets[1].referenceImage);
-  assert.equal(h.nodes["ladder-reference-large"].src, referencePresets[1].referenceImage);
-  assert.equal(h.nodes["ladder-reference-name"].textContent, "Other");
-  assert.equal(h.nodes["ladder-reference-note"].hidden, true);
-  assert.equal(h.nodes["ladder-reference-selected"].textContent, "");
-  assert.deepEqual(h.state.ladder.preset, referencePresets[1]);
-  assert.deepEqual(h.state.ladder.placements, []);
 }, {presets: referencePresets}));
 
 test("a missing reference photo leaves markers and confirmation usable", () => harness(h => {

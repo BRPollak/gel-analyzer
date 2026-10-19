@@ -67,7 +67,7 @@ def test_crop_automatically_opens_editor_with_translated_lane_coordinates(annota
 
 
 @pytest.mark.parametrize("rich_text", [False, True])
-def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated, rich_text):
+def test_annotation_edit_confirm_and_reopen_preserve_snapshot_and_ignore_late_events(annotated, rich_text):
     crop = crop_gel(annotated)
     original_bytes = crop.preview_png
     original_source = annotated.app.session_state["gel_image"].source_bytes
@@ -83,7 +83,7 @@ def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated, ri
     assert annotated.renders[-1][1]["annotations"] == draft
     image_event, expected_png = composition(crop)
 
-    annotation_event(annotated, data=draft, action="confirm", revision=2, **image_event)
+    confirmed_event = annotation_event(annotated, data=draft, action="confirm", revision=2, **image_event)
 
     assert app.session_state["annotation_png"] == expected_png
     assert app.session_state["annotation_dimensions"] == (383, 131)
@@ -93,27 +93,28 @@ def test_edit_and_confirm_preserve_styles_groups_and_original_crop(annotated, ri
     assert crop.preview_png == original_bytes
     assert app.session_state["gel_image"].source_bytes == original_source
 
+    # Confirmed output is frozen even if an old browser editor reports a later edit.
+    annotated.event = {**confirmed_event, "action": "edit", "revision": 999,
+                       "annotations": default_annotations(2)}
+    app.run()
+    assert not app.exception
+    assert app.session_state["annotation_data"] == draft
+    assert app.session_state["annotation_png"] == expected_png
 
-@pytest.mark.parametrize("rich_text", [False, True])
-def test_return_to_editing_preserves_complete_snapshot_and_rejects_old_confirmation(annotated, rich_text):
-    crop_gel(annotated)
-    data = rich_annotations() if rich_text else styled_annotations()
-    old_event = annotation_event(annotated, data=data, action="confirm")
-    app = annotated.app
-    confirmed = deepcopy(app.session_state["annotation_data"])
     old_token = app.session_state["annotation_token"]
     app.button(key="edit_annotations").click().run()
     assert not app.exception
     assert app.session_state["annotation_png"] is None
     assert app.session_state["annotation_token"] != old_token
-    assert app.session_state["annotation_data"] == confirmed
-    assert annotated.renders[-1][1]["annotations"] == confirmed
-    annotated.event = {**old_event, "revision": 999}
+    assert app.session_state["annotation_data"] == draft
+    assert annotated.renders[-1][1]["annotations"] == draft
+    annotated.event = {**confirmed_event, "revision": 999}
     app.run()
+    assert not app.exception
     assert app.session_state["annotation_png"] is None
-    assert app.session_state["annotation_data"] == confirmed
-    annotation_event(annotated, data=confirmed, revision=1, action="confirm")
-    assert app.session_state["annotation_png"] is not None
+    assert app.session_state["annotation_data"] == draft
+    annotation_event(annotated, data=draft, revision=1, action="confirm")
+    assert app.session_state["annotation_png"] == expected_png
 
 
 def test_user_font_size_survives_reruns_confirmation_reediting_and_changed_crop(annotated):
@@ -141,18 +142,6 @@ def test_user_font_size_survives_reruns_confirmation_reediting_and_changed_crop(
     assert annotated.renders[-1][1]["annotations"]["fontSize"] == 72
 
 
-def test_confirmation_freezes_snapshot_against_delayed_browser_edits(annotated):
-    crop_gel(annotated)
-    event = annotation_event(annotated, action="confirm")
-    app = annotated.app
-    frozen = deepcopy(app.session_state["annotation_data"])
-    png = app.session_state["annotation_png"]
-    annotated.event = {**event, "action": "edit", "revision": 999, "annotations": default_annotations(2)}
-    app.run()
-    assert app.session_state["annotation_data"] == frozen
-    assert app.session_state["annotation_png"] == png
-
-
 def test_group_edit_membership_change_and_delete_are_saved_independently(annotated):
     crop_gel(annotated)
     annotation_event(annotated)
@@ -171,7 +160,7 @@ def test_group_edit_membership_change_and_delete_are_saved_independently(annotat
 
 def test_invalid_or_out_of_order_edit_cannot_replace_last_valid_draft(annotated):
     crop_gel(annotated)
-    annotation_event(annotated, revision=2)
+    annotation_event(annotated, data=rich_annotations(), revision=2)
     app = annotated.app
     accepted = deepcopy(app.session_state["annotation_data"])
     annotation_event(annotated, data=default_annotations(2), revision=1)
@@ -183,30 +172,27 @@ def test_invalid_or_out_of_order_edit_cannot_replace_last_valid_draft(annotated)
     assert app.session_state["annotation_png"] is None
     assert app.error
 
-
-def test_incomplete_rich_text_event_cannot_replace_last_valid_draft(annotated):
-    crop_gel(annotated)
-    annotation_event(annotated, data=rich_annotations())
-    app = annotated.app
-    accepted = deepcopy(app.session_state["annotation_data"])
     invalid = deepcopy(accepted)
     invalid["groups"][0]["runs"].pop()
-    annotation_event(annotated, data=invalid, revision=2, action="confirm")
+    annotation_event(annotated, data=invalid, revision=4, action="confirm")
     assert app.session_state["annotation_data"] == accepted
     assert app.session_state["annotation_png"] is None
     assert "Formatted text must match" in app.session_state["annotation_error"]
 
 
-@pytest.mark.parametrize("overrides", [
-    {"token": "previous-crop"}, {"revision": 0}, {"revision": True},
-    {"kind": "lane_review"}, {"action": "delete"},
-])
-def test_stale_or_unrelated_events_cannot_change_annotations(annotated, overrides):
+def test_stale_or_unrelated_events_cannot_change_annotations(annotated):
     crop_gel(annotated)
-    before = deepcopy(annotated.app.session_state["annotation_data"])
-    annotation_event(annotated, **overrides)
-    assert annotated.app.session_state["annotation_data"] == before
-    assert annotated.app.session_state["annotation_png"] is None
+    app = annotated.app
+    before = deepcopy(app.session_state["annotation_data"])
+    # Reuse one editor: every rejected event must leave it ready for the next one.
+    for overrides in (
+        {"token": "previous-crop"}, {"revision": 0}, {"revision": True},
+        {"kind": "lane_review"}, {"action": "delete"},
+    ):
+        annotation_event(annotated, **overrides)
+        assert app.session_state["annotation_data"] == before, overrides
+        assert app.session_state["annotation_png"] is None, overrides
+        assert app.session_state["annotation_revision"] == 0, overrides
 
 
 def test_failed_image_confirmation_keeps_valid_draft_for_retry(annotated):

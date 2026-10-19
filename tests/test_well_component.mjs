@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {laneAxisState, clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, moveGuideEndpoint, moveLaneBorder, nearestHandle, pointerToImage, readPoints, screenRadius, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {laneAxisState, clampRightEdge, clipPoint, laneBorderLimits, laneDeleteLayout, lanePositionLimits, moveGuideEndpoint, moveLaneBorder, moveLanePosition, nearestHandle, pointerToImage, readPoints, screenRadius, swapBounds, swapPoint, wellsWithLaneBorders} from "../gel_analyzer/well_component_frontend/geometry.mjs";
 import {createLaneReview} from "../gel_analyzer/well_component_frontend/lane_review.mjs";
 
 test("pointer mapping is independent of scale and page offset", () => {
@@ -57,6 +57,47 @@ test("shared right edge preserves every well and never extends beyond image", ()
   assert.equal(clampRightEdge(0, wells, 1000), 41);
   assert.equal(clampRightEdge(1001, wells, 1000), 1000);
   assert.equal(clampRightEdge(824.6, wells, 1000), 825);
+});
+
+test("boundary translation retains exact geometry and fractional border edits leave neighbors untouched", () => {
+  const lanes = [[12.5, 10.25, 340.5, 22.75], [12.5, 35.75, 340.5, 48.25], [12.5, 61.25, 340.5, 73.75]];
+  assert.deepEqual(lanePositionLimits(lanes[0], 200), [6.25, 193.75]);
+  assert.deepEqual(moveLanePosition(lanes, 2, 100.25, 200)[2], [12.5, 94, 340.5, 106.5]);
+  assert.deepEqual(moveLanePosition(lanes, 2, -100, 200)[2], [12.5, 0, 340.5, 12.5]);
+  assert.deepEqual(moveLanePosition(lanes, 2, 1000, 200)[2], [12.5, 187.5, 340.5, 200]);
+  assert.deepEqual(moveLaneBorder(lanes, 1, "top", 35.75, 200), lanes, "a click does not round a fractional border");
+  const edited = moveLaneBorder(lanes, 1, "top", 30, 200);
+  assert.deepEqual(edited[0], lanes[0]);
+  assert.deepEqual(edited[1], [12.5, 30, 340.5, 48.25]);
+  assert.deepEqual(edited[2], lanes[2]);
+});
+
+test("fractional boundaries clamp exactly to image edges and touching pixel lanes keep valid slider limits", () => {
+  for (const top of [1 / 7, 1 / 3, 7 / 13, 99 / 7]) {
+    for (const width of [16 / 11, 17 / 13, 26 / 7]) {
+      const lanes = [[12.5, top, 340.5, top + width]];
+      const actualWidth = lanes[0][3] - lanes[0][1];
+      const above = moveLanePosition(lanes, 0, -100, 200)[0];
+      const below = moveLanePosition(lanes, 0, 1000, 200)[0];
+      assert.equal(above[1], 0);
+      assert.equal(below[3], 200);
+      assert.ok(Math.abs(above[3] - above[1] - actualWidth) < 1e-10);
+      assert.ok(Math.abs(below[3] - below[1] - actualWidth) < 1e-10);
+      assert.deepEqual(moveLanePosition(lanes, 0, (lanes[0][1] + lanes[0][3]) / 2, 200), lanes);
+    }
+  }
+  const lanes = Array.from({length: 15}, (_, index) => [0, 1 / 3 + index, 300, 1 / 3 + index + 1]);
+  for (let index = 1; index < lanes.length - 1; index++) {
+    for (const edge of ["top", "bottom"]) {
+      const limits = laneBorderLimits(lanes, index, edge, 200);
+      assert.ok(limits[0] <= limits[1]);
+      for (const target of [-100, 1000]) {
+        const edited = moveLaneBorder(lanes, index, edge, target, 200);
+        assert.ok(Math.abs(edited[index][3] - edited[index][1] - 1) < 1e-10);
+        assert.deepEqual(edited.filter((_, candidate) => candidate !== index), lanes.filter((_, candidate) => candidate !== index));
+      }
+    }
+  }
 });
 
 test("well overlays follow lane border adjustments without modifying horizontal evidence", () => {
@@ -139,6 +180,90 @@ class ReviewNode {
   }
   descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
 }
+
+test("boundary review reuses resize and offset-preserving drag in both orientations at zoomed and panned scales", () => {
+  const originalDocument = globalThis.document;
+  try {
+    for (const orientation of ["wells_left", "wells_top"]) {
+      for (const scale of [0.5, 1.25]) {
+        const top = orientation === "wells_top";
+        const displayBounds = bounds => top ? swapBounds(bounds) : [...bounds];
+        const displayPoint = point => top ? swapPoint(point) : point;
+        const svg = new ReviewNode();
+        const elements = Object.fromEntries(["lane-review", "excluded-right", "image-wrap"].map(id => [id, new ReviewNode()]));
+        globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+        const state = {width: top ? 200 : 400, height: top ? 400 : 200, workflowOrientation: orientation,
+          reviewMode: "boundary_first", editable: true, rightEdge: 350,
+          lanes: [displayBounds([15, 40, 350, 60])], wells: [{bounds: displayBounds([15, 40, 35, 60])}]};
+        const rect = {left: 137, top: -82, width: state.width * scale, height: state.height * scale};
+        svg.getBoundingClientRect = () => rect;
+        const events = [];
+        const review = createLaneReview({svg, getState: () => state,
+          pointerPosition: event => pointerToImage(event.clientX, event.clientY, rect, state.width, state.height),
+          repaint: () => review.draw(), emit: event => events.push(event)});
+        const nodes = () => elements["lane-review"].descendants();
+        const handle = edge => nodes().find(node => node.attributes.role === "slider" && node.dataset.reviewEdge === edge);
+        const body = () => nodes().find(node => node.attributes.class === "review-body position-handle");
+        const pointer = (point, target) => {
+          const [x, y] = displayPoint(point);
+          return {clientX: rect.left + x * scale, clientY: rect.top + y * scale, target};
+        };
+        const axes = () => laneAxisState(state);
+        review.reset(); review.draw();
+        assert.equal(nodes().filter(node => node.attributes.role === "slider").length, 3);
+        assert.equal(nodes().some(node => node.dataset.deleteLane), false);
+        assert.match(handle("position").attributes["aria-label"], /First boundary well position/);
+        assert.equal(handle("position").attributes["aria-orientation"], top ? "horizontal" : "vertical");
+        svg.dispatch("keydown", {target: handle("top"), key: top ? "ArrowLeft" : "ArrowUp", shiftKey: true});
+        assert.deepEqual(axes().lanes[0], [15, 30, 350, 60]);
+        const target = body();
+        const before = events.length;
+        svg.dispatch("pointerdown", pointer([50, 40], target));
+        svg.dispatch("pointermove", pointer([250, 75], target));
+        assert.deepEqual(axes().lanes[0], [15, 65, 350, 95], "off-center grab translates without jumping or changing upstream geometry");
+        assert.deepEqual(axes().wells[0].bounds, [15, 65, 35, 95]);
+        assert.equal(events.length, before);
+        svg.dispatch("pointerup", pointer([250, 75], target));
+        assert.deepEqual(events.at(-1), {kind: "lane_review", mode: "boundary_first", lanes: state.lanes, right_edge: 350});
+        const confirmed = structuredClone(state.lanes);
+        for (const cancel of ["pointercancel", "lostpointercapture"]) {
+          svg.dispatch("pointerdown", pointer([60, 75], body()));
+          svg.dispatch("pointermove", pointer([60, 125], body()));
+          svg.dispatch(cancel, {target: svg});
+          assert.deepEqual(state.lanes, confirmed);
+          assert.equal(svg.captures.size, 0);
+        }
+
+        state.reviewMode = "boundary_last";
+        state.lanes.push(displayBounds([15, 140, 350, 170]));
+        state.wells.push({bounds: displayBounds([15, 140, 35, 170])});
+        review.reset(); review.draw();
+        assert.equal(nodes().filter(node => node.attributes.role === "slider").length, 1);
+        assert.equal(handle("position").dataset.laneIndex, "1");
+        assert.equal(handle("top"), undefined, "last boundary cannot resize independently");
+        assert.match(handle("position").attributes["aria-label"], /Last boundary well position/);
+        svg.dispatch("pointerdown", pointer([60, 75], svg));
+        assert.equal(svg.captures.size, 0, "fixed first boundary has no draggable hit region");
+        svg.dispatch("pointerdown", pointer([60, 150], body()));
+        svg.dispatch("pointerup", pointer([280, 190], body()));
+        assert.deepEqual(axes().lanes, [[15, 65, 350, 95], [15, 170, 350, 200]]);
+        assert.deepEqual(state.lanes[0], confirmed[0]);
+        assert.equal(events.at(-1).mode, "boundary_last");
+        svg.dispatch("keydown", {target: handle("position"), key: top ? "ArrowLeft" : "ArrowUp", shiftKey: true});
+        assert.deepEqual(axes().lanes, [[15, 65, 350, 95], [15, 160, 350, 190]]);
+        assert.equal(axes().lanes[0][3] - axes().lanes[0][1], axes().lanes[1][3] - axes().lanes[1][1]);
+        state.editable = false;
+        review.draw();
+        const priorCount = events.length;
+        svg.dispatch("keydown", {target: handle("position"), key: top ? "ArrowRight" : "ArrowDown"});
+        assert.equal(events.length, priorCount);
+      }
+    }
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+});
 
 test("trash click and keyboard emit one deletion per token without altering local geometry or starting a drag", () => {
   const originalDocument = globalThis.document;
@@ -322,6 +447,35 @@ test("guide stays vertical through edits and preserves confirmed results across 
     svg.dispatch("keydown", {target: first, key: "ArrowRight"});
     assert.deepEqual(values().at(-1).points, [[31, 40], [380, 40]]);
     assert.match(elements.status.textContent, /horizontal line/);
+
+    const boundaryArgs = {width: 400, height: 200, workflow_orientation: "wells_top", editable: true,
+      points: [], image_src: "", right_edge: 180};
+    render({...boundaryArgs, token: "first-boundary", review_mode: "boundary_first",
+      lanes: [[20, 10, 30, 180]], wells: [{bounds: [20, 10, 30, 30]}]});
+    assert.equal(svg.dataset.reviewMode, "boundary_first");
+    assert.match(elements.status.textContent, /1\. First well.*leftmost/);
+    assert.match(elements.results.children.find(node => node.dataset.testid === "lane-1").attributes.class, /boundary-active/);
+    render({...boundaryArgs, token: "last-boundary", review_mode: "boundary_last",
+      lanes: [[20, 10, 30, 180], [10, 10, 20, 180]],
+      wells: [{bounds: [20, 10, 30, 30]}, {bounds: [10, 10, 20, 30]}]});
+    assert.match(elements.status.textContent, /2\. Last well.*rightmost/);
+    assert.match(elements.results.children.find(node => node.dataset.testid === "well-1").attributes.class, /boundary-fixed/);
+    assert.match(elements.results.children.find(node => node.dataset.testid === "well-2").attributes.class, /boundary-active/,
+      "last-boundary styling follows identity even before ordering is valid");
+
+    const generated = Array.from({length: 15}, (_, index) => [20 + 300 * index / 14, 10, 30 + 300 * index / 14, 180]);
+    render({...boundaryArgs, token: "generated-boundaries", review_mode: "borders", lanes: generated,
+      wells: generated.map(lane => ({bounds: [lane[0], 10, lane[2], 30]}))});
+    const controls = elements["lane-review"].descendants();
+    assert.equal(controls.filter(node => node.attributes.role === "slider").length, 30);
+    assert.equal(elements.results.children.filter(node => node.dataset.testid?.startsWith("lane-")).length, 15);
+    assert.match(elements.status.textContent, /Adjust each lane/);
+    const interior = controls.find(node => node.attributes.role === "slider" && node.dataset.laneIndex === "5" && node.dataset.reviewEdge === "top");
+    svg.dispatch("keydown", {target: interior, key: "ArrowRight"});
+    assert.equal(values().at(-1).mode, "borders");
+    assert.notDeepEqual(values().at(-1).lanes[5], generated[5]);
+    assert.deepEqual(values().at(-1).lanes.filter((_, index) => index !== 5), generated.filter((_, index) => index !== 5),
+      "subsequent manual editing preserves untouched generated boundaries and fractional lanes");
   } finally {
     for (const [name, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);

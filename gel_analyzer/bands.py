@@ -37,11 +37,16 @@ def detect_bands(image: Image.Image, lanes, workflow_orientation="wells_left", *
         if index < len(wells):
             start = max(start, wells[index].bounds[3 if top_mode else 2] + 1)
         inset = int((cross_end - cross_start) * .2)
-        region = (pixels[start:end, cross_start + inset:cross_end - inset] if top_mode
-                  else pixels[cross_start + inset:cross_end - inset, start:end])
+        # Keep exact lane centers in results. Only the array sampling window
+        # becomes integral when boundary interpolation falls between pixels.
+        sample_cross_start = math.floor(cross_start + inset)
+        sample_cross_end = math.ceil(cross_end - inset)
+        start, end = math.ceil(start), math.floor(end)
         if end - start < 7:
             results.append([])
             continue
+        region = (pixels[start:end, sample_cross_start:sample_cross_end] if top_mode
+                  else pixels[sample_cross_start:sample_cross_end, start:end])
         profile = np.median(region, axis=1 if top_mode else 0)
         smooth = np.convolve(np.pad(profile, (1, 1), mode="edge"), [.25, .5, .25], mode="valid")
         radius = max(7, min(80, round(len(profile) * .04)))

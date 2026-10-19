@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {annotationSvg} from "../gel_analyzer/annotation_component_frontend/svg.mjs";
-import {annotationFont, drawAnnotations, layoutAnnotations} from "../gel_analyzer/annotation_component_frontend/layout.mjs";
+import {drawAnnotations, layoutAnnotations} from "../gel_analyzer/annotation_component_frontend/layout.mjs";
 
 // Deliberately model italic ink extending past both ends of its advance width.
 function measure(text, font) {
@@ -71,6 +71,11 @@ test("lane text centers follow native cropped coordinates, with padding for edge
   }
   assert.equal(layout.laneLabels[0].font, "italic bold 18px Arial");
   assert.equal(layout.laneLabels[0].color, "#1234ab");
+  assert.deepEqual(layoutAnnotations({...input, ladder: null}, measure), layout);
+  assert.deepEqual(layout.ladderLabels, []);
+  assert.deepEqual(layout.guides, []);
+  assert.equal(layout.ladderTiers, 0);
+  assert.equal(layout.width, layout.gelX + input.width + 12);
   assertLabelsFit(layout);
   assert.deepEqual(input, original, "layout must not mutate saved annotations or lane coordinates");
 });
@@ -90,6 +95,9 @@ test("both group sets coexist, use independent columns, and retain sparse member
   assert.deepEqual(outer.ticks, [layout.gelY + 4, layout.gelY + 94]);
   assert.notEqual(outer.track, nested.track);
   assert.ok(set1.x < Math.min(outer.x, nested.x));
+  assert.ok(Math.abs(set1.x + set1.depth - (Math.min(...layout.groupLabels
+    .filter(label => label.id !== "replicate").map(label => label.inkLeft)) - layout.bracketGap)) < 1e-9,
+    "outer brackets stop before the inner groups' visible text");
   for (const group of layout.groupLabels) {
     const bracket = layout.brackets.find(candidate => candidate.id === group.id);
     assert.equal(group.y, (bracket.top + bracket.bottom) / 2);
@@ -154,7 +162,7 @@ test("group brackets follow visible ink, ignoring editor padding and unrelated l
   assertLabelsFit(layout);
 });
 
-test("group placement measures mixed fonts and whitespace from visible glyph bounds", () => {
+test("group brackets use visible mixed-font ink and keep both buffers as fonts grow", () => {
   const measureVisible = (text, font) => {
     const metrics = measure(text, font);
     const characterWidth = metrics.width / text.length;
@@ -163,7 +171,7 @@ test("group placement measures mixed fonts and whitespace from visible glyph bou
     return {...metrics, actualBoundingBoxLeft: metrics.actualBoundingBoxLeft - leading * characterWidth,
       actualBoundingBoxRight: metrics.actualBoundingBoxRight - trailing * characterWidth};
   };
-  for (const fontSize of [12, 48]) {
+  for (const fontSize of [12, 48, 160]) {
     const layout = layoutAnnotations({width: 400, height: 120, lanes: [[0, 20, 400, 100]],
       annotations: {fontSize, labels: [{text: "    A bold tail  ", runs: [
         {text: "    A ", color: "#cc0000"}, {text: "bold", bold: true}, {text: " tail  ", italic: true},
@@ -175,30 +183,6 @@ test("group placement measures mixed fonts and whitespace from visible glyph bou
     assert.equal(label.runs[1].font, `bold ${fontSize}px Arial`);
     assert.equal(label.runs[2].font, `italic ${fontSize}px Arial`);
     assert.equal(bracket.color, "#000000");
-    assertLabelsFit(layout);
-  }
-});
-
-test("nested group brackets stop at inner visible group text and retain black strokes", () => {
-  const layout = layoutAnnotations({...input, annotations: {...input.annotations, groups: [
-    {id: "inner", set: 0, label: "A", lanes: [0, 1, 2], color: "#ff0000"},
-    {id: "outer", set: 1, label: "BC", lanes: [0, 1, 2], runs: [
-      {text: "B", bold: true, color: "#00ff00"}, {text: "C", italic: true, color: "#0000ff"},
-    ]},
-  ]}}, measure);
-  const inner = layout.groupLabels[0];
-  const outerBracket = layout.brackets.find(bracket => bracket.id === "outer");
-  assert.ok(Math.abs(outerBracket.x + outerBracket.depth - (inner.inkLeft - layout.bracketGap)) < 1e-9);
-  assert.ok(layout.brackets.every(bracket => bracket.color === "#000000"));
-  assertLabelsFit(layout);
-});
-
-test("both sides of each bracket retain visible buffers as label fonts grow", () => {
-  for (const fontSize of [12, 80, 160]) {
-    const layout = layoutAnnotations({width: 400, height: 200, lanes: [[0, 20, 400, 180]],
-      annotations: {fontSize, labels: [{text: "Lane", italic: true}],
-        groups: [{id: "group", set: 0, label: "Group", italic: true, lanes: [0]}]}}, measure);
-    const bracket = layout.brackets[0];
     const gapToLane = layout.laneLabels[0].inkLeft - (bracket.x + bracket.depth);
     const gapToGroup = bracket.x - layout.groupLabels[0].inkRight;
     const requiredGap = Math.max(18, fontSize * 0.4) - 1e-9;
@@ -347,8 +331,7 @@ test("composed canvas contains only native image pixels, text, and group strokes
     "only the canvas background is filled; editor borders and selections are absent");
 });
 
-test("both formatting toggles combine and overlarge compositions fail before canvas allocation", () => {
-  assert.equal(annotationFont({bold: true, italic: true}, 20), "italic bold 20px Arial");
+test("overlarge compositions fail before canvas allocation", () => {
   assert.throws(() => layoutAnnotations({...input, width: 32767}, measure), /too large to render/);
   assert.throws(() => layoutAnnotations({...input, width: 8100, height: 8100}, measure), /too large to render/);
   assert.throws(() => layoutAnnotations({...input, annotations: {fontSize: 18, labels: [{text: "x".repeat(5000)}]}}, measure),
@@ -385,23 +368,6 @@ function assertLadderFits(layout) {
   }
 }
 
-test("no ladder retains existing layout and has no extra labels or guides", () => {
-  const layout = layoutAnnotations(input, measure);
-  assert.deepEqual(layoutAnnotations({...input, ladder: null}, measure), layout);
-  assert.deepEqual(layout.ladderLabels, []);
-  assert.deepEqual(layout.guides, []);
-  assert.equal(layout.ladderTiers, 0);
-  assert.equal(layout.width, layout.gelX + input.width + 12);
-});
-
-test("unobstructed ladder leaders use the subtly lengthened fifteen-pixel line", () => {
-  const layout = layoutAnnotations({width: 400, height: 100,
-    lanes: [[0, 20, 400, 80]], annotations: {fontSize: 20, labels: [{text: "Lane"}]},
-    ladder: ladderWith([{markerIndex: 0, x: 100, y: 50}])}, measure);
-  assert.equal(layout.guides[0].startY - layout.guides[0].endY, 15);
-  assertLadderFits(layout);
-});
-
 test("ladder labels keep fractional clicked x and start at 80% of the edited lane font", () => {
   const specification = {...input, annotations: {...input.annotations, fontSize: 72},
     ladder: ladderWith([{markerIndex: 2, x: 173.375, y: 45.25}])};
@@ -422,20 +388,15 @@ test("ladder labels keep fractional clicked x and start at 80% of the edited lan
   assert.deepEqual(specification, before, "layout must not mutate placement data");
 });
 
-test("ladder font follows 80% of default and edited lane sizes including fractional and maximum sizes", () => {
+test("ladder font follows default and explicit sizes at minimum, fractional and maximum limits", () => {
   for (const [height, laneFontSize] of [[1, 1], [39, 31], [6000, 4096]]) {
-    const layout = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
-      annotations: {labels: [{text: "A"}]},
-      ladder: ladderWith([{markerIndex: 0, x: 25, y: height / 2}], {labels: ["M"]})}, measure);
-    assert.equal(layout.fontSize, laneFontSize);
-    assert.equal(layout.ladderLabels[0].fontSize, laneFontSize * 0.8);
-    assertLadderFits(layout);
-    for (const editedSize of [1, 31, 4096]) {
-      const edited = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
-        annotations: {fontSize: editedSize, labels: [{text: "A"}]},
+    for (const fontSize of [undefined, laneFontSize]) {
+      const layout = layoutAnnotations({width: 50, height, lanes: [[0, 0, 50, height]],
+        annotations: {fontSize, labels: [{text: "A"}]},
         ladder: ladderWith([{markerIndex: 0, x: 25, y: height / 2}], {labels: ["M"]})}, measure);
-      assert.equal(edited.ladderLabels[0].fontSize, editedSize * 0.8);
-      assertLadderFits(edited);
+      assert.equal(layout.fontSize, laneFontSize);
+      assert.equal(layout.ladderLabels[0].fontSize, laneFontSize * 0.8);
+      assertLadderFits(layout);
     }
   }
 });

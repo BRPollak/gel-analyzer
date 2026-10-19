@@ -7,7 +7,6 @@ import pytest
 from gel_analyzer.auto_crop import find_gel_crop
 from gel_analyzer.orientation import (
     OrientationError,
-    fit_gel_rectangle,
     orient_gel,
 )
 
@@ -57,25 +56,18 @@ def _synthetic_gel(clockwise_degrees=0, dtype=np.uint8, markers=True):
 
 
 @pytest.mark.parametrize("clockwise_degrees", [-25, -14, 0, 11, 25])
-def test_fit_follows_all_four_tilted_outer_edges(clockwise_degrees):
+def test_fitted_outline_and_straighten_then_flip_preserve_original_sides(
+    clockwise_degrees,
+):
     image, expected_corners = _synthetic_gel(clockwise_degrees)
 
-    rectangle = fit_gel_rectangle(image)
+    result = orient_gel(image)
 
+    rectangle = result.rectangle
     assert rectangle.angle_degrees == pytest.approx(clockwise_degrees, abs=1)
     assert rectangle.width == pytest.approx(_GEL_WIDTH, abs=6)
     assert rectangle.height == pytest.approx(_GEL_HEIGHT, abs=6)
     np.testing.assert_allclose(rectangle.corners, expected_corners, atol=3)
-
-
-@pytest.mark.parametrize("clockwise_degrees", [-25, -14, 0, 11, 25])
-def test_straighten_then_flip_maps_original_sides_and_crops_outline(
-    clockwise_degrees,
-):
-    image, _ = _synthetic_gel(clockwise_degrees)
-
-    result = orient_gel(image)
-
     assert result.counterclockwise_degrees == pytest.approx(
         90 + clockwise_degrees, abs=1
     )
@@ -214,7 +206,7 @@ def test_smooth_illumination_gradient_is_not_a_gel_outline():
 
 
 def _assert_orientation_preserves_physical_outline_or_declines(image, bounds):
-    """Exercise the real first crop and inspect the accepted source rectangle."""
+    """Cover crop enclosure and orientation together for the same physical edge."""
     first_crop = find_gel_crop(image)
     left, top, right, bottom = bounds
     assert first_crop[0] <= left < right <= first_crop[2]

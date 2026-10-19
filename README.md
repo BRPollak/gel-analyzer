@@ -24,6 +24,11 @@ confirming orientation, define a line through
 selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
+**Define boundary wells** provides a guided alternative: adjust the first outside
+well, place a matching last well, and generate the total lane count (including
+both boundaries). Lane centers are equally spaced and all widths match. **Back**
+retains the boundary positions; **Cancel** restores the previous arrangement.
+Generated lanes remain individually editable and feed the normal crop and analysis.
 After cropping, annotate lanes and two independent sets of groups, then confirm
 and download as PNG, JPEG, TIFF, or SVG. Optional ladder size labels can be placed
 above the gel in the default orientation, or to its left in **Wells at top**.
@@ -649,9 +654,7 @@ display scaling and orientation never alter the original uploaded bytes.
 
 ```sh
 uv run pytest
-node --test tests/test_well_component.mjs
-node --test tests/test_annotation_layout.mjs
-node --test tests/test_preview_fit.mjs
+node --test tests/*.mjs
 ```
 
 The JavaScript unit tests require Node.js 18 or newer. Running the app itself
@@ -720,39 +723,16 @@ extensions on each side. Integration tests cover exact 16-bit/RGBA crop pixels,
 TIFF orientation,
 completed-preview rendering, and detection only once per upload.
 
-- `.venv/bin/python -m pytest -q`: **868 passed, 9 skipped**, including crop,
-  image I/O, orientation, well detection, automatic lane refinement, count
-  lifecycle, manual review, lane insertion/deletion, annotation validation,
-  confirmation/editing, backward progress navigation, and app workflow tests.
-  The nine original-TIFF sample cases require `GEL_ANALYZER_EXAMPLE_TIFF`;
-  the saved oriented sample was separately checked across all nine guides.
-- `node --test tests/*.mjs`: **100 passed** across the browser component suites below.
-- `node --test tests/test_annotation_groups.mjs`: **11 passed**, checking empty
-  defaults, lane ranges, All/Clear, individual selections, keyboard creation,
-  group editing, rich-text preservation, and invalid-input handling.
-- `node --test tests/test_well_component.mjs`: **11 passed**, checking scaled and
-  offset coordinates, edge clipping, endpoint order, handle sizing, constrained
-  border/right-edge movement, independent targeting of narrow-lane handles,
-  responsive trash buttons, and mouse/keyboard deletion events.
-- `node --test tests/test_annotation_layout.mjs`: **29 passed**, checking native
-  lane alignment, both group sets, overlapping groups, changing memberships,
-  bold/italic text metrics, lane-based font sizing, edge padding, dense lanes,
-  clean composition, and rotated ladder geometry, font sizing to prevent collisions,
-  and padding.
-- `node --test tests/test_ladder_component.mjs`: **14 passed**, checking manual
-  marker placement/correction, keyboard/touch behavior, guarded changes, exact
-  coordinate conversion, responsive preview height, and ladder reference photos.
-- `node --test tests/test_preview_fit.mjs`: **7 passed**, checking portrait and
-  landscape fitting, viewport-height budgets, lane-control gutters, native
-  pointer coordinates, and protection against iframe resize feedback.
-- `node --test tests/test_rich_text.mjs`: **10 passed**, checking selection
-  formatting, mixed-label caret toggles, keyboard toolbar focus, text edits,
-  undo snapshots, and compatibility with plain labels.
-- `node --test tests/test_orientation_component.mjs`: **15 passed**, checking
-  rectangle geometry, pointer and keyboard controls, cancellation, and stale events.
-- `node --test tests/test_workspace_viewport.mjs`: **3 passed**, checking header
-  and control space, resizing, and stable preview size and scrolling during edits.
-- `node --test tests/*.mjs`: **89 passed** across the JavaScript suites.
+The [October 2026 test suite review](docs/test-suite-review.md) records the
+consolidation of all Python and JavaScript suites, including retained regression
+coverage and before/after case counts. Run both commands above for a complete
+check. Python covers image integrity, scientific geometry, app state, exports,
+projects, and desktop lifecycle; JavaScript covers component interactions,
+coordinate mapping, rich text, annotation layout, and responsive previews.
+The nine optional original-TIFF sample cases require
+`GEL_ANALYZER_EXAMPLE_TIFF`. Desktop integration tests need local loopback-port
+access.
+
 - All five supplied 2749 × 2199 TIFFs now crop successfully (previously two of
   five). Four were used for tuning; one was reserved for validation and
   retained its previously accepted bounds. Visual review confirms the visible

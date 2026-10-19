@@ -18,8 +18,11 @@ def pixels(image):
     ]
 
 
-@pytest.mark.parametrize("mode", ["L", "RGBA", "I;16", "I;16B"])
-@pytest.mark.parametrize("tiff_orientation", [1, 6])
+@pytest.mark.parametrize("mode,tiff_orientation", [
+    # TIFF decoding exhaustively covers transforms/codecs in image_io and
+    # crop_pipeline; this integration checks each pixel mode reaches orient_gel.
+    ("L", 1), ("L", 6), ("RGBA", 6), ("I;16", 1), ("I;16B", 6),
+])
 def test_orientation_uses_first_crop_pixels_and_keeps_tiff_source(
     monkeypatch, mode, tiff_orientation
 ):

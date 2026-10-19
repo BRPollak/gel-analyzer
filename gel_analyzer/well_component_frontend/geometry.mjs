@@ -38,18 +38,49 @@ export function screenRadius(pixels, rect, width) {
   return rect.width > 0 ? pixels * width / rect.width : pixels;
 }
 
-/** Integer border limits retain one pixel of height and ordered, separate lanes. */
+/** Border limits retain one pixel of height and ordered, separate lanes. */
 export function laneBorderLimits(lanes, index, edge, height) {
   const lane = lanes[index];
-  if (edge === "top") return [index === 0 ? 0 : lanes[index - 1][3], lane[3] - 1];
-  if (edge === "bottom") return [lane[1] + 1, index === lanes.length - 1 ? height : lanes[index + 1][1]];
-  throw new Error("Unknown lane border");
+  let limits;
+  if (edge === "top") limits = [index === 0 ? 0 : lanes[index - 1][3], lane[3] - 1];
+  else if (edge === "bottom") limits = [lane[1] + 1, index === lanes.length - 1 ? height : lanes[index + 1][1]];
+  else throw new Error("Unknown lane border");
+  // Touching one-pixel lanes can differ by a floating-point epsilon after
+  // interpolation. An immovable border must not acquire inverted slider limits.
+  if (limits[0] > limits[1]) {
+    const current = lane[edge === "top" ? 1 : 3];
+    return [current, current];
+  }
+  return limits;
 }
 
 export function moveLaneBorder(lanes, index, edge, coordinate, height) {
   const [minimum, maximum] = laneBorderLimits(lanes, index, edge, height);
   const result = lanes.map(lane => [...lane]);
+  // Merely grabbing a generated fractional border must not snap it to a pixel.
+  if (Math.abs(coordinate - lanes[index][edge === "top" ? 1 : 3]) < 1e-9) return result;
   result[index][edge === "top" ? 1 : 3] = Math.min(maximum, Math.max(minimum, Math.round(coordinate)));
+  return result;
+}
+
+/** Translate a boundary along the lane-order axis without changing its shape. */
+export function lanePositionLimits(lane, height) {
+  const halfWidth = (lane[3] - lane[1]) / 2;
+  return [halfWidth, height - halfWidth];
+}
+
+export function moveLanePosition(lanes, index, coordinate, height) {
+  const lane = lanes[index];
+  const result = lanes.map(existing => [...existing]);
+  if (Math.abs(coordinate - (lane[1] + lane[3]) / 2) < 1e-9) return result;
+  const [minimum, maximum] = lanePositionLimits(lane, height);
+  const center = Math.min(maximum, Math.max(minimum, coordinate));
+  const laneWidth = lane[3] - lane[1];
+  // Anchor clamped edges exactly: adding an offset to both old endpoints can
+  // otherwise produce -epsilon or height + epsilon, which is outside the image.
+  const top = coordinate >= maximum ? height - laneWidth : Math.max(0, center - minimum);
+  const bottom = coordinate >= maximum ? height : coordinate <= minimum ? laneWidth : Math.min(height, center + minimum);
+  result[index] = [lane[0], top, lane[2], bottom];
   return result;
 }
 
