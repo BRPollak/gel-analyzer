@@ -181,6 +181,151 @@ class ReviewNode {
   descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
 }
 
+function withManualReview(orientation, scale, dense, callback) {
+  const originalDocument = globalThis.document;
+  const top = orientation === "wells_top";
+  const displayBounds = bounds => top ? swapBounds(bounds) : [...bounds];
+  const displayPoint = point => top ? swapPoint(point) : point;
+  const svg = new ReviewNode();
+  const elements = Object.fromEntries(["lane-review", "excluded-right", "image-wrap"].map(id => [id, new ReviewNode()]));
+  globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+  const lanes = Array.from({length: dense ? 12 : 3}, (_, index) =>
+    [20, 20 + index * (dense ? 8 : 80), 980, 20 + index * (dense ? 8 : 80) + (dense ? 4 : 40)]);
+  const state = {width: top ? 300 : 1000, height: top ? 1000 : 300, workflowOrientation: orientation,
+    reviewMode: "borders", editable: true, rightEdge: 980,
+    lanes: lanes.map(displayBounds),
+    wells: lanes.map((lane, review_id) => ({review_id, bounds: displayBounds([lane[0], lane[1], 45, lane[3]])}))};
+  const rect = {left: 137, top: -82, width: state.width * scale, height: state.height * scale};
+  svg.getBoundingClientRect = () => rect;
+  const events = [];
+  const review = createLaneReview({svg, getState: () => state,
+    pointerPosition: event => pointerToImage(event.clientX, event.clientY, rect, state.width, state.height),
+    repaint: () => review.draw(), emit: event => events.push(event)});
+  const nodes = () => elements["lane-review"].descendants();
+  const handle = (index, edge = "top") => nodes().find(node => node.attributes.role === "slider" &&
+    node.dataset.laneIndex === String(index) && node.dataset.reviewEdge === edge);
+  const visual = index => nodes().find(node => node.dataset.laneVisual === String(index));
+  const button = index => nodes().find(node => node.dataset.deleteLane === String(index));
+  const visibleLabels = () => nodes().filter(node => node.attributes.class === "manual-label" &&
+    node.attributes.visibility === "visible").map(node => node.children[1].textContent);
+  const pointer = (point, target = svg) => {
+    const [x, y] = displayPoint(point);
+    return {clientX: rect.left + x * scale, clientY: rect.top + y * scale, target};
+  };
+  try {
+    review.reset(); review.draw();
+    callback({svg, state, review, events, nodes, handle, visual, button, visibleLabels, pointer,
+      axes: () => laneAxisState(state)});
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document;
+    else globalThis.document = originalDocument;
+  }
+}
+
+test("manual review connects hover, body selection, focus and stable colors for sparse and dense lanes at every scale", () => {
+  for (const orientation of ["wells_left", "wells_top"]) {
+    for (const scale of [.2, .5, 1.25]) {
+      for (const dense of [false, true]) {
+        withManualReview(orientation, scale, dense, ({svg, state, review, events, handle, visual, button, visibleLabels, pointer, axes}) => {
+          const originalLanes = structuredClone(state.lanes);
+          const colors = state.wells.map((_, index) => visual(index).attributes.style);
+          state.wells.forEach((well, index) => {
+            if (index) assert.notEqual(colors[index], colors[index - 1], "adjacent lanes have distinct accents");
+            assert.equal(handle(index).attributes.style, colors[index]);
+            assert.equal(handle(index, "bottom").attributes.style, colors[index]);
+            assert.equal(button(index).attributes.style, colors[index]);
+            assert.equal(button(index).querySelector(".delete-number").textContent, String(index + 1));
+            assert.ok(Math.abs(Number(handle(index).querySelector(".review-grip").attributes.r) * scale - 7) < 1e-10);
+          });
+          const bodyPoint = index => [950, (axes().lanes[index][1] + axes().lanes[index][3]) / 2];
+          svg.dispatch("pointermove", pointer(bodyPoint(1)));
+          assert.equal(visual(1).dataset.highlighted, "true");
+          assert.equal(handle(1).dataset.highlighted, "true");
+          assert.deepEqual(visibleLabels(), ["Lane 2"]);
+          svg.dispatch("pointerdown", pointer(bodyPoint(1)));
+          assert.equal(visual(1).dataset.selected, "true");
+          assert.equal(handle(1).focused, true, "body selection makes keyboard resizing available");
+          assert.equal(svg.captures.size, 0, "selecting the body does not start a resize");
+          assert.equal(events.length, 0);
+          assert.deepEqual(state.lanes, originalLanes);
+          svg.dispatch("pointermove", pointer(bodyPoint(2)));
+          assert.equal(visual(1).dataset.highlighted, "true", "selection stays visible while another lane is hovered");
+          assert.equal(visual(2).dataset.highlighted, "true");
+          assert.deepEqual(visibleLabels(), ["Lane 3"]);
+          svg.dispatch("pointerleave", {target: svg});
+          assert.equal(visual(2).dataset.highlighted, "false");
+          assert.equal(visual(1).dataset.selected, "true");
+          assert.deepEqual(visibleLabels(), ["Lane 2"]);
+          svg.dispatch("focusin", {target: handle(2)});
+          assert.equal(visual(1).dataset.selected, "false");
+          assert.equal(visual(2).dataset.selected, "true");
+          assert.deepEqual(visibleLabels(), ["Lane 3"]);
+          svg.dispatch("keydown", {target: handle(2), key: orientation === "wells_top" ? "ArrowRight" : "ArrowDown"});
+          assert.equal(events.length, 1);
+          assert.equal(axes().lanes[2][1], laneAxisState({...state, lanes: originalLanes}).lanes[2][1] + 1);
+          assert.equal(handle(2).attributes.style, colors[2], "resizing retains the selected accent");
+          assert.deepEqual(visibleLabels(), ["Lane 3"]);
+
+          // A server-confirmed deletion reconstructs the component with the survivors' identities.
+          state.lanes = state.lanes.slice(1);
+          state.wells = state.wells.slice(1);
+          review.reset(); review.draw();
+          state.wells.forEach((well, index) => {
+            assert.equal(visual(index).attributes.style, colors[well.review_id]);
+            assert.equal(handle(index).attributes.style, colors[well.review_id]);
+            assert.equal(button(index).attributes.style, colors[well.review_id]);
+          });
+          assert.deepEqual(visibleLabels(), [], "reconstructed controls do not leave a stale selected label");
+        });
+      }
+    }
+  }
+});
+
+test("manual resizing resolves overlapping line targets geometrically, retains grab offset, and rolls back cancellation", () => {
+  for (const orientation of ["wells_left", "wells_top"]) {
+    for (const scale of [.2, .5, 1.25]) {
+      for (const dense of [false, true]) {
+        withManualReview(orientation, scale, dense, ({svg, state, events, nodes, handle, visual, visibleLabels, pointer, axes}) => {
+          const initial = structuredClone(state.lanes);
+          const initialWells = structuredClone(state.wells);
+          const top = axes().lanes[1][1];
+          const wrongTarget = nodes().find(node => node.attributes.class === "review-hit border-handle" &&
+            node.dataset.laneIndex === "2" && node.dataset.reviewEdge === "bottom");
+          const grab = [950, top + .2]; // Far from every staggered grip, inside the border tolerance.
+          for (const cancel of ["pointercancel", "lostpointercapture"]) {
+            svg.dispatch("pointermove", pointer(grab, wrongTarget));
+            assert.deepEqual(visibleLabels(), ["Lane 2"], "hover and resize use the same geometric target");
+            svg.dispatch("pointerdown", pointer(grab, wrongTarget));
+            assert.equal(svg.captures.size, 1);
+            assert.equal(handle(1).dataset.active, "true");
+            assert.equal(handle(2, "bottom").dataset.active, "false");
+            assert.deepEqual(state.lanes, initial, "grabbing a border does not snap or move it");
+            svg.dispatch("pointermove", pointer([950, top + 1.2], wrongTarget));
+            assert.equal(axes().lanes[1][1], top + 1, "resize subtracts the original grab offset");
+            assert.deepEqual(state.lanes.filter((_, index) => index !== 1), initial.filter((_, index) => index !== 1));
+            assert.equal(events.length, 0, "live resize remains local until release");
+            svg.dispatch(cancel, {target: svg});
+            assert.deepEqual(state.lanes, initial);
+            assert.deepEqual(state.wells, initialWells);
+            assert.equal(svg.captures.size, 0);
+            assert.equal(handle(1).dataset.active, "false");
+            assert.equal(visual(1).dataset.selected, "true");
+            assert.equal(events.length, 0);
+          }
+          svg.dispatch("pointerdown", pointer(grab, wrongTarget));
+          svg.dispatch("pointerup", pointer([950, top + 2.2], wrongTarget));
+          assert.equal(axes().lanes[1][1], top + 2);
+          assert.equal(events.length, 1);
+          assert.deepEqual(events[0].lanes, state.lanes, "events retain displayed XY in both orientations");
+          assert.equal(svg.captures.size, 0);
+          assert.equal(handle(1).dataset.active, "false");
+        });
+      }
+    }
+  }
+});
+
 test("larger lane crop grip remains selectable across preview scales without jumping the crop", () => {
   const originalDocument = globalThis.document;
   try {
@@ -353,6 +498,12 @@ test("trash click and keyboard emit one deletion per token without altering loca
     svg.dispatch("keydown", {target: button, key: "Enter"});
     assert.equal(events.length, 1, "repeat activation waits for server token reset");
 
+    review.reset();
+    review.draw();
+    svg.dispatch("click", {target: findButton(0), detail: 2});
+    svg.dispatch("keydown", {target: findButton(0), key: "Enter", repeat: true});
+    assert.equal(events.length, 1, "repeated click and held-key events stay ignored after a reset");
+
     for (const key of ["Enter", " "]) {
       review.reset();
       review.draw();
@@ -521,7 +672,7 @@ test("guide stays vertical through edits and preserves confirmed results across 
       wells: generated.map(lane => ({bounds: [lane[0], 10, lane[2], 30]}))});
     const controls = elements["lane-review"].descendants();
     assert.equal(controls.filter(node => node.attributes.role === "slider").length, 30);
-    assert.equal(elements.results.children.filter(node => node.dataset.testid?.startsWith("lane-")).length, 15);
+    assert.equal(controls.filter(node => node.attributes.class === "manual-box").length, 15);
     assert.match(elements.status.textContent, /Adjust each lane/);
     const interior = controls.find(node => node.attributes.role === "slider" && node.dataset.laneIndex === "5" && node.dataset.reviewEdge === "top");
     svg.dispatch("keydown", {target: interior, key: "ArrowRight"});
@@ -529,6 +680,101 @@ test("guide stays vertical through edits and preserves confirmed results across 
     assert.notDeepEqual(values().at(-1).lanes[5], generated[5]);
     assert.deepEqual(values().at(-1).lanes.filter((_, index) => index !== 5), generated.filter((_, index) => index !== 5),
       "subsequent manual editing preserves untouched generated boundaries and fractional lanes");
+  } finally {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  }
+});
+
+test("dense wells-top controls reserve overflow before measuring the fitted image and stay stable on redraw and resize", async () => {
+  const globals = ["document", "window", "ResizeObserver", "requestAnimationFrame", "cancelAnimationFrame", "getComputedStyle"];
+  const originals = new Map(globals.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const elements = Object.fromEntries(["gel", "component", "gel-image", "image-wrap", "status", "results",
+    "endpoint-0", "endpoint-1", "guide", "guide-halo", "lane-review", "excluded-right"]
+    .map(id => [id, new ReviewNode()]));
+  const svg = elements.gel;
+  const wrap = elements["image-wrap"];
+  const component = elements.component;
+  component.clientWidth = 640;
+  const pixels = value => Number.parseFloat(value) || 0;
+  // Model the browser's border-box layout: the SVG gets only the wrapper's
+  // content width, while its aspect ratio still comes from the source image.
+  svg.getBoundingClientRect = () => {
+    const width = (pixels(wrap.style.width) || component.clientWidth) - pixels(wrap.style.paddingRight);
+    const height = width * Number(svg.attributes.height || 1000) / Number(svg.attributes.width || 700);
+    return {left: 20, top: 30, width, height};
+  };
+  component.getBoundingClientRect = () => ({width: component.clientWidth,
+    height: svg.getBoundingClientRect().height + pixels(wrap.style.paddingBottom) + 40});
+  elements.status.getBoundingClientRect = () => ({width: component.clientWidth, height: 40});
+  const host = new ReviewNode();
+  host.parent = {innerHeight: 900, postMessage() {}, addEventListener() {}};
+  const frames = new Map();
+  let nextFrame = 0;
+  let observeResize;
+  globalThis.document = {getElementById: id => elements[id], createElementNS: () => new ReviewNode()};
+  globalThis.window = host;
+  globalThis.ResizeObserver = class {
+    constructor(callback) { observeResize = callback; }
+    observe() {}
+    disconnect() {}
+  };
+  globalThis.requestAnimationFrame = callback => { frames.set(++nextFrame, callback); return nextFrame; };
+  globalThis.cancelAnimationFrame = id => frames.delete(id);
+  globalThis.getComputedStyle = () => ({});
+  const flushFrames = () => {
+    for (let turn = 0; frames.size && turn < 10; turn++) {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach(callback => callback());
+    }
+    assert.equal(frames.size, 0, "layout should settle without a fit feedback loop");
+  };
+  const lanes = Array.from({length: 24}, (_, index) => [20 + index * 27, 20, 32 + index * 27, 980]);
+  const args = {token: "dense-top-fit", width: 700, height: 1000, workflow_orientation: "wells_top",
+    editable: true, review_mode: "borders", right_edge: 980, points: [], lanes,
+    wells: lanes.map((lane, review_id) => ({review_id, bounds: [lane[0], 20, lane[2], 45]})), image_src: ""};
+  const render = () => host.dispatch("message", {source: host.parent, data: {type: "streamlit:render", args}});
+  const checkFit = expectedWidth => {
+    const rect = svg.getBoundingClientRect();
+    const scale = Number(wrap.dataset.previewScale);
+    assert.ok(Math.abs(rect.width - expectedWidth) < 1e-8);
+    assert.ok(Math.abs(rect.width / 700 - scale) < 1e-10, "actual SVG scale matches the fit used to size controls");
+    assert.ok(Math.abs(rect.height / 1000 - scale) < 1e-10);
+    assert.ok(rect.height + pixels(wrap.style.paddingBottom) <= Number(wrap.dataset.heightBudget) + 1e-8);
+    assert.ok(rect.width <= 700 && rect.height <= 1000, "control overflow must not upscale the image");
+    assert.equal(pixels(wrap.style.width), 24 * 32, "only the trash controls extend the wrapper to 768 pixels");
+    assert.ok(Math.abs(rect.width + pixels(wrap.style.paddingRight) - 768) < 1e-8);
+    const grip = elements["lane-review"].descendants().find(node => node.attributes.class === "review-grip");
+    assert.ok(Math.abs(Number(grip.attributes.r) * scale - 7) < 1e-8, "grips retain their screen size after overflow layout");
+  };
+  try {
+    await import("../gel_analyzer/well_component_frontend/overlay.mjs?dense-fit");
+    render();
+    checkFit(504); // 900 viewport - 100 reserve - 40 status - 40 control gutter.
+    flushFrames();
+    checkFit(504);
+    render();
+    flushFrames();
+    checkFit(504);
+    const rect = svg.getBoundingClientRect();
+    svg.dispatch("pointermove", {target: svg, clientX: rect.left + 26 * rect.width / 700,
+      clientY: rect.top + 950 * rect.height / 1000});
+    checkFit(504);
+
+    component.clientWidth = 360;
+    observeResize([{contentRect: {width: 360}}]);
+    flushFrames();
+    checkFit(360);
+    host.dispatch("resize", {target: host});
+    flushFrames();
+    checkFit(360);
+    component.clientWidth = 640;
+    observeResize([{contentRect: {width: 640}}]);
+    flushFrames();
+    checkFit(504);
   } finally {
     for (const [name, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
@@ -573,11 +819,12 @@ test("wells-top review draws vertical borders and emits displayed XY for keyboar
     assert.equal(handle.attributes["aria-orientation"], "horizontal");
     assert.match(handle.attributes["aria-label"], /left boundary/);
     assert.equal(Number(handle.dataset.x), 10);
-    assert.equal(Number(handle.dataset.y), 10 + 170 / 3);
+    assert.ok(Number(handle.dataset.y) > 10 && Number(handle.dataset.y) < 180);
+    assert.notEqual(handle.dataset.y, findHandle("top", 1).dataset.y, "neighboring grips use different columns along the lane");
     svg.dispatch("keydown", {target: handle, key: "ArrowRight", shiftKey: true});
     assert.deepEqual(events.at(-1).lanes[0], [20, 10, 24, 180]);
     assert.deepEqual(state.wells[0].bounds, [20, 10, 24, 30]);
-    point = [20, 10 + 170 / 3];
+    point = [Number(handle.dataset.x), Number(handle.dataset.y)];
     svg.dispatch("pointerdown", {target: handle});
     point = [18, 130];
     svg.dispatch("pointerup", {target: handle});

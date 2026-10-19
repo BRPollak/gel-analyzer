@@ -7,6 +7,7 @@ from PIL import Image
 import pytest
 
 from gel_analyzer import wells
+from gel_analyzer.projects import load_project, save_project
 
 
 DETECTED_BOUNDS = ((30, 20, 46, 50), (32, 80, 49, 112))
@@ -205,6 +206,69 @@ def test_delete_renumbers_survivors_rejects_old_events_and_preserves_latest_drag
     assert app.session_state["lane_crop"].crop_box == (29, 69, 240, 123)
     app.button(key="revise_lane_crop").click().run()
     assert bounds(workflow) == ((32, 72, 49, 120),)
+
+
+def test_review_colors_keep_identity_after_resize_delete_add_and_navigation(workflow):
+    start_review(workflow)
+    app = workflow.app
+
+    def identities():
+        return tuple(well["review_id"] for well in workflow.renders[-1][1]["wells"])
+
+    assert identities() == (0, 1)
+    lane_event(workflow)
+    assert identities() == (0, 1)
+    lane_event(workflow, revision=2, action="delete", lane_index=0)
+    assert identities() == (1,)
+    app.button(key="add_lane").click().run()
+    assert identities() == (1, 2)
+    app.button(key="confirm_lane_borders").click().run()
+    assert identities() == (1, 2)
+    app.button(key="back_to_lane_borders").click().run()
+    assert identities() == (1, 2)
+    app.button(key="back_to_well_review").click().run()
+    app.button(key="adjust_lane_borders").click().run()
+    assert not app.exception
+    assert identities() == (1, 2)
+    assert len(workflow.detections) == 1
+
+
+def test_review_identity_is_not_reused_when_all_lanes_are_deleted(workflow):
+    start_review(workflow)
+    app = workflow.app
+    lane_event(workflow, action="delete", lane_index=1)
+    lane_event(workflow, lanes=(REVIEWED_LANES[0],), action="delete", lane_index=0)
+    assert app.session_state["lane_review_ids"] == ()
+    app.button(key="add_lane").click().run()
+    assert not app.exception
+    assert app.session_state["lane_review_ids"] == (2,)
+    assert workflow.renders[-1][1]["wells"][0]["review_id"] == 2
+
+
+def test_review_identity_initializes_legacy_and_restored_state_without_changing_saved_results(workflow):
+    start_review(workflow)
+    app = workflow.app
+    del app.session_state["lane_review_ids"]
+    del app.session_state["lane_review_next_id"]
+    app.run()
+    assert not app.exception
+    assert app.session_state["lane_review_ids"] == (0, 1)
+    lane_event(workflow, action="delete", lane_index=0)
+    assert app.session_state["lane_review_ids"] == (1,)
+    snapshot = save_project(app.session_state)
+    assert b"lane_review_ids" not in snapshot
+    assert b"review_id" not in snapshot
+    restored = load_project(snapshot)
+    retained = restored["lane_wells"]
+    # Loading into an existing session must not reuse another source's colors.
+    for key, value in restored.items():
+        app.session_state[key] = value
+    app.run()
+    assert not app.exception
+    assert app.session_state["lane_wells"] == retained
+    assert app.session_state["lane_review_ids"] == (0,)
+    app.run()
+    assert app.session_state["lane_review_ids"] == (0,)
 
 
 def test_delete_all_blocks_confirmation_and_add_restores_review(workflow):

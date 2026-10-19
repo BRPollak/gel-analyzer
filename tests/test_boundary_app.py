@@ -209,6 +209,34 @@ def test_back_keeps_both_positions_and_relinks_width(boundary_workflow):
     assert all(abs(bounds[3] - bounds[1] - 8) < 1e-10 for bounds in _canonical(workflow))
 
 
+def test_boundary_cancel_restores_review_identity_and_generate_starts_a_new_palette(boundary_workflow):
+    workflow = boundary_workflow
+    app = workflow.app
+    _event(workflow, [(20, 50), (80, 112)], action="delete", lane_index=0)
+    assert app.session_state["lane_review_ids"] == (1,)
+    _start(workflow, 15)
+    assert app.session_state["lane_review_ids"] == (0,)
+    _first(workflow)
+    assert app.session_state["lane_review_ids"] == (0, 1)
+    app.button(key="back_to_first_well").click().run()
+    assert app.session_state["lane_review_ids"] == (0,)
+    _first(workflow)
+    assert app.session_state["lane_review_ids"] == (0, 1)
+    # Presentation metadata must not leak through the boundary geometry backup.
+    saved = save_project(app.session_state)
+    assert b"review_id" not in saved
+    assert len(load_project(saved)["lane_wells"]) == 1
+    app.button(key="cancel_boundary_wells").click().run()
+    assert app.session_state["lane_review_ids"] == (1,)
+    assert app.session_state["lane_review_next_id"] == 2
+    _start(workflow, 15)
+    _first(workflow)
+    _event(workflow, [(10, 16), (177, 183)])
+    app.button(key="generate_boundary_lanes").click().run()
+    assert not app.exception
+    assert app.session_state["lane_review_ids"] == tuple(range(15))
+
+
 @pytest.mark.parametrize("cancel_stage", ["first", "last"])
 def test_cancel_restores_pending_prior_arrangement_and_rejects_stale_events(boundary_workflow, cancel_stage):
     workflow = boundary_workflow

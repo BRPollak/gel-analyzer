@@ -72,6 +72,11 @@ function fitPreview() {
     reviewMode: state.reviewMode, laneCount: state.lanes.length, workflowOrientation: state.workflowOrientation});
   wrap.style.width = `${fit.wrapperWidth}px`;
   wrap.style.maxWidth = `${Math.max(state.width + fit.rightGutter, fit.wrapperWidth)}px`;
+  // Allocate the control gutter before measuring the SVG for screen-sized
+  // handles. Otherwise dense vertical lanes stretch the image to the width of
+  // their trash controls, and draw() measures the wrong scale on every fit.
+  wrap.style.paddingRight = `${fit.rightGutter + fit.overflowWidth}px`;
+  wrap.style.paddingBottom = `${fit.bottomGutter + fit.overflowHeight}px`;
   wrap.dataset.previewScale = String(fit.scale);
   wrap.dataset.heightBudget = String(fit.heightBudget);
   wrap.dataset.controlsOverflow = String(fit.controlsOverflow);
@@ -135,7 +140,7 @@ function drawGuide() {
     ? `2. Last well — Drag the gold lane to the ${state.workflowOrientation === "wells_top" ? "rightmost" : "bottommost"} loaded well, then generate lanes. The first well stays fixed.`
     : state.workflowOrientation === "wells_top"
     ? state.reviewMode === "borders"
-      ? "Adjust each lane’s left and right borders. Use Left/Right keys on a focused handle. Delete a lane with the trash button below it, or use Add lane to insert one at the right of the detection line."
+      ? "Adjust each lane’s left and right borders. Click a lane to select it; its label and outlined handles identify it. Use Left/Right keys on a focused handle. Numbered trash buttons below the lanes delete them."
       : state.reviewMode === "extent"
       ? "Drag the gold bottom boundary up or down to choose a shared lane length. The shaded region will be excluded. Use Up/Down keys on the handle."
       : !state.editable ? "Detected wells and vertical lanes."
@@ -143,7 +148,7 @@ function drawGuide() {
       : state.points.length === 1 ? "Click the other end of the well range. The line stays horizontal."
       : "Drag either dot to adjust the range or move the horizontal line up or down. Arrow keys also adjust a focused dot."
     : state.reviewMode === "borders"
-    ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane to insert one at the bottom of the detection line."
+    ? "Adjust each lane’s top and bottom borders. Click a lane to select it; its label and outlined handles identify it. Use Up/Down keys on a focused handle. Numbered trash buttons to the right delete lanes."
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
     : !state.editable
@@ -169,6 +174,9 @@ function element(name, attributes, parent = resultLayer) {
 function drawResults() {
   resultLayer.replaceChildren();
   if (!state) return;
+  // Manual review owns its paired box/handle styling and shows only the active
+  // lane label, avoiding a pile of overlapping numbers on a dense gel.
+  if (state.reviewMode === "borders") return;
   const rect = svg.getBoundingClientRect();
   const unit = screenRadius(1, rect, state.width);
   const boundaryMode = ["boundary_first", "boundary_last"].includes(state.reviewMode);
