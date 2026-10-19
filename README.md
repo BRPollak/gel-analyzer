@@ -1,16 +1,16 @@
 # Agarose Gel Analyzer
 
-Current project version: **0.1.1**.
+Current project version: **1.0.0**.
 
-Latest tagged release: **0.0.1** (Git tag: `v0.0.1`).
+[Download the Mac app](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.0)
+· [Release notes and installation guide](docs/release-1.0.0.md)
 
-**Current development snapshot: work in progress. The app is not yet fully
-functioning as intended.** The well/lane detection, manual border adjustment,
+**The analysis workflow remains under development.** The well/lane detection, manual border adjustment,
 right-edge selection, and buffered cropping workflow still needs debugging and
 validation on real gels. Automatic well boundaries can be inaccurate; passing
 automated tests and synthetic browser checks does not establish end-to-end
-correctness. This snapshot preserves the current code for continued development
-and is not a new stable release.
+correctness. Version 1.0.0 adds desktop packaging; it does not establish a new
+scientific accuracy claim.
 
 This local app accepts one TIFF (`.tif` or `.tiff`), PNG (`.png`), or JPEG
 (`.jpg` or `.jpeg`) gel image and automatically crops the surrounding background
@@ -25,6 +25,33 @@ and download as PNG, JPEG, TIFF, or SVG. Optional ladder size labels can be plac
 above the gel in the default orientation, or to its left in **Wells at top**.
 Automatic band proposals, manual corrections, and ladder-calibrated size estimates
 are available in either orientation.
+
+## Install the Mac app
+
+The desktop app requires an **Apple Silicon Mac (M1 or later) running macOS 14
+or later**. It opens in its own window and includes Python and its dependencies;
+users do not need Terminal, `uv`, or a separate browser. Analysis runs locally
+and works offline after installation.
+
+1. Download `Gel-Analyzer-1.0.0-macOS-arm64.dmg` from the
+   [v1.0.0 release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.0).
+2. Open the DMG and drag **Gel Analyzer.app** onto **Applications**. Eject the DMG,
+   then open Gel Analyzer from Applications.
+3. This release is ad-hoc signed and **not Apple-notarized**. If macOS blocks the
+   first launch because the developer cannot be verified, follow
+   **System Settings → Privacy & Security → Open Anyway** for Gel Analyzer, then
+   confirm opening it. Only do this for the release you intended to download.
+   See [Apple's instructions](https://support.apple.com/en-us/102445).
+
+The matching ZIP is an alternative: extract it and move **Gel Analyzer.app** to
+Applications. While the repository is private, coworkers need repository access
+and must sign in to GitHub to download its release assets.
+
+Use **Project → Save project** before quitting to preserve the source image and
+edits in a `.gel.json` file; reopen it through **Project → Open project**. Updates
+are manual: save your project, quit the app, then replace the app in Applications
+with the newer release. See the [installation guide](docs/release-1.0.0.md) for
+release limitations and validation status.
 
 ## Wells at top workflow
 
@@ -110,10 +137,32 @@ and real-browser checks of both label angles, grouping, and ladder placement.
 - Hide Streamlit deployment/menu controls and refine the upload card, workflow
   controls, and mobile annotation layout.
 
-## Run locally
+## Run from source
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run from
-this project folder:
+this project folder. For the desktop window on macOS:
+
+```sh
+uv sync --locked --group desktop --group build
+uv run --group desktop python desktop_app.py
+```
+
+The desktop shell uses pywebview and the system WebKit engine to display the
+existing Streamlit interface. It starts a private server bound to `127.0.0.1`
+and stops that server when the app quits. PyInstaller bundles the shell, Python,
+analysis code, and local frontend assets into the distributable app.
+
+To build the Apple Silicon app, DMG, ZIP, and checksums in `dist/`:
+
+```sh
+uv run --frozen --group desktop --group build python scripts/build_macos.py
+```
+
+Use `--app-only` for a build without distribution archives. Build on an Apple
+Silicon Mac; this release does not include an Intel build. Developer-ID signing
+and Apple notarization are not configured for this release.
+
+For development in a browser:
 
 ```sh
 uv sync --locked

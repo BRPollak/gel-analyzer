@@ -14,7 +14,7 @@ from gel_analyzer.image_io import (
 from gel_analyzer.orientation import GelRectangle, OrientationError, rectangle_from_selection
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
-from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui
+from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui, project_ui
 from gel_analyzer.viewport import install_preview_viewport
 
 
@@ -384,16 +384,27 @@ def workflow_stage() -> int | None:
     return 0
 
 
-def navigate_workflow(stage: int) -> None:
-    """Return to a reached stage, retaining edits before changing event identities."""
-    active = workflow_stage()
-    if active is None or stage not in range(active + 1):
-        return
+def consume_latest_component_events() -> None:
+    """Capture the final pointer event before navigation or a project snapshot."""
+    current = st.session_state.gel_image
+    if current is not None:
+        orientation_ui.accept_orientation_event(
+            st.session_state.get(f"orientation_overlay_{st.session_state.orientation_token}"), current,
+        )
     gel = confirmed_gel()
     if gel is not None:
         accept_well_event(st.session_state.get(f"well_overlay_{st.session_state.well_token}"), gel)
     lane_review_ui._consume_latest_event()
     annotation_ui.consume_latest_event()
+
+
+def navigate_workflow(stage: int) -> None:
+    """Return to a reached stage, retaining edits before changing event identities."""
+    active = workflow_stage()
+    if active is None or stage not in range(active + 1):
+        return
+    consume_latest_component_events()
+    gel = confirmed_gel()
     if stage == 0 and gel is not None:
         # Recreate the first crop directly from the original image. Never
         # resample the accepted orientation or rerun automatic crop detection.
@@ -541,6 +552,8 @@ def main() -> None:
                 except (SelectionError, ValueError) as exc:
                     st.session_state.well_error = str(exc)
                     st.session_state.well_editing = True
+
+    project_ui.show_project_controls(consume_latest_component_events)
 
     with progress_slot.container():
         show_workflow_progress()

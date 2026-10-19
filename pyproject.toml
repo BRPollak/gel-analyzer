@@ -1,7 +1,7 @@
 [project]
 name = "agarose-gel-analyzer"
-version = "0.1.1"
-description = "A local agarose gel image viewer, built one capability at a time."
+version = "1.0.0"
+description = "Local gel image analysis and annotation for macOS and the browser."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -12,6 +12,8 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]
+desktop = ["pywebview>=6,<7; sys_platform == 'darwin'"]
+build = ["pyinstaller>=6.16,<7; sys_platform == 'darwin'"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
