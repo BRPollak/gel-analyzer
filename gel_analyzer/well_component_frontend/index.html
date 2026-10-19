@@ -8,9 +8,12 @@
     :root { color-scheme: light; font-family: sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; background: transparent; color: var(--text-color, #31333f); }
-    #component { padding: 12px 12px 3px; }
+    #component { padding: 12px 12px 3px; overflow-x: auto; }
     #image-wrap { width: 100%; max-width: 100%; margin-inline: auto; }
     #image-wrap[data-review-mode="borders"] { padding-right: 40px; }
+    #image-wrap[data-review-mode="borders"][data-workflow-orientation="wells_top"] { padding-right: 0; padding-bottom: 40px; }
+    #gel[data-workflow-orientation="wells_top"] .border-handle { cursor: ew-resize; }
+    #gel[data-workflow-orientation="wells_top"] .extent-handle { cursor: ns-resize; }
     #gel { display: block; width: 100%; height: auto; overflow: visible; touch-action: none; }
     #gel[data-editable="true"] { cursor: crosshair; }
     #gel[data-editable="false"] { touch-action: auto; }

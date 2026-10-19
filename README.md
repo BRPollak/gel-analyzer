@@ -20,9 +20,80 @@ selected wells to detect their boundaries and horizontal lanes. Review each
 lane's height, choose a shared right edge, and confirm to crop the final gel.
 Lane review includes deleting unwanted candidates and adding missing lanes.
 After cropping, annotate lanes and two independent sets of groups, then confirm
-and download as PNG, JPEG, TIFF, or SVG. Optional manual ladder size labels can be placed
-above the gel. Automatic band identification and ladder analysis remain later
-steps; band contrast already helps refine automatic lane coverage.
+and download as PNG, JPEG, TIFF, or SVG. Optional ladder size labels can be placed
+above the gel in the default orientation, or to its left in **Wells at top**.
+Automatic band proposals, manual corrections, and ladder-calibrated size estimates
+are available in either orientation.
+
+## Wells at top workflow
+
+At the start of **Rotate and orient**, choose **Workflow orientation → Wells at
+top**. This setting remains available during manual outline adjustment and is
+independent of the rectangle's rotation controls. **Wells at left**
+retains the existing workflow described below. New images and projects missing
+an orientation setting use that default.
+
+In Wells at top, automatic/manual preparation only straightens the selected
+outline and crops it; it does not apply the default quarter-turn or reflection.
+Use **Keep displayed orientation** to accept the initial crop without changing
+its pixel orientation. The manual editor marks the edge that will become the
+top. Rotate the rectangle explicitly if the photographed gel needs turning.
+
+When the complete outline is unclear but enough straight sides agree on the
+tilt, **Rotate and Orient** uses those visible sides to straighten the image.
+Three visible sides can establish orientation even when the other two corners
+are outside the photograph. The partial-edge search also handles off-center gels
+and visible side segments that do not pass through the image center.
+This fallback retains the entire initial crop, including areas where a gel edge
+is missing, and identifies the supporting sides in the preview. It still requires
+confirmation; you can draw a manual outline if you want a tighter crop. Images
+without enough consistent edge evidence still open the manual outline editor.
+
+1. Define a **horizontal** guide through the wells, from the left edge of the
+   first well to the right edge of the last. Detection examines positions along
+   that guide and proposes **vertical** lanes numbered left to right.
+2. In **Adjust**, edit each lane's left/right borders, add/delete lanes, and
+   then choose a shared **bottom edge**. Cropping retains the upstream margin
+   above the wells and buffers to the left/right of the outer lanes. It copies
+   the displayed source pixels, including unsigned 16-bit data, without resizing.
+3. Lane labels appear **above** their lanes. Choose **Lane label angle**:
+   **90° clockwise (bottom faces left)** or **45° clockwise**. Group brackets and
+   both group sets also appear above the lanes. Measured text bounds expand the
+   canvas to prevent clipping. Lane labels keep a shared endpoint height above
+   the gel; if their actual rotated text would overlap, their displayed font size
+   is reduced together. Fit screen can make long compositions appear smaller,
+   so use Zoom to inspect them.
+4. Ladder markers remain attached to their selected lane and exact band position.
+   Size labels appear **left of the gel**, horizontally readable and aligned with
+   the band Y positions. **Detect bands** proposes positions; choose a size and
+   a candidate or click the band manually. Markers can be moved or removed.
+5. After confirmation, expand **Review bands and estimate sizes**. Automatic
+   proposals follow each lane's migration axis. Edit the lane/position table to
+   add, remove, or move bands, then **Apply band edits**. The review overlay and
+   its PNG download use the same positions; measurements are downloadable as CSV.
+
+Band sizing fits log10(size) against migration using at least two distinct,
+decreasing numeric ladder assignments. DNA sizes are normalized to bp and mass
+sizes to kDa. Composite labels such as `500/517 bp` do not establish a numeric
+calibration. Estimates are reported only inside the marked migration range,
+with fit R² shown for review. This simple profile detector and calibration model
+need visual review: faint/merged bands, artifacts, uneven backgrounds, curved
+lanes, and nonstandard migration can need correction. There is no new independent
+real-gel accuracy claim for this feature.
+
+Returning to **Orient** preserves the existing analysis while a change is staged.
+**Return to analysis** cancels it. A changed preview displays a reset warning and
+requires **Confirm orientation and reset analysis** before discarding downstream
+geometry and annotations; simply changing the selector does not discard them.
+Confirming an unchanged preview retains existing work. PNG/JPEG/TIFF and vector
+SVG use the same annotation geometry as the preview, including both label angles.
+
+Implementation uses shared migration/cross-lane axis adapters for detection and
+editing; persisted coordinates remain the displayed image's XY coordinates.
+Temporary analysis-axis views never replace the prepared or exported gel.
+Validation covers both orientations with synthetic image fixtures, native pixel
+comparisons, browser-component interactions, Streamlit workflow/project tests,
+and real-browser checks of both label angles, grouping, and ladder placement.
 
 ## Version 0.1.1
 
@@ -70,7 +141,8 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    dimensions. Large images fit the screen's width and height; small images are
    not enlarged. Scrolling and ordinary edits keep the preview size and page position stable.
 3. Click **Rotate and Orient** to fit the gel outline and preview its orientation.
-   After a successful automatic preview, confirm it or adjust the outline manually.
+   If only part of the outline is clear, agreeing visible edges can set the tilt
+   while retaining the full initial crop. Confirm the preview or adjust manually.
 4. If detection fails, draw the gel outline in the manual editor. If the automatic
    result needs adjusting, click **Adjust outline manually**. Drag to draw a
    rectangle, move it from inside, resize its corners, and rotate it with the round
@@ -83,8 +155,8 @@ opening their HTML directly with a `file://` URL does not initialize the app.
    bottom of the bottommost selected well, with the line passing through the well
    centers. Either click order works. The dotted line stays vertical; drag either
    dot to adjust its height or move the whole guide sideways. Detection is automatic
-   by default. To guide detection, enter the **Expected number of wells (optional)**;
-   clear the field to return to automatic detection.
+   by default. Enter **Number of wells (optional)** to require exactly that many
+   wells and lanes. Clear the field to return to automatic counting.
 6. Click **Confirm** to detect wells. The result has three actions: **Confirm**
    continues directly to the shared right edge, **Adjust** opens well and lane
    adjustments, and **Back** returns to the guide.
@@ -140,7 +212,16 @@ missed or partial well. Clear wells retain their independently measured sizes
 and spacing. A visible well does **not** indicate whether a sample was loaded.
 Numbering runs from top to bottom.
 
-The app determines the initial well count automatically. The detected summary
+The app determines the initial well count automatically when **Number of wells**
+is blank. Entering a number requires exactly that many proposed wells and lanes.
+The fit uses visible outlines where possible and infers missing positions from
+the selected range and neighboring wells. If the image does not support the
+whole requested count, the review explains that positions were inferred; check
+or adjust them before confirming. A count too large to fit distinct pixel-wide
+lanes in the selected range produces an explicit error rather than a different
+count. The original image is unchanged.
+
+The detection summary
 provides only **Confirm**, **Adjust**, and **Back**. **Confirm** proceeds directly
 to the shared right edge. **Adjust** lets you add or delete lanes and edit their
 vertical borders, and **Back** lets you revise the guide and detect again.
@@ -170,7 +251,8 @@ temporary arrays; the original TIFF bytes and lossless preview, including
 
 Editing the guide invalidates the previous result. Detection results freeze the
 guide until you choose **Back** or **Edit well line**, including when no wells
-are found or boundaries are uncertain. Detection uncertainty messages are not
+are found or boundaries are uncertain. Count-driven results show uncertainty
+messages so inferred positions are clear. Other detection uncertainty messages are not
 displayed; the outlines remain available for your review and adjustment. An
 empty result enables **Adjust** and **Back**, while **Confirm** stays disabled
 until at least one lane has been added.
@@ -410,6 +492,11 @@ needed to make the original top and bottom edges vertical, including correction
 of existing tilt. At this intermediate stage the original left side is at the
 bottom. A vertical flip then moves that side to the top. Finally, the image is
 cropped to the transformed rectangle, removing the first crop's margin.
+If two corners are cut off but three sides remain visible, their observed
+segments determine the rotation instead. The app retains the full initial crop
+on an expanded canvas rather than estimating the missing crop boundary. This
+fallback works in both workflow orientations, including off-center gels and
+sides close to the photograph's edges.
 
 The final edge positions are: original left at the top, original right at the
 bottom, original top at the left, and original bottom at the right. This is a
@@ -444,9 +531,11 @@ adjustment** returns to the previous preview, and **Retry automatic detection**
 discards the manual selection and runs detection again. A preview must still be
 confirmed before defining wells.
 
-Automatic orientation expects one roughly centered, opaque gel with visible outer edges
-and a modest tilt. Competing faint or blurred outer edges are treated as
-uncertain so a sharper inner boundary cannot silently remove physical gel.
+Complete-outline fitting prefers one roughly centered, opaque gel with visible
+outer edges and a modest tilt. When that fit fails, the partial-edge search scans
+the full frame for consistent, visible side segments. Competing faint or blurred
+outer edges do not establish a tight crop; without a reliable shared angle, the
+app opens manual adjustment.
 
 ### Automatic crop
 
@@ -771,9 +860,10 @@ gel files and generated previews are excluded from Git.
 3. User-guided automatic well/lane detection, adding/removing lanes, and manual
    height adjustment (implemented); lateral wall correction remains future work
 4. Shared right-edge selection and confirmed cropping around lanes (implemented)
-5. Ladder-band detection, with manual corrections
-6. Ladder presets and manual size markings (implemented; automatic inference
-   remains future work)
+5. Migration-axis band proposals and manual corrections (implemented; review
+   remains necessary, and real-gel accuracy validation is ongoing)
+6. Ladder presets, manual size markings, and log-linear calibration within the
+   marked range (implemented; ladder size assignment remains explicit)
 7. Editable lane labels and two group sets (implemented after cropping)
 8. Annotated PNG, JPEG, TIFF, and SVG export (implemented). Raster exports retain
    native pixel dimensions with selectable print-resolution metadata (DPI); SVG

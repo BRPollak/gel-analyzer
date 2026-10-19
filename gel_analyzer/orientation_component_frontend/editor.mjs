@@ -87,11 +87,14 @@ export function createOrientationEditor({document: doc, window: host}) {
       const points = rectangleCorners(selection);
       attrs(nodes.selection, {points: points.map(point => point.join(",")).join(" "),
         "aria-label": "Move rectangle. Use arrow keys to move; Alt and arrow keys rotate; Shift uses larger steps."});
-      line(nodes["top-edge"], points[3], points[0]);
+      const topMode = state.workflow_orientation === "wells_top";
+      line(nodes["top-edge"], points[topMode ? 0 : 3], points[topMode ? 1 : 0]);
       const {edge, point} = rotationHandle(selection, unit);
-      const [u] = axes(selection);
-      attrs(nodes["top-label"], {x: edge[0] + u[0] * 16 * unit,
-        y: edge[1] + u[1] * 16 * unit, "font-size": 10 * unit, "stroke-width": 3 * unit});
+      const [u, v] = axes(selection);
+      const labelEdge = topMode ? [(points[0][0] + points[1][0]) / 2, (points[0][1] + points[1][1]) / 2] : edge;
+      const inward = topMode ? v : u;
+      attrs(nodes["top-label"], {x: labelEdge[0] + inward[0] * 16 * unit,
+        y: labelEdge[1] + inward[1] * 16 * unit, "font-size": 10 * unit, "stroke-width": 3 * unit});
       line(nodes["rotation-line"], edge, point);
       corners.forEach((node, index) => handle(node, points[index], 6, unit,
         `Resize corner ${index + 1}. Use arrow keys; Shift moves ten pixels.`));
@@ -244,6 +247,7 @@ export function createOrientationEditor({document: doc, window: host}) {
       state.selection = readSelection(args.selection, state.width, state.height);
       revision = incomingRevision;
     }
+    state.workflow_orientation = args.workflow_orientation || "wells_left";
     if (theme?.textColor) doc.documentElement.style.setProperty("--text-color", theme.textColor);
     if (theme?.backgroundColor) doc.body.style.backgroundColor = theme.backgroundColor;
     attrs(svg, {viewBox: `0 0 ${state.width} ${state.height}`});

@@ -14,6 +14,12 @@ import streamlit as st
 
 from . import annotation_ui, lane_crop
 from .wells import SelectionError, validate_line
+from .workflow_orientation import is_top, lane_bounds
+
+
+def _orientation(gel=None):
+    source = gel if gel is not None else st.session_state.lane_source
+    return getattr(source, "workflow_orientation", "wells_left")
 
 
 def reset_lane_review() -> None:
@@ -54,12 +60,16 @@ def start_lane_review() -> None:
     result = st.session_state.well_result
     if gel is None or result is None:
         return
-    right = result.lanes[0][2] if result.lanes else gel.preview_width
+    orientation = _orientation(gel)
+    right = (result.lanes[0][3 if is_top(orientation) else 2] if result.lanes
+             else gel.preview_height if is_top(orientation) else gel.preview_width)
     try:
-        validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
+        validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height),
+                      workflow_orientation=orientation)
         wells = lane_crop.validate_lane_adjustments(
             result.wells, result.lanes, right,
             (gel.preview_width, gel.preview_height),
+            workflow_orientation=orientation,
         ) if result.wells else ()
     except (lane_crop.LaneAdjustmentError, SelectionError) as exc:
         st.session_state.lane_error = str(exc)
@@ -76,7 +86,7 @@ def start_lane_review() -> None:
 
 def _lanes():
     return tuple(
-        (well.bounds[0], well.bounds[1], st.session_state.lane_right, well.bounds[3])
+        lane_bounds(well.bounds, st.session_state.lane_right, _orientation())
         for well in st.session_state.lane_wells
     )
 
@@ -106,6 +116,7 @@ def accept_lane_event(event: object) -> None:
         wells = lane_crop.validate_lane_adjustments(
             st.session_state.lane_wells, event.get("lanes"), right,
             (gel.preview_width, gel.preview_height),
+            workflow_orientation=_orientation(gel),
         )
     except lane_crop.LaneAdjustmentError:
         return
@@ -144,6 +155,7 @@ def add_lane() -> None:
         wells = lane_crop.append_lane(
             st.session_state.lane_wells, st.session_state.well_points,
             st.session_state.lane_right, (gel.preview_width, gel.preview_height),
+            workflow_orientation=_orientation(gel),
         )
     except lane_crop.LaneAdjustmentError as exc:
         st.session_state.lane_error = str(exc)
@@ -196,6 +208,7 @@ def confirm_lane_crop() -> None:
             with Image.open(BytesIO(gel.preview_png)) as source:
                 crop = lane_crop.crop_lanes(
                     source, st.session_state.lane_wells, st.session_state.lane_right,
+                    workflow_orientation=_orientation(gel),
                 )
     except lane_crop.LaneAdjustmentError as exc:
         st.session_state.lane_error = str(exc)
@@ -213,6 +226,7 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
         reset_lane_review()
         st.rerun()
     stage = st.session_state.lane_stage
+    top_mode = is_top(_orientation(gel))
     if stage == "cropped":
         crop = st.session_state.lane_crop
         annotation_ui.show_annotations(crop, gel.filename)
@@ -226,6 +240,7 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
             lanes=_lanes(), editable=True,
             token=st.session_state.lane_token, key=f"lane_overlay_{st.session_state.lane_token}",
             review_mode=stage, right_edge=st.session_state.lane_right,
+            workflow_orientation=_orientation(gel),
         )
         token = st.session_state.lane_token
         accept_lane_event(event)
@@ -236,8 +251,11 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
         if stage == "borders":
             st.subheader("Adjust wells and lanes")
             st.caption(
-                "Drag each lane’s top and bottom borders. Use its trash button to delete it, "
-                "or Add lane to insert one below the guide. Neighboring lanes cannot overlap."
+                ("Drag each lane’s left and right borders. Use its trash button to delete it, "
+                 "or Add lane to insert one to the right of the guide. Neighboring lanes cannot overlap.")
+                if top_mode else
+                ("Drag each lane’s top and bottom borders. Use its trash button to delete it, "
+                 "or Add lane to insert one below the guide. Neighboring lanes cannot overlap.")
             )
             count = len(st.session_state.lane_wells)
             st.write(f"{count} lane{'s' if count != 1 else ''} in review")
@@ -249,20 +267,25 @@ def show_lane_review(gel, *, image_panel=None, controls_panel=None) -> None:
             )
             st.button(
                 "Add lane", key="add_lane", on_click=add_lane,
-                help="Fits a smaller lane into remaining space. At the image bottom, nearby borders move by one pixel to make room.",
+                help=("Fits a smaller lane into remaining space. At the image right edge, nearby borders move by one pixel to make room."
+                      if top_mode else "Fits a smaller lane into remaining space. At the image bottom, nearby borders move by one pixel to make room."),
             )
             st.caption("Arrow keys move a focused handle one pixel; Shift moves ten.")
         else:
-            st.subheader("Define bottom of lane (right edge)")
+            st.subheader("Define bottom of lanes" if top_mode else "Define bottom of lane (right edge)")
             st.caption(
-                "Drag the right boundary to choose how much gel to keep. "
+                ("Drag the bottom boundary to choose how much gel to keep. " if top_mode else
+                 "Drag the right boundary to choose how much gel to keep. ") +
                 "The shaded area will be removed. All wells stay inside the crop."
             )
             margin = max(3, round(gel.preview_width * 0.01))
             vertical_margin = max(3, round(gel.preview_height * 0.01))
             st.caption(
-                f"Right edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
-                f"{vertical_margin:,} pixels above and below the lanes and {margin:,} pixels left of the wells."
+                (f"Bottom edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
+                 f"{margin:,} pixels left and right of the lanes and {vertical_margin:,} pixels above the wells.")
+                if top_mode else
+                (f"Right edge: {st.session_state.lane_right:,} pixels. The crop includes up to "
+                 f"{vertical_margin:,} pixels above and below the lanes and {margin:,} pixels left of the wells.")
             )
             st.button(
                 "Confirm lanes and crop", key="confirm_lane_crop", type="primary",

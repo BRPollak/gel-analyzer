@@ -1,4 +1,4 @@
-"""Session-only gel orientation, lane review, cropping, and annotation."""
+"""Gel preparation, orientation-aware analysis, and annotation."""
 
 from dataclasses import replace
 from io import BytesIO
@@ -11,7 +11,7 @@ import streamlit as st
 from gel_analyzer.image_io import (
     GelImage, ImageValidationError, load_tiff, orient_gel_image,
 )
-from gel_analyzer.orientation import OrientationError
+from gel_analyzer.orientation import GelRectangle, OrientationError, rectangle_from_selection
 from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
 from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui
@@ -54,7 +54,7 @@ def request_well_detection() -> None:
         st.session_state.get(f"well_overlay_{st.session_state.well_token}"), gel,
     )
     try:
-        validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
+        validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height), **axis_options(gel))
     except SelectionError:
         return
     st.session_state.well_detection_request = (
@@ -87,7 +87,8 @@ def accept_well_event(event: object, gel: GelImage) -> None:
     st.session_state.well_revision = revision
     new_points = tuple(tuple(float(value) for value in point) for point in points)
     if len(new_points) == 2:
-        new_points = (new_points[0], (new_points[0][0], new_points[1][1]))
+        new_points = (new_points[0], (new_points[1][0], new_points[0][1])
+                      if gel.workflow_orientation == "wells_top" else (new_points[0][0], new_points[1][1]))
     if new_points != st.session_state.well_points:
         st.session_state.well_points = new_points
         st.session_state.well_result = None
@@ -116,6 +117,10 @@ def start_lane_adjustment() -> None:
 
 
 def confirm_detected_lanes() -> None:
+    result = st.session_state.well_result
+    required = st.session_state.well_expected_count
+    if required is not None and (result is None or len(result.wells) != required or len(result.lanes) != required):
+        return
     start_lane_adjustment()
     lane_review_ui.confirm_lane_borders()
 
@@ -139,10 +144,10 @@ def show_expected_well_count() -> None:
     # result review, lane adjustment, or navigation out of the guide editor.
     st.session_state.expected_well_count = st.session_state.well_expected_count
     st.number_input(
-        "Expected number of wells (optional)", min_value=1, value=None, step=1,
+        "Number of wells (optional)", min_value=1, value=None, step=1,
         placeholder="Automatic", key="expected_well_count",
         on_change=change_expected_well_count,
-        help="Count the wells crossed by the guide. Leave blank for automatic detection.",
+        help="Enter the exact number of wells crossed by the guide. The app will prepare that many wells and lanes and tell you when positions were inferred. Leave blank for automatic counting.",
     )
 
 
@@ -157,6 +162,7 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             editable=st.session_state.well_editing,
             token=st.session_state.well_token,
             key=f"well_overlay_{st.session_state.well_token}",
+            **axis_options(gel),
         )
         accept_well_event(event, gel)
         if result is not None and st.session_state.well_result is None:
@@ -168,10 +174,22 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
         result = st.session_state.well_result
         if result is not None:
             count = len(result.wells)
-            st.write(f"Detected {count} well{'s' if count != 1 else ''} and {count} horizontal lane{'s' if count != 1 else ''}.")
+            direction = "vertical" if gel.workflow_orientation == "wells_top" else "horizontal"
+            count_guided = st.session_state.well_expected_count is not None
+            matches_count = not count_guided or count == len(result.lanes) == st.session_state.well_expected_count
+            action = "Prepared" if count_guided else "Detected"
+            st.write(f"{action} {count} well{'s' if count != 1 else ''} and {count} {direction} lane{'s' if count != 1 else ''}.")
+            if not matches_count:
+                st.warning(
+                    f"This earlier result does not match the required {st.session_state.well_expected_count} wells. "
+                    "Choose Back, then confirm the guide again to fit the exact count."
+                )
+            if count_guided:
+                for message in result.warnings:
+                    st.warning(message)
             st.button(
                 "Confirm", key="confirm_detected_lanes", type="primary",
-                on_click=confirm_detected_lanes, disabled=not count,
+                on_click=confirm_detected_lanes, disabled=not count or not matches_count,
             )
             st.button("Adjust", key="adjust_lane_borders", on_click=start_lane_adjustment)
             if st.session_state.lane_error:
@@ -182,7 +200,8 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             )
             return
         st.caption(
-            "Click the top and bottom of the well range. "
+            "Click the left and right ends of the well range. Drag either dot to move or extend the horizontal guide."
+            if gel.workflow_orientation == "wells_top" else "Click the top and bottom of the well range. "
             "Drag either dot to move or extend the vertical guide."
         )
         if st.session_state.well_error:
@@ -191,7 +210,7 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             show_expected_well_count()
             valid = False
             try:
-                validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height))
+                validate_line(st.session_state.well_points, (gel.preview_width, gel.preview_height), **axis_options(gel))
                 valid = True
             except SelectionError as exc:
                 st.info(str(exc))
@@ -202,6 +221,86 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             st.button(
                 "Back", key="back_from_well_line", on_click=leave_well_selection,
             )
+
+
+def axis_options(gel: GelImage) -> dict:
+    """Keep the existing call path unchanged for the default workflow."""
+    return {"workflow_orientation": gel.workflow_orientation} if gel.workflow_orientation == "wells_top" else {}
+
+
+def change_workflow_orientation() -> None:
+    """Stage a workflow change; accepted analysis survives until confirmation."""
+    gel = st.session_state.gel_image
+    mode = st.session_state.workflow_orientation_choice
+    if gel is None or gel.orientation is not None or mode == gel.workflow_orientation:
+        return
+    orientation_ui.accept_orientation_event(
+        st.session_state.get(f"orientation_overlay_{st.session_state.orientation_token}"), gel,
+    )
+    st.session_state.gel_image = replace(gel, workflow_orientation=mode)
+    pending = st.session_state.orientation_preview
+    st.session_state.orientation_preview = None
+    st.session_state.orientation_error = None
+    # Reuse the reviewed outline, without running edge detection again. In the
+    # manual editor, keep its live rectangle and let Preview apply the new mode.
+    if pending is not None and not st.session_state.orientation_manual:
+        if not getattr(pending.orientation, "outline_complete", True):
+            tilt = pending.orientation.counterclockwise_degrees - (
+                0 if pending.workflow_orientation == "wells_top" else 90
+            )
+            previous = st.session_state.get("orientation_previous_gel")
+            if (previous is not None and previous.workflow_orientation == mode
+                    and previous.source_bytes == gel.source_bytes and previous.crop_box == gel.crop_box
+                    and not getattr(previous.orientation, "outline_complete", True)
+                    and math.isclose(tilt, previous.orientation.counterclockwise_degrees
+                                     - (0 if mode == "wells_top" else 90),
+                                     rel_tol=0, abs_tol=1e-10)):
+                # Undoing the selector change restores the accepted object.
+                # Subtracting a quarter turn can lose a few floating-point bits;
+                # that must not turn an unchanged preview into an analysis reset.
+                st.session_state.orientation_preview = previous
+                return
+            st.session_state.orientation_preview = orient_gel_image(
+                st.session_state.gel_image, fallback_angle_degrees=tilt,
+                supported_edges=pending.orientation.supported_edges,
+            )
+            return
+        corners = pending.orientation.corners
+        rectangle = GelRectangle(corners, math.dist(corners[0], corners[1]),
+                                 math.dist(corners[0], corners[3]),
+                                 math.degrees(math.atan2(corners[1][1] - corners[0][1],
+                                                        corners[1][0] - corners[0][0])))
+        st.session_state.orientation_preview = orient_gel_image(st.session_state.gel_image, rectangle)
+
+
+def show_workflow_orientation(gel: GelImage) -> None:
+    st.session_state.workflow_orientation_choice = gel.workflow_orientation
+    st.selectbox(
+        "Workflow orientation", ["wells_left", "wells_top"],
+        format_func=lambda mode: "Wells at top" if mode == "wells_top" else "Wells at left",
+        key="workflow_orientation_choice", on_change=change_workflow_orientation,
+        help="Choose lane and migration directions independently of the manual image rotation controls.",
+    )
+    st.caption("Vertical lanes · bands migrate downward" if gel.workflow_orientation == "wells_top"
+               else "Horizontal lanes · bands migrate to the right")
+    previous = st.session_state.get("orientation_previous_gel")
+    pending = st.session_state.orientation_preview
+    if previous is not None and (previous.workflow_orientation != gel.workflow_orientation
+                                 or pending is not None and pending != previous):
+        st.warning("Confirming this change resets the well selection, lanes, crop, ladder markers, and annotations. "
+                   "Return to analysis keeps your existing work.")
+
+
+def keep_displayed_orientation() -> None:
+    gel = st.session_state.gel_image
+    if gel is None or gel.orientation is not None or gel.workflow_orientation != "wells_top":
+        return
+    rectangle = rectangle_from_selection(dict(cx=gel.preview_width / 2, cy=gel.preview_height / 2,
+                                             width=gel.preview_width, height=gel.preview_height,
+                                             angle_degrees=0), (gel.preview_width, gel.preview_height))
+    st.session_state.orientation_preview = orient_gel_image(gel, rectangle)
+    st.session_state.orientation_preview_method = "manual"
+    st.session_state.orientation_error = None
 
 
 def reset_orientation_preview() -> None:
@@ -389,7 +488,7 @@ def main() -> None:
         )
         if has_image:
             st.button("Clear image", key="clear_image", on_click=clear_image)
-        st.caption("TIFF images · Images stay in this session only.")
+        st.caption("Single-image TIFF files (.tif or .tiff).")
 
     # Replace this same slot immediately, so neither the previous upload nor an
     # uncropped new image is shown while the new source is being processed.
@@ -434,8 +533,8 @@ def main() -> None:
                 try:
                     with Image.open(BytesIO(gel.preview_png)) as analysis_source:
                         result = (
-                            detect_wells(analysis_source, points, expected_count=expected_count)
-                            if expected_count is not None else detect_wells(analysis_source, points)
+                            detect_wells(analysis_source, points, expected_count=expected_count, **axis_options(gel))
+                            if expected_count is not None else detect_wells(analysis_source, points, **axis_options(gel))
                         )
                     st.session_state.well_result = result
                     st.session_state.well_editing = False
@@ -483,6 +582,9 @@ def main() -> None:
             image_panel, controls_column = st.columns([3.2, 1.15], gap="large")
             with controls_column:
                 controls_panel = st.container(border=True, key="gel_workflow_controls")
+            if current_gel.orientation is None:
+                with controls_panel:
+                    show_workflow_orientation(current_gel)
             if st.session_state.orientation_manual:
                 orientation_ui.show_manual_orientation(
                     current_gel, image_panel, controls_panel, request_orientation,
@@ -514,11 +616,20 @@ def main() -> None:
                     st.subheader("Define wells" if confirmed_gel() is not None else "Rotate and orient")
                     if gel.orientation is not None:
                         if pending is not None:
-                            st.caption(
-                                "The gel has been straightened, rotated, flipped vertically, "
-                                "and cropped. Inspect the result, then confirm this preview "
-                                "or adjust the outline manually."
-                            )
+                            if not getattr(gel.orientation, "outline_complete", True):
+                                sides = ", ".join(gel.orientation.supported_edges)
+                                st.info(
+                                    f"Orientation uses the clearly detected sides{': ' + sides if sides else ''}. "
+                                    "The full initial crop is retained because the complete gel outline "
+                                    "is not visible. Inspect the preview, then confirm or adjust manually."
+                                )
+                            else:
+                                st.caption(
+                                    "The gel has been straightened and cropped with its top edge retained. Inspect the preview, then confirm or adjust the outline."
+                                    if gel.workflow_orientation == "wells_top" else "The gel has been straightened, rotated, flipped vertically, "
+                                    "and cropped. Inspect the result, then confirm this preview "
+                                    "or adjust the outline manually."
+                                )
                         else:
                             st.caption("Orientation confirmed. Define the wells to detect your lanes.")
                     elif gel.auto_cropped:
@@ -535,7 +646,9 @@ def main() -> None:
                     if current_gel.orientation is None:
                         if pending is not None:
                             st.button(
-                                "Confirm", key="confirm_orientation", type="primary",
+                                "Confirm orientation and reset analysis" if st.session_state.orientation_previous_gel is not None
+                                and pending != st.session_state.orientation_previous_gel else "Confirm",
+                                key="confirm_orientation", type="primary",
                                 on_click=confirm_orientation,
                             )
                         st.button(
@@ -543,13 +656,19 @@ def main() -> None:
                             key="adjust_orientation_manually",
                             on_click=orientation_ui.start_manual_orientation,
                         )
+                        if pending is None and current_gel.workflow_orientation == "wells_top":
+                            st.button("Keep displayed orientation", key="keep_displayed_orientation",
+                                      on_click=keep_displayed_orientation,
+                                      help="Use the displayed crop as it is, without rotating or flipping its pixels.")
                         if pending is None or st.session_state.orientation_preview_method in ("manual", "confirmed"):
                             st.button(
                                 "Automatic orientation" if pending is not None else "Rotate and Orient",
                                 key="rotate_and_orient",
                                 type="secondary" if pending is not None else "primary",
                                 on_click=request_orientation,
-                                help="Fit the gel outline, straighten and rotate it counterclockwise, flip vertically, then crop.",
+                                help="Straighten using the visible gel edges, retaining its top edge. Crop only when the complete outline is clear."
+                                if current_gel.workflow_orientation == "wells_top" else
+                                "Straighten using the visible gel edges, rotate counterclockwise and flip vertically. Crop only when the complete outline is clear.",
                             )
             if st.session_state.orientation_previous_gel is not None:
                 with controls_panel:

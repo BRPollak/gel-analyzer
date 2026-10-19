@@ -69,9 +69,9 @@ function fitPreview() {
   const fit = fitPreviewGeometry({imageWidth: state.width, imageHeight: state.height,
     availableWidth: Math.max(1, component.clientWidth - horizontalPadding),
     viewportHeight: outerViewportHeight(window), outerReserve: outerViewportReserve(window), chromeHeight,
-    reviewMode: state.reviewMode, laneCount: state.lanes.length});
+    reviewMode: state.reviewMode, laneCount: state.lanes.length, workflowOrientation: state.workflowOrientation});
   wrap.style.width = `${fit.wrapperWidth}px`;
-  wrap.style.maxWidth = `${state.width + fit.rightGutter}px`;
+  wrap.style.maxWidth = `${Math.max(state.width + fit.rightGutter, fit.wrapperWidth)}px`;
   wrap.dataset.previewScale = String(fit.scale);
   wrap.dataset.heightBudget = String(fit.heightBudget);
   wrap.dataset.controlsOverflow = String(fit.controlsOverflow);
@@ -107,7 +107,7 @@ function drawGuide() {
     handle.setAttribute("aria-disabled", String(!state.editable));
     if (!point) return;
     handle.setAttribute("transform", `translate(${point[0]} ${point[1]})`);
-    handle.setAttribute("aria-label", `Endpoint ${index + 1}, x ${point[0].toFixed(1)}, y ${point[1].toFixed(1)}. Up and Down adjust this endpoint; Left and Right move the vertical line. Shift moves ten pixels.`);
+    handle.setAttribute("aria-label", `Endpoint ${index + 1}, x ${point[0].toFixed(1)}, y ${point[1].toFixed(1)}. ${state.workflowOrientation === "wells_top" ? "Left and Right adjust this endpoint; Up and Down move the horizontal line." : "Up and Down adjust this endpoint; Left and Right move the vertical line."} Shift moves ten pixels.`);
     handle.dataset.x = point[0];
     handle.dataset.y = point[1];
     handle.querySelector(".hit").setAttribute("r", screenRadius(18, rect, state.width));
@@ -127,7 +127,18 @@ function drawGuide() {
   svg.dataset.reviewMode = state.reviewMode || "";
   wrap.dataset.reviewMode = state.reviewMode || "";
   svg.dataset.pointCount = String(state.points.length);
-  const instructions = state.reviewMode === "borders"
+  svg.dataset.workflowOrientation = state.workflowOrientation;
+  wrap.dataset.workflowOrientation = state.workflowOrientation;
+  const instructions = state.workflowOrientation === "wells_top"
+    ? state.reviewMode === "borders"
+      ? "Adjust each lane’s left and right borders. Use Left/Right keys on a focused handle. Delete a lane with the trash button below it, or use Add lane to insert one at the right of the detection line."
+      : state.reviewMode === "extent"
+      ? "Drag the gold bottom boundary up or down to choose a shared lane length. The shaded region will be excluded. Use Up/Down keys on the handle."
+      : !state.editable ? "Detected wells and vertical lanes."
+      : state.points.length === 0 ? "Click the left edge of the first well and the right edge of the last well, in either order."
+      : state.points.length === 1 ? "Click the other end of the well range. The line stays horizontal."
+      : "Drag either dot to adjust the range or move the horizontal line up or down. Arrow keys also adjust a focused dot."
+    : state.reviewMode === "borders"
     ? "Adjust each lane’s top and bottom border using the arrow handles. Use Up/Down keys on a focused handle. Delete a lane with the trash button on its right, or use Add lane to insert one at the bottom of the detection line."
     : state.reviewMode === "extent"
     ? "Drag the gold right boundary left or right to choose a shared lane length. The shaded region will be excluded. Use Left/Right keys on the handle."
@@ -165,15 +176,16 @@ function drawResults() {
       "data-testid": `${className}-${index + 1}`});
   }
   state.lanes.forEach((lane, index) => outline(lane, "lane", index));
-  [...state.wells].sort((a, b) => a.bounds[1] - b.bounds[1]).forEach((well, index) => {
+  [...state.wells].sort((a, b) => a.bounds[state.workflowOrientation === "wells_top" ? 0 : 1] - b.bounds[state.workflowOrientation === "wells_top" ? 0 : 1]).forEach((well, index) => {
     outline(well.bounds, "well", index);
     const [left, top, right, bottom] = well.bounds;
     const center = well.center || [(left + right) / 2, (top + bottom) / 2];
     element("circle", {cx: center[0], cy: center[1], r: 2 * unit, class: "center"});
     const labelX = right + 7 * unit;
     const onRight = labelX + 20 * unit < state.width;
-    const label = element("text", {x: onRight ? labelX : Math.max(3 * unit, left - 7 * unit),
-      y: center[1], "dominant-baseline": "central", "text-anchor": onRight ? "start" : "end",
+    const topMode = state.workflowOrientation === "wells_top";
+    const label = element("text", {x: topMode ? center[0] : onRight ? labelX : Math.max(3 * unit, left - 7 * unit),
+      y: topMode ? Math.min(state.height - 7 * unit, bottom + 10 * unit) : center[1], "dominant-baseline": "central", "text-anchor": topMode ? "middle" : onRight ? "start" : "end",
       "font-size": 12 * unit, "stroke-width": 3 * unit, class: "number"});
     // Inline style wins over the CSS stroke-width, keeping labels readable.
     label.style.strokeWidth = `${3 * unit}px`;
@@ -197,7 +209,7 @@ svg.addEventListener("pointerdown", event => {
     const point = pointerPosition(event);
     if (!point) return;
     event.preventDefault();
-    state.points = readPoints([...state.points, point], state.width, state.height);
+    state.points = readPoints([...state.points, point], state.width, state.height, state.workflowOrientation);
     invalidateResults();
     drawGuide();
     emitPoints();
@@ -209,7 +221,7 @@ svg.addEventListener("pointermove", event => {
   const point = pointerPosition(event);
   if (!point) return;
   if (point.some((coordinate, index) => coordinate !== state.points[drag.index][index])) invalidateResults();
-  state.points = moveGuideEndpoint(state.points, drag.index, point, state.width, state.height);
+  state.points = moveGuideEndpoint(state.points, drag.index, point, state.width, state.height, state.workflowOrientation);
   drawGuide(); // The bridge is deliberately silent until pointerup.
 });
 
@@ -225,7 +237,7 @@ function finishDrag(event, cancelled) {
     drawResults();
   } else {
     state.points = moveGuideEndpoint(state.points, active.index,
-      pointerPosition(event) || state.points[active.index], state.width, state.height);
+      pointerPosition(event) || state.points[active.index], state.width, state.height, state.workflowOrientation);
     if (state.points[active.index].some((coordinate, index) => coordinate !== active.original[active.index][index])) invalidateResults();
   }
   if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
@@ -247,7 +259,7 @@ svg.addEventListener("keydown", event => {
   event.preventDefault();
   const step = event.shiftKey ? 10 : 1;
   state.points = moveGuideEndpoint(state.points, index,
-    [point[0] + direction[0] * step, point[1] + direction[1] * step], state.width, state.height);
+    [point[0] + direction[0] * step, point[1] + direction[1] * step], state.width, state.height, state.workflowOrientation);
   invalidateResults();
   drawGuide();
   emitPoints();
@@ -272,11 +284,12 @@ window.addEventListener("message", event => {
     drag = null;
     svg.dataset.dragging = "false";
     state = {token: args.token, width: args.width, height: args.height,
-      points: readPoints(args.points, args.width, args.height),
+      workflowOrientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
+      points: readPoints(args.points, args.width, args.height, args.workflow_orientation),
       reviewMode: ["borders", "extent"].includes(args.review_mode) ? args.review_mode : null,
       lanes: Array.isArray(args.lanes) ? args.lanes.map(lane => [...lane]) : [],
       wells: Array.isArray(args.wells) ? args.wells.map(well => ({...well, bounds: [...well.bounds]})) : [],
-      rightEdge: Number.isInteger(args.right_edge) ? args.right_edge : (args.lanes?.[0]?.[2] ?? args.width)};
+      rightEdge: Number.isInteger(args.right_edge) ? args.right_edge : (args.workflow_orientation === "wells_top" ? (args.lanes?.[0]?.[3] ?? args.height) : (args.lanes?.[0]?.[2] ?? args.width))};
     svg.dataset.token = args.token;
     svg.setAttribute("viewBox", `0 0 ${args.width} ${args.height}`);
     svg.setAttribute("width", args.width);
@@ -298,10 +311,10 @@ window.addEventListener("message", event => {
       drag = null;
       svg.dataset.dragging = "false";
       if (pointerId !== undefined && svg.hasPointerCapture(pointerId)) svg.releasePointerCapture(pointerId);
-      state.points = readPoints(args.points, state.width, state.height);
+      state.points = readPoints(args.points, state.width, state.height, state.workflowOrientation);
     }
     // While editing, preserve local points against older snapshots from reruns.
-    const matchingPoints = JSON.stringify(readPoints(args.points, state.width, state.height)) === JSON.stringify(state.points);
+    const matchingPoints = JSON.stringify(readPoints(args.points, state.width, state.height, state.workflowOrientation)) === JSON.stringify(state.points);
     state.wells = !drag && matchingPoints && Array.isArray(args.wells) ? args.wells : [];
     state.lanes = !drag && matchingPoints && Array.isArray(args.lanes) ? args.lanes : [];
   }

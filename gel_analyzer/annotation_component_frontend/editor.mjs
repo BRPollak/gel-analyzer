@@ -47,6 +47,12 @@ function syncMode() {
   document.querySelectorAll(".lane-only").forEach(node => { node.hidden = ladderMode; });
   byId("confirm").hidden = ladderMode;
   inputLayer.hidden = ladderMode;
+  byId("label-angle-field").hidden = ladderMode || state?.workflow_orientation !== "wells_top";
+  byId("auto-size").title = "80% of average lane thickness";
+  const top = state?.workflow_orientation === "wells_top";
+  byId("group-set-label").textContent = top ? "Row" : "Column";
+  byId("group-set").setAttribute("aria-label", top ? "Group row" : "Group column");
+  byId("group-set").options[1].textContent = top ? "Set 2 · farther above" : "Set 2 · far left";
 }
 
 function post(type, data = {}) {
@@ -67,15 +73,16 @@ function status(message = "", error = false) {
   resizeFrame();
 }
 
-function defaultFontSize(lanes) {
-  const heights = lanes.map(lane => Number(lane[3]) - Number(lane[1]))
+function defaultFontSize(lanes, orientation = state?.workflow_orientation) {
+  const axis = orientation === "wells_top" ? 0 : 1;
+  const heights = lanes.map(lane => Number(lane[axis + 2]) - Number(lane[axis]))
     .filter(height => Number.isFinite(height) && height > 0);
   return heights.length
     ? Math.max(1, Math.min(4096, Math.round(0.8 * heights.reduce((sum, height) => sum + height, 0) / heights.length)))
     : 18;
 }
 
-function readAnnotations(raw, laneBounds, fontSize) {
+function readAnnotations(raw, laneBounds, fontSize, orientation) {
   const count = laneBounds.length;
   const labels = Array.from({length: count}, (_, index) => ({text: cleanText(raw?.labels?.[index]?.text),
     ...cleanStyle(raw?.labels?.[index]), runs: labelRuns(raw?.labels?.[index])}));
@@ -92,8 +99,8 @@ function readAnnotations(raw, laneBounds, fontSize) {
       runs: labelRuns(value, "label"), lanes}];
   });
   const requestedSize = Number(raw?.fontSize ?? fontSize);
-  return {labels, groups, fontSize: Number.isFinite(requestedSize)
-    ? Math.max(1, Math.min(4096, Math.round(requestedSize))) : defaultFontSize(laneBounds)};
+  return {labels, groups, laneLabelAngle: raw?.laneLabelAngle === 45 ? 45 : 90, fontSize: Number.isFinite(requestedSize)
+    ? Math.max(1, Math.min(4096, Math.round(requestedSize))) : defaultFontSize(laneBounds, orientation)};
 }
 
 function selectedLabel() {
@@ -126,6 +133,7 @@ function syncToolbar() {
     button.disabled = confirming || !value;
   });
   setValue(byId("font-size"), state.annotations.fontSize);
+  setValue(byId("label-angle"), state.annotations.laneLabelAngle);
   byId("edit-selected-group").hidden = !value || !isGroup;
   for (const name of ["bold", "italic"]) byId(name).disabled = confirming || !value;
   for (const [key, node] of inputNodes) node.dataset.selected = String(key === selected);
@@ -266,8 +274,10 @@ function updateInputs() {
     node.dataset.selected = String(box.key === selected);
     node.contentEditable = String(!confirming);
     node.setAttribute("aria-disabled", String(confirming));
-    node.style.left = `${box.x - box.width - 1}px`;
-    node.style.top = `${box.y - box.boxHeight / 2 - 1}px`;
+    node.style.left = `${(box.rotation ? box.baselineX : box.x) - box.width - 1}px`;
+    node.style.top = `${box.rotation ? box.baselineY - box.editorBaseline - 1 : box.y - box.boxHeight / 2 - 1}px`;
+    node.style.transformOrigin = box.rotation ? `${box.width + 1}px ${box.editorBaseline + 1}px` : "";
+    node.style.transform = box.rotation ? `rotate(${box.rotationDegrees}deg)` : "";
     node.style.width = `${box.width}px`;
     node.style.height = `${box.boxHeight}px`;
     node.style.font = box.font;
@@ -336,9 +346,10 @@ function updateZoom() {
   }
   component.dataset.previewScale = String(scale);
   component.dataset.previewBudget = String(budget);
-  const dense = layout.denseFallback
-    ? " Closely spaced labels use extra columns." : "";
-  byId("size-hint").textContent = `${layout.width} × ${layout.height} pixels · ${Math.round(scale * 100)}% view${dense}`;
+  const dense = layout.denseFallback ? " Closely spaced labels use extra columns." : "";
+  const fitted = state.workflow_orientation === "wells_top" && layout.reducedFont
+    ? ` Lane text fitted to ${Number(layout.laneFontSize.toFixed(1))} px to keep labels aligned.` : "";
+  byId("size-hint").textContent = `${layout.width} × ${layout.height} pixels · ${Math.round(scale * 100)}% view${dense}${fitted}`;
   ladderEditor.render();
   resizeFrame();
 }
@@ -519,6 +530,10 @@ for (const preset of COLOR_PRESETS) {
   bindFormatButton(button, "color", preset.color);
   byId("color-presets").appendChild(button);
 }
+byId("label-angle").addEventListener("change", event => {
+  state.annotations.laneLabelAngle = Number(event.target.value) === 45 ? 45 : 90;
+  changed();
+});
 byId("font-size").addEventListener("change", event => {
   state.annotations.fontSize = Math.max(1, Math.min(4096,
     Math.round(Number(event.target.value) || defaultFontSize(state.lanes))));
@@ -592,11 +607,13 @@ window.addEventListener("message", event => {
     revision = incomingRevision;
     state = {token: args.token, width: args.width, height: args.height,
       lanes: args.lanes.map(lane => [...lane]),
+      workflow_orientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
+      bandCandidates: args.band_candidates ?? [],
       mode: args.mode === "ladder" ? "ladder" : "lanes",
       ladder: args.ladder ? structuredClone(args.ladder) : null,
       presets: structuredClone(args.presets || []),
       ladderStep: args.ladder_step || "preset", confirmedLadder: Boolean(args.confirmed_ladder),
-      annotations: readAnnotations(args.annotations, args.lanes, args.fontSize)};
+      annotations: readAnnotations(args.annotations, args.lanes, args.fontSize, args.workflow_orientation)};
     ladderEditor.reset();
     syncMode();
     component.dataset.token = args.token;
@@ -633,7 +650,7 @@ window.addEventListener("message", event => {
     // Local revisions advance on each keystroke, before the debounced bridge
     // message. A delayed server render therefore cannot erase unsent edits.
     revision = incomingRevision;
-    state.annotations = readAnnotations(args.annotations, state.lanes, args.fontSize);
+    state.annotations = readAnnotations(args.annotations, state.lanes, args.fontSize, state.workflow_orientation);
     state.ladder = args.ladder ? structuredClone(args.ladder) : null;
     state.ladderStep = args.ladder_step || "preset";
     refreshTargets();

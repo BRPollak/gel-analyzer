@@ -25,7 +25,7 @@ ET.register_namespace("", _SVG)
 ET.register_namespace("xlink", _XLINK)
 _NUMBER = r"-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?"
 _PATH = re.compile(rf"(?:[ML]\s+{_NUMBER}\s+{_NUMBER}\s*)+")
-_TRANSFORM = re.compile(rf"translate\(({_NUMBER})\s+({_NUMBER})\) rotate\(-90\)")
+_TRANSFORM = re.compile(rf"translate\(({_NUMBER})\s+({_NUMBER})\) rotate\((-90|0|45|90)\)")
 _ATTRIBUTES = {
     "svg": {"width", "height", "viewBox"},
     "rect": {"x", "y", "width", "height", "fill"},

@@ -32,6 +32,7 @@ def render_well_component(
     key: str,
     review_mode: str | None = None,
     right_edge: int | None = None,
+    workflow_orientation: str = "wells_left",
 ) -> dict[str, Any] | None:
     """Show the overlay and return its last ``{token, revision, points}`` event.
 
@@ -55,6 +56,7 @@ def render_well_component(
         token=token,
         review_mode=review_mode,
         right_edge=right_edge,
+        workflow_orientation=workflow_orientation,
         key=key,
         default=None,
     )

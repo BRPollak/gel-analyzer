@@ -21,6 +21,8 @@ class GelOrientation:
     corners: tuple[tuple[float, float], ...]
     counterclockwise_degrees: float
     size: tuple[int, int]
+    outline_complete: bool = True
+    supported_edges: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,7 @@ class GelImage:
     preview_png: bytes
     crop_box: tuple[int, int, int, int]
     orientation: GelOrientation | None = None
+    workflow_orientation: str = "wells_left"
 
     @property
     def preview_width(self) -> int:
@@ -57,21 +60,31 @@ class GelImage:
         return self.crop_box != (0, 0, self.width, self.height)
 
 
-def orient_gel_image(gel: GelImage, rectangle: GelRectangle | None = None) -> GelImage:
+def orient_gel_image(
+    gel: GelImage, rectangle: GelRectangle | None = None, *,
+    fallback_angle_degrees: float | None = None,
+    supported_edges: tuple[str, ...] = (),
+) -> GelImage:
     """Stage a reoriented first crop without changing the current gel or TIFF.
 
     The first preview is a lossless copy of the decoded TIFF crop, including its
     bit depth. Repeated requests therefore never resample an earlier result.
     """
     if gel.orientation is not None:
-        if rectangle is not None:
+        if rectangle is not None or fallback_angle_degrees is not None:
             raise OrientationError(
                 "Manual orientation must start from the original cropped image."
             )
         return gel
     with Image.open(BytesIO(gel.preview_png)) as cropped:
         cropped.load()
-        result = orient_gel(cropped) if rectangle is None else orient_gel(cropped, rectangle=rectangle)
+        options = {"workflow_orientation": gel.workflow_orientation} if gel.workflow_orientation != "wells_left" else {}
+        if rectangle is not None:
+            options["rectangle"] = rectangle
+        if fallback_angle_degrees is not None:
+            options["fallback_angle_degrees"] = fallback_angle_degrees
+            options["supported_edges"] = supported_edges
+        result = orient_gel(cropped, **options)
     preview = BytesIO()
     result.image.save(preview, format="PNG")
     return replace(
@@ -81,6 +94,8 @@ def orient_gel_image(gel: GelImage, rectangle: GelRectangle | None = None) -> Ge
             corners=result.rectangle.corners,
             counterclockwise_degrees=result.counterclockwise_degrees,
             size=result.image.size,
+            outline_complete=result.outline_complete,
+            supported_edges=result.supported_edges,
         ),
     )
 

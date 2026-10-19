@@ -352,3 +352,28 @@ test("legacy snapshots use a configured photo only for matching identity and lab
     assert.equal(h.edits.length, 0);
   }, {presets: referencePresets, ladder: {preset, laneIndex: 0, placements: []}, ladderStep: "markers"});
 });
+
+test("top ladder keyboard follows downward migration and detected proposals preserve size assignment", () => harness(h => {
+  h.select("ladder-preset", "example");
+  h.nodes["ladder-continue"].dispatch("click");
+  h.select("ladder-lane", "0");
+  h.nodes["ladder-use-lane"].dispatch("click");
+  h.nodes["ladder-detect-bands"].dispatch("click");
+  assert.equal(h.nodes["ladder-detected-bands"].children.length, 2);
+  assert.equal(h.nodes["ladder-detected-bands"].children[0].disabled, true, "choose a size before assigning a band");
+  h.marker(1).dispatch("click");
+  h.nodes["ladder-detected-bands"].children[0].dispatch("click");
+  assert.deepEqual(h.state.ladder.placements, [{markerIndex: 1, x: 15, y: 44.25}]);
+  const cursor = h.nodes["ladder-cursor"];
+  cursor.dispatch("keydown", {key: "ArrowDown", shiftKey: true});
+  cursor.dispatch("keydown", {key: "Enter"});
+  assert.deepEqual(h.state.ladder.placements, [{markerIndex: 1, x: 15, y: 54.25}]);
+  const line = h.nodes["ladder-cursor-line"].attributes;
+  assert.equal(line.y1, line.y2);
+  assert.equal(Number(line.x2) - Number(line.x1), 20);
+  assert.match(cursor.attributes["aria-label"], /Up and Down/);
+  h.nodes["ladder-confirm"].dispatch("click");
+  assert.deepEqual(h.actions, ["confirm"]);
+}, {workflow_orientation: "wells_top", width: 100, height: 200,
+  lanes: [[5, 10, 25, 190], [40, 10, 60, 190]],
+  bandCandidates: [[{x: 15, y: 44.25}, {x: 15, y: 150}], []]}));

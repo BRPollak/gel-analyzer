@@ -61,7 +61,7 @@ def test_lane_confirmation_offers_ladder_and_skip_preserves_lane_only_image(anno
     assert app.session_state["annotation_png"] == expected_png
     assert app.session_state["annotation_base_png"] == expected_png
     assert "annotate_ladder" in keys(app) and "skip_ladder" in keys(app)
-    assert not app.get("download_button")
+    assert not any(button.key == "download_annotations" for button in app.get("download_button"))
     assert any("Would you like to annotate a ladder?" in item.value for item in app.markdown)
 
     app.button(key="skip_ladder").click().run()
@@ -71,7 +71,7 @@ def test_lane_confirmation_offers_ladder_and_skip_preserves_lane_only_image(anno
     assert app.session_state["annotation_completed"] is True
     assert app.session_state["annotation_png"] == expected_png
     assert app.session_state["ladder_data"] is None
-    assert app.get("download_button")[0].label == "Download annotated PNG"
+    assert next(button for button in app.get("download_button") if button.key == "download_annotations").label == "Download annotated PNG"
     assert crop.preview_png == original
     assert app.session_state["gel_image"].source_bytes == source
 
@@ -154,7 +154,7 @@ def test_immediate_confirmation_contains_latest_placement_and_only_commits_once(
     assert app.session_state["annotation_png"] == expected_png
     assert app.session_state["annotation_dimensions"] == (413, 131)
     assert app.button(key="edit_ladder").label == "Edit ladder"
-    assert app.get("download_button")[0].label == "Download annotated PNG"
+    assert next(button for button in app.get("download_button") if button.key == "download_annotations").label == "Download annotated PNG"
     annotated.event = {**event, "action": "edit", "revision": 999, "ladder": ladder_snapshot(70)}
     app.run()
     assert app.session_state["ladder_data"] == latest

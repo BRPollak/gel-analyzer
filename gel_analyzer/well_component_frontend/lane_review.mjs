@@ -1,7 +1,16 @@
-import {clampRightEdge, laneBorderLimits, laneDeleteLayout, moveLaneBorder, nearestHandle, screenRadius, wellsWithLaneBorders} from "./geometry.mjs";
+import {laneAxisState, swapBounds, swapPoint, clampRightEdge, laneBorderLimits, laneDeleteLayout, moveLaneBorder, nearestHandle, screenRadius, wellsWithLaneBorders} from "./geometry.mjs";
 
 /** Axis-constrained review interactions, independent of the guide editor. */
-export function createLaneReview({svg, getState, pointerPosition, repaint, emit}) {
+export function createLaneReview({svg, getState: displayState, pointerPosition: displayPointerPosition, repaint, emit}) {
+  const isTop = () => displayState()?.workflowOrientation === "wells_top";
+  const getState = () => laneAxisState(displayState());
+  const pointXY = point => isTop() ? swapPoint(point) : point;
+  const pointerPosition = event => {
+    const point = displayPointerPosition(event);
+    return point && pointXY(point);
+  };
+  const eventLanes = lanes => lanes.map(lane => isTop() ? swapBounds(lane) : [...lane]);
+  const lineXY = points => isTop() ? {x1: points.y1, y1: points.x1, x2: points.y2, y2: points.x2} : points;
   const layer = document.getElementById("lane-review");
   const excluded = document.getElementById("excluded-right");
   const wrap = document.getElementById("image-wrap");
@@ -22,7 +31,7 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     const group = element("g", {class: `review-handle ${edge === "right" ? "extent-handle" : "border-handle"}`,
       "data-review-edge": edge, "data-lane-index": index,
       "data-testid": edge === "right" ? "lane-right-edge" : `lane-${index + 1}-${edge}`,
-      role: "slider", tabindex: "0", "aria-orientation": edge === "right" ? "horizontal" : "vertical"});
+      role: "slider", tabindex: "0", "aria-orientation": (edge === "right") !== isTop() ? "horizontal" : "vertical"});
     // All line hit regions sit behind every grip, so even a one-pixel-high
     // lane keeps its top and bottom grips independently reachable.
     const line = element("line", {class: `review-line ${edge === "right" ? "extent-line" : ""}`,
@@ -58,6 +67,7 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     deleteButtons = [];
     deletionPending = false;
     wrap.style.paddingBottom = "0px";
+    wrap.style.paddingRight = "0px";
     excluded.setAttribute("visibility", "hidden");
     const state = getState();
     if (state?.reviewMode === "borders") {
@@ -72,32 +82,34 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
   function draw() {
     const state = getState();
     if (!state?.reviewMode) return;
-    const unit = screenRadius(1, svg.getBoundingClientRect(), state.width);
+    const unit = screenRadius(1, svg.getBoundingClientRect(), displayState().width);
     const enabled = state.editable && !deletionPending;
     svg.dataset.reviewPending = String(deletionPending);
     if (state.reviewMode === "borders") {
       const layout = laneDeleteLayout(state.lanes, state.height, unit);
       // On a thumbnail, extend the control column below the image instead of
       // shrinking or overlapping the trash targets. Keep that space in-frame.
-      wrap.style.paddingBottom = `${layout.overflow / unit}px`;
+      wrap.style.paddingBottom = `${isTop() ? 40 : layout.overflow / unit}px`;
+      wrap.style.paddingRight = `${isTop() ? layout.overflow / unit : 40}px`;
       deleteButtons.forEach(({group, connector, index}) => {
-        const {x, y} = layout.buttons[index];
+        const canonical = layout.buttons[index];
+        const [x, y] = pointXY([canonical.x, canonical.y]);
         const lane = state.lanes[index];
         group.setAttribute("transform", `translate(${x} ${y}) scale(${unit})`);
         group.setAttribute("tabindex", enabled ? "0" : "-1");
         group.setAttribute("aria-disabled", String(!enabled));
-        for (const [attribute, coordinate] of Object.entries({x1: lane[2],
-          y1: (lane[1] + lane[3]) / 2, x2: x - 16 * unit, y2: y})) {
+        for (const [attribute, coordinate] of Object.entries(lineXY({x1: lane[2],
+          y1: (lane[1] + lane[3]) / 2, x2: canonical.x - 16 * unit, y2: canonical.y}))) {
           connector.setAttribute(attribute, coordinate);
         }
       });
     }
     if (state.reviewMode === "extent") {
       excluded.setAttribute("visibility", "visible");
-      excluded.setAttribute("x", state.rightEdge);
-      excluded.setAttribute("y", 0);
-      excluded.setAttribute("width", state.width - state.rightEdge);
-      excluded.setAttribute("height", state.height);
+      excluded.setAttribute("x", isTop() ? 0 : state.rightEdge);
+      excluded.setAttribute("y", isTop() ? state.rightEdge : 0);
+      excluded.setAttribute("width", isTop() ? state.height : state.width - state.rightEdge);
+      excluded.setAttribute("height", isTop() ? state.width - state.rightEdge : state.height);
       excluded.dataset.rightEdge = state.rightEdge;
     }
     handles.forEach(handle => {
@@ -119,15 +131,16 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
         linePoints = {x1: lane[0], y1: y, x2: lane[2], y2: y};
       }
       for (const node of [line, hit]) {
-        for (const [attribute, coordinate] of Object.entries(linePoints)) node.setAttribute(attribute, coordinate);
+        for (const [attribute, coordinate] of Object.entries(lineXY(linePoints))) node.setAttribute(attribute, coordinate);
       }
+      [x, y] = pointXY([x, y]);
       for (const node of [grip, gripHit]) {
         node.setAttribute("cx", x);
         node.setAttribute("cy", y);
         node.setAttribute("r", (node === grip ? 7 : 15) * unit);
       }
       // Direction arrows distinguish top/bottom grips even when a lane is thin.
-      symbol.setAttribute("transform", `translate(${x} ${y}) scale(${unit})`);
+      symbol.setAttribute("transform", `translate(${x} ${y}) scale(${unit})${isTop() ? " rotate(90)" : ""}`);
       symbol.setAttribute("d", edge === "right"
         ? "M-5 0 L-1 -3 L-1 3 Z M5 0 L1 -3 L1 3 Z"
         : edge === "top" ? "M-4 -2 L4 -2 L0 3 Z" : "M-4 2 L4 2 L0 -3 Z");
@@ -140,8 +153,9 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
       group.setAttribute("aria-valuemax", limits[1]);
       group.setAttribute("aria-valuenow", value);
       group.setAttribute("aria-label", edge === "right"
-        ? "Shared right boundary. Use Left and Right arrows; Shift moves ten pixels."
-        : `Lane ${index + 1} ${edge} boundary. Use Up and Down arrows; Shift moves ten pixels.`);
+        ? (isTop() ? "Shared bottom boundary. Use Up and Down arrows; Shift moves ten pixels." : "Shared right boundary. Use Left and Right arrows; Shift moves ten pixels.")
+        : (isTop() ? `Lane ${index + 1} ${edge === "top" ? "left" : "right"} boundary. Use Left and Right arrows; Shift moves ten pixels.`
+          : `Lane ${index + 1} ${edge} boundary. Use Up and Down arrows; Shift moves ten pixels.`));
     });
   }
 
@@ -160,7 +174,7 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
   function commit() {
     const state = getState();
     emit({kind: "lane_review", mode: state.reviewMode,
-      lanes: state.lanes.map(lane => [...lane]), right_edge: state.rightEdge});
+      lanes: eventLanes(state.lanes), right_edge: state.rightEdge});
   }
 
   function deleteLane(button) {
@@ -171,7 +185,7 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     deletionPending = true;
     draw();
     emit({kind: "lane_review", mode: "borders", action: "delete", lane_index: index,
-      lanes: state.lanes.map(lane => [...lane]), right_edge: state.rightEdge});
+      lanes: eventLanes(state.lanes), right_edge: state.rightEdge});
   }
 
   svg.addEventListener("click", event => {
@@ -192,8 +206,9 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     }
     const point = pointerPosition(event);
     const nearest = point && nearestHandle(handles.map(handle => ({
-      handle, x: Number(handle.group.dataset.x), y: Number(handle.group.dataset.y),
-    })), point, screenRadius(15, svg.getBoundingClientRect(), state.width));
+      handle, x: pointXY([Number(handle.group.dataset.x), Number(handle.group.dataset.y)])[0],
+      y: pointXY([Number(handle.group.dataset.x), Number(handle.group.dataset.y)])[1],
+    })), point, screenRadius(15, svg.getBoundingClientRect(), displayState().width));
     const handle = nearest ? nearest.handle.group : event.target.closest("[data-review-edge]");
     if (!handle) return;
     event.preventDefault();
@@ -247,7 +262,7 @@ export function createLaneReview({svg, getState, pointerPosition, repaint, emit}
     if (!handle) return;
     const edge = handle.dataset.reviewEdge;
     const index = Number(handle.dataset.laneIndex);
-    const direction = (edge === "right" ? {ArrowLeft: -1, ArrowRight: 1} : {ArrowUp: -1, ArrowDown: 1})[event.key];
+    const direction = ((edge === "right") !== isTop() ? {ArrowLeft: -1, ArrowRight: 1} : {ArrowUp: -1, ArrowDown: 1})[event.key];
     if (!direction) return;
     event.preventDefault();
     const value = edge === "right" ? state.rightEdge : state.lanes[index][edge === "top" ? 1 : 3];

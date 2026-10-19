@@ -34,6 +34,9 @@ def invalidate_confirmation() -> None:
 
 
 def reset_annotations() -> None:
+    st.session_state.band_data = None
+    st.session_state.band_geometry = None
+    st.session_state.band_editor_generation = st.session_state.get("band_editor_generation", 0) + 1
     st.session_state.annotation_data = None
     st.session_state.ladder_data = None
     st.session_state.ladder_step = "preset"
@@ -44,7 +47,8 @@ def reset_annotations() -> None:
 
 
 def _sync_crop(crop) -> None:
-    geometry = (crop.crop_box, crop.width, crop.height, tuple(crop.lanes))
+    geometry = (crop.crop_box, crop.width, crop.height, tuple(crop.lanes),
+                getattr(crop, "workflow_orientation", "wells_left"))
     previous = st.session_state.get("annotation_geometry")
     if previous is not None and previous != geometry:
         if st.session_state.get("ladder_data") or st.session_state.get("ladder_draft"):
@@ -208,7 +212,8 @@ def show_annotations(crop, filename: str) -> None:
         reset_annotations()
     _sync_crop(crop)
     if st.session_state.annotation_data is None:
-        st.session_state.annotation_data = default_annotations(len(crop.lanes), crop.lanes)
+        st.session_state.annotation_data = default_annotations(len(crop.lanes), crop.lanes,
+            getattr(crop, "workflow_orientation", "wells_left"))
     stage = st.session_state.annotation_stage
     if stage not in ("ladder_offer", "final"):
         with st.container(key="gel_annotation_heading"):
@@ -267,6 +272,9 @@ def show_annotations(crop, filename: str) -> None:
                             mime=specification["mime"],
                             key="download_annotations", type="primary",
                         )
+        if stage == "final":
+            from .band_ui import show_band_analysis
+            show_band_analysis(crop, st.session_state.ladder_data)
         return
     presets = []
     if stage == "ladder":

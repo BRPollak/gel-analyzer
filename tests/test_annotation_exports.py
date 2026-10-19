@@ -121,7 +121,8 @@ def test_legacy_confirmation_still_exports_a_self_contained_svg(crop):
     assert b64decode(image.attrib["{http://www.w3.org/1999/xlink}href"].split(",", 1)[1]) == png
 
 
-def test_real_browser_serializer_is_accepted_with_rich_text_groups_and_ladder(crop):
+@pytest.mark.parametrize("orientation,angle", [("wells_left", 90), ("wells_top", 90), ("wells_top", 45)])
+def test_real_browser_serializer_is_accepted_with_rich_text_groups_and_ladder(crop, orientation, angle):
     if not shutil.which("node"):
         pytest.skip("Node is required for the browser/server serialization contract.")
     script = """
@@ -140,6 +141,9 @@ const layout=layoutAnnotations(state,measure);
 process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.width,
   height:layout.height,gel_x:layout.gelX,gel_y:layout.gelY}));
 """
+    script = script.replace("const layout=layoutAnnotations(state,measure);",
+                            f"state.workflow_orientation={json.dumps(orientation)};state.annotations.laneLabelAngle={angle};\n"
+                            "const layout=layoutAnnotations(state,measure);")
     result = subprocess.run(["node", "--input-type=module", "-e", script], check=True,
                             capture_output=True, text=True, cwd=Path(__file__).parents[1])
     event = json.loads(result.stdout)
@@ -147,4 +151,6 @@ process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.widt
     labels = root.findall("{http://www.w3.org/2000/svg}text")
     assert [label.text for label in labels] == ["A ", "& β", "<Control>", "1 kb"]
     assert float(labels[-1].attrib["font-size"]) == pytest.approx(14 * 0.8)
-    assert labels[-1].attrib["transform"].endswith("rotate(-90)")
+    assert labels[-1].attrib["transform"].endswith(f"rotate({0 if orientation == 'wells_top' else -90})")
+    if orientation == "wells_top":
+        assert all(label.attrib["transform"].endswith(f"rotate({angle})") for label in labels[:-1])

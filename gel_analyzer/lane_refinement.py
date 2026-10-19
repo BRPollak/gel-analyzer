@@ -17,14 +17,23 @@ def _typical_height(wells: tuple[Well, ...]) -> float | None:
     """Require several mutually consistent wells before borrowing their height."""
     if len(wells) < 3:
         return None
-    heights = np.array([well.bounds[3] - well.bounds[1] for well in wells])
+    heights = np.sort(np.array([well.bounds[3] - well.bounds[1] for well in wells]))
     # A lower median can be dominated by partial outlines. Look for the
     # largest consistent group, breaking ties in favor of substantial wells.
-    groups = [heights[np.abs(heights - height) <= height * 0.20] for height in heights]
-    group = max(groups, key=lambda values: (len(values), float(np.median(values))))
-    if len(group) < max(2, math.ceil(len(wells) * 0.6)):
+    # Bounds are integer pixels, so floor the tolerance before finding each
+    # inclusive interval. Keep only its indices, rather than one potentially
+    # N-element array per well when an exact count creates many narrow lanes.
+    tolerance = np.floor(heights * 0.20).astype(heights.dtype)
+    left = np.searchsorted(heights, heights - tolerance, side="left")
+    right = np.searchsorted(heights, heights + tolerance, side="right")
+    counts = right - left
+    largest = int(counts.max())
+    if largest < max(2, math.ceil(len(wells) * 0.6)):
         return None
-    return float(np.median(group))
+    first = left + (counts - 1) // 2
+    second = left + counts // 2
+    medians = (heights[first].astype(float) + heights[second]) / 2
+    return float(medians[counts == largest].max())
 
 
 def _crisp_caps(pixels: np.ndarray, well: Well) -> bool:
@@ -114,8 +123,23 @@ def _band_span(
 
 def refine_lanes(
     image: Image.Image, result: DetectionResult, *, pixels: np.ndarray | None = None,
+    workflow_orientation="wells_left",
 ) -> DetectionResult:
     """Retain well geometry and expand only supported, nonoverlapping lanes."""
+    from .workflow_orientation import is_top, orientation_text, swap_bounds, swap_point
+
+    if is_top(workflow_orientation):
+        transformed = DetectionResult(
+            tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in result.wells),
+            tuple(swap_bounds(lane) for lane in result.lanes), result.warnings,
+        )
+        refined = refine_lanes(image.transpose(Image.Transpose.TRANSPOSE), transformed,
+                               pixels=None if pixels is None else pixels.T)
+        return DetectionResult(
+            tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in refined.wells),
+            tuple(swap_bounds(lane) for lane in refined.lanes),
+            tuple(orientation_text(warning, workflow_orientation) for warning in refined.warnings),
+        )
     wells = result.wells
     if not wells:
         return result

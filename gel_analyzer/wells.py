@@ -6,6 +6,7 @@ downstream image to estimate lane coverage without changing the well outlines.
 """
 
 from dataclasses import dataclass
+import heapq
 from itertools import combinations
 import math
 from numbers import Integral
@@ -13,13 +14,15 @@ from numbers import Integral
 import numpy as np
 from PIL import Image
 
+from .workflow_orientation import is_top, orientation_text, swap_bounds, swap_point, swap_size
+
 
 Point = tuple[float, float]
 Bounds = tuple[int, int, int, int]
 
 
 class SelectionError(ValueError):
-    """A guide cannot delimit a generally vertical selection of wells."""
+    """A guide cannot delimit wells along the selected workflow's lane axis."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,12 +38,14 @@ class DetectionResult:
     warnings: tuple[str, ...] = ()
 
 
-def validate_line(points, size: tuple[int, int]) -> tuple[Point, Point]:
+def validate_line(points, size: tuple[int, int], *, workflow_orientation="wells_left") -> tuple[Point, Point]:
     """Return top/bottom endpoints, accepting either click order.
 
     Endpoints describe pixel boundaries, including the image's right/bottom
     edge. The vertical span must be at least 8–24 pixels depending on image
     height, and at least as large as the horizontal span.
+    Wells-at-top mode applies the same rules horizontally and returns the
+    left/right endpoints in displayed XY coordinates.
     """
     try:
         coordinates = np.asarray(points, dtype=float)
@@ -52,6 +57,12 @@ def validate_line(points, size: tuple[int, int]) -> tuple[Point, Point]:
         raise SelectionError("Both endpoints must have finite image coordinates.")
     if min(size) <= 0 or (coordinates < 0).any() or (coordinates > size).any():
         raise SelectionError("Keep both endpoints inside the confirmed gel image.")
+    if is_top(workflow_orientation):
+        try:
+            ordered = validate_line(coordinates[:, ::-1], swap_size(size))
+        except SelectionError as exc:
+            raise SelectionError(orientation_text(str(exc), workflow_orientation)) from exc
+        return tuple(swap_point(point) for point in ordered)
     coordinates = coordinates[np.argsort(coordinates[:, 1], kind="stable")]
     delta_x, delta_y = coordinates[1] - coordinates[0]
     if delta_x == delta_y == 0:
@@ -499,7 +510,7 @@ def _result(wells, width: int, warnings=()) -> DetectionResult:
 
 
 def _join_count_fragments(wells, expected_count: int):
-    """Use typical observed size as a soft check, never impose an even grid."""
+    """Join compatible nearby fragments before enforcing the requested count."""
     selected = sorted(wells, key=lambda well: well.center[1])
     joined = False
     while len(selected) > expected_count:
@@ -524,17 +535,170 @@ def _join_count_fragments(wells, expected_count: int):
     return selected, joined
 
 
-def detect_wells(image: Image.Image, endpoints, *, expected_count: int | None = None) -> DetectionResult:
+def _well_evidence(pixels: np.ndarray, well: Well) -> float:
+    """Rank competing outlines using sustained original-image contrast."""
+    left, top, right, bottom = well.bounds
+    reach = max(4, right - left)
+    outside = np.hstack((pixels[top:bottom, max(0, left - reach):left],
+                         pixels[top:bottom, right:min(pixels.shape[1], right + reach)]))
+    if not outside.size:
+        return 0.0
+    noise = max(0.3, float(np.median(np.abs(np.diff(outside, axis=1))) / 0.954)) if outside.shape[1] > 1 else 0.3
+    background = np.median(outside, axis=1)
+    contrast = np.quantile(np.abs(pixels[top:bottom, left:right] - background[:, None]), 0.9, axis=1)
+    return float(np.percentile(contrast, 25)) / noise * math.sqrt(bottom - top)
+
+
+def _fit_well_count(pixels: np.ndarray, points, wells, count: int, radius: int):
+    """Keep supported outlines and allocate exactly the requested number of slots.
+
+    Count-derived positions are proposals, not image detections. Allocate
+    missing slots to the largest remaining spacing intervals, including the
+    guide endpoints. Integer cells then guarantee positive, disjoint bounds,
+    even when a dense requested count requires narrowing existing outlines.
+    """
+    height, width = pixels.shape
+    start = max(0, math.floor(points[0][1]))
+    end = min(height, math.ceil(points[1][1]))
+    selected = sorted(wells, key=lambda well: well.center[1])
+    warnings = []
+    if len(selected) > count:
+        typical = float(np.median([well.bounds[3] - well.bounds[1] for well in selected]))
+        targets = np.linspace(start + typical / 2, end - typical / 2, count) if count > 1 else [(start + end) / 2]
+        selected.sort(key=lambda well: (-_well_evidence(pixels, well),
+                                        min(abs(well.center[1] - target) for target in targets), well.center[1]))
+        omitted = len(selected) - count
+        selected = sorted(selected[:count], key=lambda well: well.center[1])
+        warnings.append(f"Kept {count} wells to match the requested count and omitted {omitted} detected candidate(s), prioritizing stronger image evidence. Review the retained wells and lane boundaries.")
+    if len(selected) == count:
+        return selected, warnings
+
+    # Preserve the existing small endpoint-completion allowance. Inferred
+    # positions otherwise stay within the selected guide range.
+    if selected:
+        start = min(start, selected[0].bounds[1])
+        end = max(end, selected[-1].bounds[3])
+    typical = float(np.median([well.bounds[3] - well.bounds[1] for well in selected])) if selected else max(1.0, (end - start) / count * 0.6)
+    depth = float(np.median([well.bounds[2] - well.bounds[0] for well in selected])) if selected else radius * 2
+    entries = []
+    if not selected:
+        entries = [(start + (index + 0.5) * (end - start) / count, None) for index in range(count)]
+    else:
+        centers = [well.center[1] for well in selected]
+        anchors = [math.floor(center) for center in centers]
+        nominal = max(1.0, (end - start - typical) / max(1, count - 1))
+        distances = np.diff(centers)
+        spacing = float(np.median([distance / max(1, round(distance / nominal)) for distance in distances])) if len(distances) else nominal
+        # One heap entry per gap. Interior gaps are bounded by two observed
+        # centers; endpoint gaps are bounded by one center and half a well.
+        gaps = [(start, selected[0].bounds[1]),
+                *((first.bounds[3], second.bounds[1]) for first, second in zip(selected, selected[1:])),
+                (selected[-1].bounds[3], end)]
+        # Unequal well sizes can put a center midpoint inside a wide outline.
+        # Use its actual free border gaps first, preserving every supported
+        # rectangle whenever enough unoccupied pixels exist for the count.
+        if sum(high - low for low, high in gaps) < count - len(selected):
+            gaps = [(start, anchors[0]), *((a + 1, b) for a, b in zip(anchors, anchors[1:])),
+                    (anchors[-1] + 1, end)]
+        capacities = [high - low for low, high in gaps]
+        spans = [max(0.0, centers[0] - start - typical / 2), *distances,
+                 max(0.0, end - centers[-1] - typical / 2)]
+        allocations = [0] * len(capacities)
+        heap = []
+        for index, capacity in enumerate(capacities):
+            if capacity:
+                divisor = 0.5 if index in (0, len(capacities) - 1) else 1.0
+                heapq.heappush(heap, (-spans[index] / divisor, index, divisor))
+        for _ in range(count - len(selected)):
+            _, index, divisor = heapq.heappop(heap)
+            allocations[index] += 1
+            if allocations[index] < capacities[index]:
+                heapq.heappush(heap, (-spans[index] / (allocations[index] + divisor), index, divisor))
+        for index, amount in enumerate(allocations):
+            if amount:
+                if index == 0:
+                    extent = max(amount, min(amount * spacing, spans[index]))
+                    proposed = [centers[0] - extent * step / amount for step in range(amount, 0, -1)]
+                elif index == len(selected):
+                    extent = max(amount, min(amount * spacing, spans[index]))
+                    proposed = [centers[-1] + extent * step / amount for step in range(1, amount + 1)]
+                else:
+                    proposed = [centers[index - 1] + (centers[index] - centers[index - 1]) * step / (amount + 1)
+                                for step in range(1, amount + 1)]
+                low, end_gap = gaps[index]
+                high = end_gap - 1
+                # Reserve one integer pixel for every remaining proposal.
+                for number, center in enumerate(proposed):
+                    anchor = max(low, min(high - (amount - number - 1), math.floor(center)))
+                    entries.append((center if math.floor(center) == anchor else anchor + 0.5, None))
+                    low = anchor + 1
+            if index < len(selected):
+                entries.append((centers[index], selected[index]))
+
+    anchors = [math.floor(center) for center, _ in entries]
+    boundaries = [start]
+    for index, (a, b) in enumerate(zip(anchors, anchors[1:])):
+        first, second = entries[index][1], entries[index + 1][1]
+        low = first.bounds[3] if first is not None else a + 1
+        high = second.bounds[1] if second is not None else b
+        midpoint = (a + b + 1) // 2
+        boundaries.append(max(low, min(high, midpoint)) if low <= high
+                          else max(a + 1, min(b, midpoint)))
+    boundaries.append(end)
+    result = []
+    inferred = []
+    narrowed = False
+    slope = (points[1][0] - points[0][0]) / (points[1][1] - points[0][1])
+    for index, (center, well) in enumerate(entries):
+        low, high = boundaries[index:index + 2]
+        if well is not None:
+            left, top, right, bottom = well.bounds
+            bounds = (left, max(low, top), right, min(high, bottom))
+            narrowed |= bounds != well.bounds
+        else:
+            thickness = max(1, min(high - low, round(typical)))
+            top = max(low, min(high - thickness, round(center - thickness / 2)))
+            x = points[0][0] + (center - points[0][1]) * slope
+            well_depth = max(1, min(width, round(depth)))
+            left = max(0, min(width - well_depth, round(x - well_depth / 2)))
+            bounds = (left, top, left + well_depth, top + thickness)
+            inferred.append(index + 1)
+        result.append(_well(bounds))
+    numbers = ", ".join(map(str, inferred[:12])) + (", …" if len(inferred) > 12 else "")
+    warnings.append(f"To match the requested {count} wells, {len(inferred)} position(s) were inferred from guide spacing (wells {numbers}). These positions are not confirmed by image evidence. Review every inferred well and its lane boundaries.")
+    if narrowed:
+        warnings.append("Some detected well boundaries were narrowed to fit the requested count without overlap. Review all well and lane boundaries.")
+    return result, warnings
+
+
+def detect_wells(image: Image.Image, endpoints, *, expected_count: int | None = None,
+                 workflow_orientation="wells_left") -> DetectionResult:
     """Locate wells, tolerate small guide errors, and independently fit lanes.
 
-    A lane-count hint can join compatible fragments and admit faint outlines
-    supported at nearby guide positions. It never creates an evenly spaced
-    set in the absence of image evidence or removes established wells merely
-    to reach the requested count.
+    An entered count is an exact constraint. Supported outlines and faint
+    recovery take priority; missing positions are inferred from the guide and
+    spacing with an explicit review warning. Without a count, only supported
+    outlines are returned. Source image pixels are never altered.
     """
     if expected_count is not None and (isinstance(expected_count, bool) or not isinstance(expected_count, Integral) or expected_count <= 0):
-        raise SelectionError("Expected lane count must be a positive integer.")
+        raise SelectionError("The number of wells must be a positive integer.")
+    if is_top(workflow_orientation):
+        points = validate_line(endpoints, image.size, workflow_orientation=workflow_orientation)
+        # Only the computational view swaps axes. The displayed/source image
+        # is untouched, and every detected rectangle is returned in display XY.
+        result = detect_wells(image.transpose(Image.Transpose.TRANSPOSE),
+                              tuple(swap_point(point) for point in points), expected_count=expected_count)
+        return DetectionResult(
+            tuple(Well(swap_bounds(well.bounds), swap_point(well.center)) for well in result.wells),
+            tuple(swap_bounds(lane) for lane in result.lanes),
+            tuple(orientation_text(warning, workflow_orientation) for warning in result.warnings),
+        )
     points = validate_line(endpoints, image.size)
+    if expected_count is not None:
+        expected_count = int(expected_count)
+        available = min(image.height, math.ceil(points[1][1])) - max(0, math.floor(points[0][1]))
+        if expected_count > available:
+            raise SelectionError(f"The requested {expected_count} wells cannot fit in this {available}-pixel guide span: each well needs at least one pixel across the lanes. Extend the guide or reduce the number of wells.")
     radius = max(7, min(40, int(round(min(image.size) * 0.016))))
     original = _detect_supported_wells(image, points)
     result = _complete_endpoints(image, points, original, radius)
@@ -571,7 +735,7 @@ def detect_wells(image: Image.Image, endpoints, *, expected_count: int | None = 
         if joined:
             warnings.append("The expected lane count helped join short well fragments. Review the inferred boundaries of the joined lanes.")
         if len(selected) < expected_count and len(selected) >= 2:
-            # A count hint permits a faint search, but candidates still need
+            # An entered count permits a faint search, but candidates still need
             # coherent contrast on both nearby guides and in the original data.
             faint = tuple(_detect_wells(image, guide, sensitive=True, pixels=pixels)[0] for guide in guides)
             candidates = [candidate for candidate in _consensus_wells(faint)
@@ -592,8 +756,10 @@ def detect_wells(image: Image.Image, endpoints, *, expected_count: int | None = 
                         accepted += 1
                 if accepted:
                     warnings.append("The expected lane count helped recover faint well outlines. Review the inferred lane boundaries.")
-        if len(selected) != expected_count:
-            warnings.append(f"Expected {expected_count} lanes, but found {len(selected)} supported lanes. Review the guide and add or remove lanes if needed.")
+        selected, count_warnings = _fit_well_count(pixels, points, selected, expected_count, radius)
+        if count_warnings:
+            warnings = [warning for warning in warnings if "No wells" not in warning]
+            warnings.extend(count_warnings)
     result = _result(selected, image.width, warnings)
     from .lane_refinement import refine_lanes
 

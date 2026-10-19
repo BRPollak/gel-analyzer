@@ -1,21 +1,25 @@
 /** Fit presentation pixels without changing the source image or SVG viewBox. */
 export function fitPreviewGeometry({imageWidth, imageHeight, availableWidth,
-  viewportHeight, chromeHeight = 0, outerReserve = 100, reviewMode = null, laneCount = 0}) {
+  viewportHeight, chromeHeight = 0, outerReserve = 100, reviewMode = null, laneCount = 0, workflowOrientation = "wells_left"}) {
   if (![imageWidth, imageHeight, availableWidth, viewportHeight].every(value => Number.isFinite(value) && value > 0)) {
     throw new Error("Preview dimensions must be positive finite numbers.");
   }
-  const rightGutter = reviewMode === "borders" ? 40 : 0;
+  const topMode = workflowOrientation === "wells_top";
+  const rightGutter = reviewMode === "borders" && !topMode ? 40 : 0;
+  const bottomGutter = reviewMode === "borders" && topMode ? 40 : 0;
   const heightBudget = Math.max(1, viewportHeight - Math.max(0, chromeHeight) - Math.max(0, outerReserve));
-  const scale = Math.min(1, Math.max(1, availableWidth - rightGutter) / imageWidth, heightBudget / imageHeight);
+  const scale = Math.min(1, Math.max(1, availableWidth - rightGutter) / imageWidth, Math.max(1, heightBudget - bottomGutter) / imageHeight);
   const width = imageWidth * scale;
   const height = imageHeight * scale;
   // laneDeleteLayout keeps 32-screen-pixel targets apart. Count that footprint
   // once, rather than repeatedly subtracting its scale-dependent overflow.
-  const controlHeight = reviewMode === "borders" ? Math.max(0, laneCount) * 32 : 0;
+  const controlHeight = reviewMode === "borders" && !topMode ? Math.max(0, laneCount) * 32 : 0;
   const overflowHeight = Math.max(0, controlHeight - height);
-  return {scale, width, height, rightGutter, wrapperWidth: width + rightGutter,
-    overflowHeight, totalHeight: height + overflowHeight, heightBudget,
-    controlsOverflow: controlHeight > heightBudget};
+  const controlWidth = reviewMode === "borders" && topMode ? Math.max(0, laneCount) * 32 : 0;
+  const overflowWidth = Math.max(0, controlWidth - width);
+  return {scale, width, height, rightGutter, bottomGutter, wrapperWidth: width + rightGutter + overflowWidth,
+    overflowWidth, overflowHeight, totalHeight: height + overflowHeight + bottomGutter, heightBudget,
+    controlsOverflow: controlHeight > heightBudget || controlWidth > availableWidth};
 }
 
 /** The iframe's own height follows our result, so it cannot be an input. */

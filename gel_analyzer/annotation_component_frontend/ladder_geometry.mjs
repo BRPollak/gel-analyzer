@@ -23,12 +23,15 @@ export function cursorForMarker(ladder, markerIndex, lanes) {
   return lane ? {x: (lane[0] + lane[2]) / 2, y: (lane[1] + lane[3]) / 2} : null;
 }
 
-export function moveLadderCursor(cursor, direction, shift, lane) {
+export function moveLadderCursor(cursor, direction, shift, lane, orientation = "wells_left") {
+  const axis = orientation === "wells_top" ? "y" : "x";
+  const start = axis === "y" ? lane[1] : lane[0];
+  const end = axis === "y" ? lane[3] : lane[2];
   // Keyboard adjustment uses native pixels. Preserve fractional click values,
   // but keep the cursor within the last pixel when reaching a half-open edge.
   // A fractional click in the last pixel must not move left on ArrowRight.
-  return {...cursor, x: Math.min(Math.max(cursor.x, lane[0], lane[2] - 1),
-    Math.max(lane[0], cursor.x + direction * (shift ? 10 : 1)))};
+  return {...cursor, [axis]: Math.min(Math.max(cursor[axis], start, end - 1),
+    Math.max(start, cursor[axis] + direction * (shift ? 10 : 1)))};
 }
 
 export function placeLadderMarker(ladder, markerIndex, point, lanes) {

@@ -1,4 +1,4 @@
-"""Fit a gel's tilted outline and orient its original left edge at the top.
+"""Fit a gel's tilted outline and prepare it for the selected workflow.
 
 Detection uses a reduced grayscale copy. The accepted source pixels are sampled
 only once, with the rotation, vertical reflection, and rectangle crop composed
@@ -38,6 +38,8 @@ class OrientationResult:
     image: Image.Image
     rectangle: GelRectangle
     counterclockwise_degrees: float
+    outline_complete: bool = True
+    supported_edges: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -323,21 +325,255 @@ def fit_gel_rectangle(image: Image.Image) -> GelRectangle:
     )
 
 
+def _full_frame_envelope(size: tuple[int, int], degrees: float) -> GelRectangle:
+    """Enclose all source pixels in the tilted axes without claiming gel edges."""
+    cosine, sine = _cosine_sine(degrees)
+    u, v = np.asarray((cosine, sine)), np.asarray((-sine, cosine))
+    width, height = size
+    frame = np.asarray(((0, 0), (width, 0), (width, height), (0, height)))
+    left, right = float(np.min(frame @ u)), float(np.max(frame @ u))
+    top, bottom = float(np.min(frame @ v)), float(np.max(frame @ v))
+    corners = (left * u + top * v, right * u + top * v,
+               right * u + bottom * v, left * u + bottom * v)
+    return GelRectangle(tuple(tuple(float(value) for value in point) for point in corners),
+                        right - left, bottom - top, degrees)
+
+
+def _broad_boundary(pixels: np.ndarray, side: _Side, *, axis: int, near: bool) -> bool:
+    """An outer side separates broad regions, unlike a thin band or scratch.
+
+    Test sustained interior contrast against the available outside background.
+    A photographed side may sit only a few pixels from the frame boundary;
+    shorten the outside sample in that case instead of requiring nonexistent
+    background. Never clamp an out-of-frame coordinate onto the gel itself.
+    """
+    height, width = pixels.shape
+    direction = 1 if near else -1
+    # Array axes are y,x, whereas traced points are in displayed x,y.
+    coordinate = 1 - axis
+    distances = (max(4, min(pixels.shape) * 0.012),
+                 max(8, min(pixels.shape) * 0.035),
+                 max(12, min(pixels.shape) * 0.07))
+    for distance in distances:
+        inside, outside = side.points.copy(), side.points.copy()
+        inside[:, coordinate] += direction * distance
+        available = (outside[:, coordinate] if near else pixels.shape[axis] - outside[:, coordinate])
+        outside_distance = np.minimum(distance, available * .75)
+        outside[:, coordinate] -= direction * outside_distance
+        inside, outside = np.floor(inside).astype(int), np.floor(outside).astype(int)
+        valid = ((inside >= 0).all(axis=1) & (outside >= 0).all(axis=1)
+                 & (inside < (width, height)).all(axis=1) & (outside < (width, height)).all(axis=1)
+                 & (outside_distance >= 1))
+        if np.count_nonzero(valid) < len(side.points) * 0.65:
+            return False
+        inner, outer = inside[valid], outside[valid]
+        contrast = pixels[outer[:, 1], outer[:, 0]] - pixels[inner[:, 1], inner[:, 0]]
+        if np.median(contrast) < 0.12 or np.mean(contrast > 0.06) < 0.75:
+            return False
+    return True
+
+
+def _trace_partial_side(pixels: np.ndarray, *, axis: int, near: bool) -> _Side:
+    """Trace an observed side segment anywhere in an incompletely framed gel.
+
+    Unlike the complete-outline fitter, a partial photograph need not be
+    centered: both side edges can occupy the same image half, and the third
+    side can appear only near a corner. Scan the full frame and measure support
+    within the observed segment, never extrapolating across missing evidence.
+    """
+    size, across = pixels.shape[axis], pixels.shape[1 - axis]
+    positions = np.linspace(1, across - 2, min(121, across - 2))
+    candidates = []
+    for group, position in enumerate(positions):
+        center = int(position)
+        profile = (np.median(pixels[:, max(0, center - 1):center + 2], axis=1)
+                   if axis == 0 else np.median(pixels[max(0, center - 1):center + 2, :], axis=0))
+        scores = (_step(profile) * (-1 if near else 1))[1:size - 1].copy()
+        for _ in range(5):
+            peak = int(np.argmax(scores))
+            if scores[peak] < .025:
+                break
+            candidates.append((position + .5, float(peak + 1), group, scores[peak]))
+            scores[max(0, peak - 5):peak + 6] = 0
+    if len(candidates) < 12:
+        raise OrientationError(_UNCERTAIN)
+    points = np.asarray(candidates)
+    tolerance = max(1.8, size * .003)
+    rng = np.random.default_rng(0)
+    # A long interior band can be stronger than an outside side. Try the next
+    # independent line when broad-region checks reject a thin band or scratch.
+    for _ in range(5):
+        if len(points) < 12:
+            break
+        x, y, groups = points[:, 0], points[:, 1], points[:, 2].astype(int)
+        best_score, best = -1., None
+        for first, second in rng.integers(0, len(points), size=(1000, 2)):
+            delta = x[second] - x[first]
+            if abs(delta) < max(16, across * .08):
+                continue
+            slope = (y[second] - y[first]) / delta
+            if abs(slope) > .85:
+                continue
+            intercept = y[first] - slope * x[first]
+            residual = np.abs(y - (slope * x + intercept))
+            votes = np.zeros(len(positions))
+            np.maximum.at(votes, groups, np.where(residual <= tolerance, np.minimum(points[:, 3], .5), 0))
+            score = np.count_nonzero(votes) + votes.sum() * .4
+            if score > best_score:
+                best_score, best = score, (slope, intercept)
+        if best is None:
+            break
+        line = np.asarray(best)
+        chosen = np.empty(0, dtype=int)
+        for _ in range(3):
+            residual = np.abs(y - np.polyval(line, x))
+            chosen = np.asarray([
+                eligible[np.argmax(points[eligible, 3])]
+                for group in np.unique(groups)
+                if (eligible := np.flatnonzero((groups == group) & (residual <= tolerance))).size
+            ], dtype=int)
+            if len(chosen) < 12:
+                break
+            line = np.polyfit(x[chosen], y[chosen], 1)
+        if len(chosen) >= 12:
+            density = len(chosen) / (int(np.ptp(groups[chosen])) + 1)
+            if density >= .75 and np.ptp(x[chosen]) >= max(24, across * .12):
+                samples = points[chosen, :2]
+                if axis == 1:
+                    samples = samples[:, ::-1]
+                side = _Side(samples, float(line[0]), density)
+                if _broad_boundary(pixels, side, axis=axis, near=near):
+                    return side
+        points = points[np.abs(y - np.polyval(line, x)) > tolerance * 1.5]
+    raise OrientationError(_UNCERTAIN)
+
+
+def fit_partial_gel_edges(image: Image.Image) -> tuple[float, tuple[str, ...]]:
+    """Estimate tilt only from multiple consistent, clearly visible sides.
+
+    This is a fallback after four-edge fitting fails. It accepts broad dark or
+    bright gel boundaries, requires independent sides rather than a lone line,
+    and never estimates a missing cropping boundary. Conflicting side angles,
+    weak evidence, gradients, small objects and thin bands remain unsupported.
+    """
+    uncertain = "The visible gel sides do not provide a reliable, consistent orientation. Draw the outline manually."
+    _validate_orientation_image(image)
+    gray = image.convert("F" if image.mode.startswith("I") else "L")
+    gray.thumbnail((_ANALYSIS_LIMIT, _ANALYSIS_LIMIT), Image.Resampling.BILINEAR)
+    pixels = np.asarray(gray, dtype=np.float64)
+    if min(pixels.shape) < 48:
+        raise OrientationError(uncertain)
+    low, high = np.percentile(pixels, [1, 99])
+    if not np.isfinite(pixels).all() or high - low < 4:
+        raise OrientationError(uncertain)
+    normalized = (pixels - low) / (high - low)
+    scale = np.asarray(image.size) / np.asarray(gray.size)
+    specifications = (("left", 1, True), ("right", 1, False),
+                      ("top", 0, True), ("bottom", 0, False))
+    candidates = []
+    for values in (normalized, 1 - normalized):
+        sides = []
+        for name, axis, near in specifications:
+            try:
+                side = _trace_partial_side(values, axis=axis, near=near)
+            except OrientationError:
+                continue
+            points = side.points * scale
+            if axis == 1:
+                angle = math.degrees(math.atan(-np.polyfit(points[:, 1], points[:, 0], 1)[0]))
+                span = float(np.ptp(points[:, 1]))
+            else:
+                angle = math.degrees(math.atan(np.polyfit(points[:, 0], points[:, 1], 1)[0]))
+                span = float(np.ptp(points[:, 0]))
+            sides.append((name, axis, side, angle, span, points))
+        if len(sides) < 2:
+            continue
+        angles = [side[3] for side in sides]
+        theta = math.radians(float(np.median(angles)))
+        axes = (np.asarray((-math.sin(theta), math.cos(theta))),
+                np.asarray((math.cos(theta), math.sin(theta))))
+        bounds = {side[0]: float(np.median(side[5] @ axes[side[1]])) for side in sides}
+        # With a full-frame search the opposite contrast polarity also sees
+        # these lines, but it reverses which side contains gel. Opposing sides
+        # must bound the same interior, not the two disconnected outer margins.
+        if ("left" in bounds and "right" in bounds and bounds["left"] >= bounds["right"]
+                or "top" in bounds and "bottom" in bounds and bounds["top"] >= bounds["bottom"]):
+            continue
+        # Reject an impossible contrast polarity before considering its angle
+        # disagreement: its interior is outside the gel, so it cannot veto the
+        # supported physical boundary set from the other polarity.
+        # Do not cherry-pick an agreeable subset of a physically valid set.
+        if np.ptp(angles) > 5 or max(abs(angle) for angle in angles) > 35:
+            raise OrientationError(uncertain)
+        if len(sides) == 2:
+            # Two opposing long sides can define tilt despite both end edges
+            # being outside the frame. Reject narrow strips and partial specks.
+            if any(side[2].support < 0.85 for side in sides):
+                continue
+            if sides[0][1] == sides[1][1]:
+                axis = sides[0][1]
+                separation = abs(float(np.median(sides[0][5][:, 1 - axis]))
+                                 - float(np.median(sides[1][5][:, 1 - axis])))
+                if separation < image.size[1 - axis] * 0.25:
+                    continue
+        weights = [side[4] ** 2 * side[2].support for side in sides]
+        candidates.append((float(np.average(angles, weights=weights)),
+                           tuple(side[0] for side in sides), sum(weights)))
+    if not candidates or (len(candidates) > 1 and np.ptp([candidate[0] for candidate in candidates]) > 5):
+        raise OrientationError(uncertain)
+    angle, names, _ = max(candidates, key=lambda candidate: (len(candidate[1]), candidate[2]))
+    # Pixel staircases around an exactly upright edge can produce tiny fitting
+    # residuals. Retain exact quarter-turn/no-turn copies in that case.
+    if abs(angle) < 0.05:
+        angle = 0.0
+    return angle, names
+
+
 def orient_gel(
     image: Image.Image, rectangle: GelRectangle | None = None,
+    *, workflow_orientation: str = "wells_left",
+    fallback_angle_degrees: float | None = None,
+    supported_edges: tuple[str, ...] = (),
 ) -> OrientationResult:
-    """Rotate/straighten CCW, flip vertically, then crop to the chosen rectangle.
+    """Prepare the chosen outline with a single composed image transform.
+
+    The default rotates/straightens CCW and flips vertically. Wells at top
+    only removes the chosen tilt, retaining the original top edge and handedness.
 
     The geometry is composed before sampling, avoiding cumulative interpolation
     from three separate image operations. The same matrices transform both the
     source image and its rectangle. With no manual rectangle, fit the source's
-    outline automatically. The source image is never mutated.
+    outline automatically. If that fails, multiple clear sides can supply tilt
+    without supplying a crop: the complete source is retained on an expanded
+    canvas. ``fallback_angle_degrees`` reapplies that accepted partial estimate
+    when changing workflow orientation. The source image is never mutated.
     """
-    if rectangle is None:
-        rectangle = fit_gel_rectangle(image)
+    if workflow_orientation not in ("wells_left", "wells_top"):
+        raise OrientationError("Choose a supported workflow orientation.")
+    outline_complete = True
+    if fallback_angle_degrees is not None:
+        if (rectangle is not None or isinstance(fallback_angle_degrees, bool)
+                or not isinstance(fallback_angle_degrees, Real)
+                or not math.isfinite(fallback_angle_degrees) or abs(fallback_angle_degrees) > 35
+                or not isinstance(supported_edges, tuple)
+                or any(type(name) is not str or name not in {"left", "right", "top", "bottom"} for name in supported_edges)
+                or len(set(supported_edges)) != len(supported_edges)):
+            raise OrientationError("The retained partial-edge orientation is invalid.")
+        _validate_orientation_image(image)
+        rectangle = _full_frame_envelope(image.size, float(fallback_angle_degrees))
+        outline_complete = False
+    elif rectangle is None:
+        try:
+            rectangle = fit_gel_rectangle(image)
+        except OrientationError:
+            angle, supported_edges = fit_partial_gel_edges(image)
+            rectangle = _full_frame_envelope(image.size, angle)
+            outline_complete = False
     else:
         _validate_orientation_image(image)
-    degrees = 90.0 + rectangle.angle_degrees
+    # Wells at top keeps the chosen top edge and migration direction. Only
+    # the user's rectangle tilt is removed; no quarter-turn or reflection.
+    degrees = rectangle.angle_degrees + (0.0 if workflow_orientation == "wells_top" else 90.0)
     cosine, sine = _cosine_sine(degrees)
     rotation = np.asarray(((cosine, sine, 0), (-sine, cosine, 0), (0, 0, 1)))
     image_corners = np.asarray(((0, 0, 1), (image.width, 0, 1),
@@ -350,14 +586,16 @@ def orient_gel(
     rotation = translation @ rotation
     # PowerPoint's Flip Vertical: reflect top to bottom on the rotated canvas.
     flip = np.asarray(((1, 0, 0), (0, -1, rotated_max[1] - rotated_min[1]), (0, 0, 1)))
-    rotated_and_flipped = flip @ rotation
+    rotated_and_flipped = rotation if workflow_orientation == "wells_top" else flip @ rotation
     fitted_corners = np.column_stack((np.asarray(rectangle.corners), np.ones(4)))
     transformed_corners = fitted_corners @ rotated_and_flipped.T
     crop_min = transformed_corners[:, :2].min(axis=0)
     crop_max = transformed_corners[:, :2].max(axis=0)
     extent = crop_max - crop_min
-    # Round inward: the output pixel boundary never extends beyond the outline.
-    output_size = tuple(max(1, int(math.floor(float(value) + 1e-7))) for value in extent)
+    # Complete outlines round inward. Partial outlines round outward so the
+    # rotated source keeps every original edge and corner, including low bits.
+    output_size = tuple(max(1, int(math.floor(float(value) + 1e-7) if outline_complete
+                                  else math.ceil(float(value) - 1e-7))) for value in extent)
     crop = np.eye(3)
     crop[:2, 2] = -crop_min
     inverse = np.linalg.inv(crop @ rotated_and_flipped)
@@ -376,5 +614,9 @@ def orient_gel(
     else:
         source = image.convert("RGB") if image.mode == "P" else image
         resampling = Image.Resampling.NEAREST if source.mode == "1" else Image.Resampling.BILINEAR
-        result = source.transform(output_size, Image.Transform.AFFINE, affine, resampling)
-    return OrientationResult(result, rectangle, degrees)
+        # A full-frame rotation adds canvas wedges. Keep alpha opaque so those
+        # added margins do not make later well/band analysis reject the image.
+        fill = ((0, 0, 0, 255) if source.mode == "RGBA" else (0, 255)
+                if source.mode == "LA" else 0) if not outline_complete else None
+        result = source.transform(output_size, Image.Transform.AFFINE, affine, resampling, fillcolor=fill)
+    return OrientationResult(result, rectangle, degrees, outline_complete, supported_edges)

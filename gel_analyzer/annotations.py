@@ -21,18 +21,19 @@ def default_label(number: int) -> dict:
     return {"text": f"Lane {number}", "bold": False, "italic": False, "color": "#202020"}
 
 
-def default_font_size(lanes) -> int:
-    """Start labels at 80% of mean lane height, in native crop pixels."""
-    heights = [lane[3] - lane[1] for lane in lanes if lane[3] > lane[1]]
+def default_font_size(lanes, workflow_orientation="wells_left") -> int:
+    """Start labels at 80% of mean lane thickness, in native crop pixels."""
+    axis = 0 if workflow_orientation == "wells_top" else 1
+    heights = [lane[axis + 2] - lane[axis] for lane in lanes if lane[axis + 2] > lane[axis]]
     if not heights:
         return 18
     return max(1, min(4096, math.floor(0.8 * sum(heights) / len(heights) + 0.5)))
 
 
-def default_annotations(count: int, lanes=()) -> dict:
+def default_annotations(count: int, lanes=(), workflow_orientation="wells_left") -> dict:
     return {
         "labels": [default_label(i + 1) for i in range(count)], "groups": [],
-        "fontSize": default_font_size(lanes),
+        "fontSize": default_font_size(lanes, workflow_orientation), "laneLabelAngle": 90,
     }
 
 
@@ -89,6 +90,9 @@ def validate_annotations(value: object, count: int) -> dict:
         raise AnnotationError("Choose a font size from 1 to 4096 pixels.")
     if not isinstance(groups, list) or len(groups) > 100:
         raise AnnotationError("Use at most 100 groups across the two sets.")
+    angle = value.get("laneLabelAngle", 90)
+    if type(angle) is not int or angle not in (45, 90):
+        raise AnnotationError("Choose a lane label angle of 90° or 45° clockwise.")
     checked_groups = []
     identifiers = set()
     for group in groups:
@@ -110,7 +114,7 @@ def validate_annotations(value: object, count: int) -> dict:
             raise AnnotationError("Select at least one current lane for every group.")
         identifiers.add(identifier)
         checked_groups.append({"id": identifier, "set": column, "lanes": sorted(members), **style})
-    return {"labels": [_style(label, "text") for label in labels], "groups": checked_groups, "fontSize": size}
+    return {"labels": [_style(label, "text") for label in labels], "groups": checked_groups, "fontSize": size, "laneLabelAngle": angle}
 
 
 def validate_composition(event: dict, crop) -> bytes:

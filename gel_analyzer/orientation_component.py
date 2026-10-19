@@ -26,6 +26,7 @@ def render_orientation_component(
     token: str,
     key: str,
     revision: int = 0,
+    workflow_orientation: str = "wells_left",
 ) -> dict[str, Any] | None:
     """Return completed ``{token, revision, selection}`` edits, if any.
 
@@ -43,6 +44,7 @@ def render_orientation_component(
         selection=dict(selection) if selection is not None else None,
         token=token,
         revision=revision,
+        workflow_orientation=workflow_orientation,
         key=key,
         default=None,
     )

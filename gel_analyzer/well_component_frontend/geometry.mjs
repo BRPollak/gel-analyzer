@@ -15,20 +15,22 @@ export function pointerToImage(clientX, clientY, rect, width, height) {
   ], width, height);
 }
 
-export function readPoints(points, width, height) {
+export function readPoints(points, width, height, workflowOrientation = "wells_left") {
   if (!Array.isArray(points) || points.length > 2) return [];
   if (!points.every(point => Array.isArray(point) && point.length === 2 &&
       point.every(Number.isFinite))) return [];
   const clipped = points.map(point => clipPoint(point, width, height));
   // Orientation makes wells vertical. The first selection anchors the shared
   // x coordinate, including when loading an older, angled guide.
-  return clipped.map(point => [clipped[0][0], point[1]]);
+  return clipped.map(point => workflowOrientation === "wells_top" ? [point[0], clipped[0][1]] : [clipped[0][0], point[1]]);
 }
 
 /** Move either endpoint while translating the whole vertical guide in x. */
-export function moveGuideEndpoint(points, index, point, width, height) {
+export function moveGuideEndpoint(points, index, point, width, height, workflowOrientation = "wells_left") {
   const clipped = clipPoint(point, width, height);
-  return points.map((existing, candidate) => [clipped[0], candidate === index ? clipped[1] : existing[1]]);
+  return points.map((existing, candidate) => workflowOrientation === "wells_top"
+    ? [candidate === index ? clipped[0] : existing[0], clipped[1]]
+    : [clipped[0], candidate === index ? clipped[1] : existing[1]]);
 }
 
 /** Keep handles equally easy to grab at every responsive image scale. */
@@ -93,4 +95,22 @@ export function laneDeleteLayout(lanes, height, unit) {
     buttons[index].y = Math.min(buttons[index].y, buttons[index + 1].y - size);
   }
   return {buttons, overflow: layoutHeight - height};
+}
+
+/** Analysis-axis views are involutions; the image and stored state stay in XY. */
+export const swapPoint = point => [point[1], point[0]];
+export const swapBounds = bounds => [bounds[1], bounds[0], bounds[3], bounds[2]];
+export const swapWell = well => ({...well, bounds: swapBounds(well.bounds),
+  ...(well.center ? {center: swapPoint(well.center)} : {})});
+
+/** A mutable view reuses lane editing math without moving displayed pixels. */
+export function laneAxisState(state) {
+  if (!state || state.workflowOrientation !== "wells_top") return state;
+  return {
+    get width() { return state.height; }, get height() { return state.width; },
+    get reviewMode() { return state.reviewMode; }, get editable() { return state.editable; },
+    get rightEdge() { return state.rightEdge; }, set rightEdge(value) { state.rightEdge = value; },
+    get lanes() { return state.lanes.map(swapBounds); }, set lanes(value) { state.lanes = value.map(swapBounds); },
+    get wells() { return state.wells.map(swapWell); }, set wells(value) { state.wells = value.map(swapWell); },
+  };
 }
