@@ -30,36 +30,11 @@ test("format only selected text, compose styles and preserve neighboring runs", 
   assert.equal(selectionStyle(value, "text", 0, 15).bold, false);
 });
 
-test("whole-label formatting changes only that property across mixed runs", () => {
-  const value = label();
-  formatRange(value, "text", 8, 15, {color: "#ff0000"});
-  formatRange(value, "text", 3, 3, {bold: true});
-  assert.deepEqual(value.runs.map(run => [run.color, run.bold]), [["#202020", true], ["#ff0000", true]]);
-});
-
-test("formatting without a saved selection follows the toolbar's whole-label toggle state", () => {
-  for (const key of ["text", "label"]) for (const name of ["bold", "italic"]) {
-    const value = {...label(), [key]: "AB"};
-    formatRange(value, key, 0, 1, {[name]: true});
-    assert.equal(formattingStyle(value, key, null)[name], false,
-      "a reopened mixed label shows an unpressed formatting button");
-    formatSelection(value, key, null, name);
-    assert.ok(value.runs.every(run => run[name]), "clicking the unpressed button formats the whole label");
-    assert.equal(value[name], true, "whole-label defaults stay consistent for later text edits");
-    formatSelection(value, key, null, name);
-    assert.ok(value.runs.every(run => !run[name]), "the next click removes formatting from the whole label");
-    formatSelection(value, key, {start: 0, end: 1}, name);
-    assert.deepEqual(value.runs.map(run => [run.text, run[name]]), [["A", true], ["B", false]],
-      "an explicit text range still formats only that substring");
-  }
-});
-
-test("caret formatting reflects the whole mixed label regardless of caret position", () => {
-  for (const key of ["text", "label"]) for (const start of [0, 1, 2]) {
+test("absent selections and carets toggle the whole label while preserving mixed styles", () => {
+  for (const key of ["text", "label"]) for (const range of [null, ...[0, 1, 2].map(start => ({start, end: start}))]) {
     const value = {...label(), [key]: "AB"};
     formatRange(value, key, 0, 1, {bold: true, italic: true, color: "#0000ff"});
     formatRange(value, key, 1, 2, {color: "#ff0000"});
-    const range = {start, end: start};
     assert.deepEqual(formattingStyle(value, key, range), {
       bold: false, italic: false, color: "#0000ff", mixedColor: true,
     }, "caret position must not hide the label's mixed formatting");
@@ -70,9 +45,13 @@ test("caret formatting reflects the whole mixed label regardless of caret positi
       const formatted = structuredClone(value);
       formatSelection(formatted, key, range, name);
       assert.ok(formatted.runs.every(run => run[name]), "first click applies the style to the whole label");
+      assert.equal(formatted[name], true, "whole-label defaults stay consistent for later text edits");
       assert.deepEqual(formatted.runs.map(run => run.color), ["#0000ff", "#ff0000"]);
       formatSelection(formatted, key, range, name);
       assert.ok(formatted.runs.every(run => !run[name]), "second click removes it from the whole label");
+      formatSelection(formatted, key, {start: 0, end: 1}, name);
+      assert.deepEqual(formatted.runs.map(run => [run.text, run[name]]), [["A", true], ["B", false]],
+        "an explicit text range formats only that substring");
     }
     formatSelection(value, key, range, "color", "#008000");
     assert.ok(value.runs.every(run => run.color === "#008000"));

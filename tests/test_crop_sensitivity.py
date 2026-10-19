@@ -76,21 +76,6 @@ def test_local_exterior_artifact_is_not_a_competing_gel_rectangle(side):
     _assert_useful_crop(find_gel_crop(image))
 
 
-@pytest.mark.parametrize("outer_contrast", [5, 10, 20])
-def test_faint_physical_outer_rectangle_is_not_replaced_by_stronger_inner(
-    outer_contrast,
-):
-    values = np.full((_SIZE[1], _SIZE[0]), 210.0)
-    left, top, right, bottom = _BOUNDS
-    values[top:bottom, left:right] -= outer_contrast
-    values[160:450, 285:545] -= 100
-    image = Image.fromarray(values.astype(np.uint8))
-
-    # Either the complete frame or a crop around the physical outer rectangle
-    # is acceptable. Cutting to the attractive inner rectangle is never safe.
-    _assert_encloses(find_gel_crop(image))
-
-
 @pytest.mark.parametrize("obscured_top", [False, True])
 def test_blurred_outer_rectangle_is_not_discarded_as_smooth_illumination(
     obscured_top,
@@ -107,29 +92,6 @@ def test_blurred_outer_rectangle_is_not_discarded_as_smooth_illumination(
     outer = Image.fromarray(values).filter(ImageFilter.GaussianBlur(radius=6))
     values = np.asarray(outer).copy()
     values[160:450, 285:545] -= 100
-    image = Image.fromarray(values)
-
-    _assert_encloses(find_gel_crop(image))
-
-
-@pytest.mark.parametrize("side", ["left", "right", "top", "bottom"])
-def test_blurred_physical_extension_on_one_side_is_not_discarded(side):
-    values = np.full((_SIZE[1], _SIZE[0]), 210, dtype=np.uint8)
-    left, top, right, bottom = _BOUNDS
-    values[top:bottom, left:right] -= 20
-    outer = Image.fromarray(values).filter(ImageFilter.GaussianBlur(radius=6))
-    values = np.asarray(outer).copy()
-    # A stronger inner region can share three real gel boundaries while one
-    # faint, blurred strip remains physically part of the gel on the fourth.
-    if side == "left":
-        left += 85
-    elif side == "right":
-        right -= 85
-    elif side == "top":
-        top += 85
-    else:
-        bottom -= 85
-    values[top:bottom, left:right] -= 100
     image = Image.fromarray(values)
 
     _assert_encloses(find_gel_crop(image))

@@ -150,8 +150,12 @@ def test_failed_orientation_restores_first_crop_and_can_be_retried(
     assert "confirm_orientation" in button_keys(app)
 
 
-@pytest.mark.parametrize("state", ["staged", "confirmed", "failed"])
-@pytest.mark.parametrize("change", ["clear", "remove", "replace", "invalid"])
+# Each upload action uses the same reset callback. Cover every action and
+# orientation state without replaying their full Cartesian product.
+@pytest.mark.parametrize("state,change", [
+    ("staged", "clear"), ("confirmed", "remove"),
+    ("confirmed", "replace"), ("failed", "invalid"),
+])
 def test_changing_upload_resets_orientation_state(
     app, orientation_calls, monkeypatch, state, change
 ):

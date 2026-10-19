@@ -42,7 +42,7 @@ def test_raster_exports_keep_native_dimensions_and_write_real_dpi(crop, image_fo
             assert image.tobytes() == original.tobytes()
 
 
-def test_jpeg_flattens_alpha_onto_white(crop):
+def test_jpeg_flattens_alpha_onto_white():
     output = BytesIO()
     Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(output, format="PNG")
     exported = export_composition(output.getvalue(), "JPEG", 300)

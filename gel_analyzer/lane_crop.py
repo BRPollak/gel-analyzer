@@ -58,6 +58,17 @@ def _sequence(value, label: str) -> tuple:
         raise LaneAdjustmentError(f"{label} must contain the expected coordinate values.") from exc
 
 
+def _coordinate(value, label: str) -> int | float:
+    """Keep subpixel geometry; raster sampling is rounded only at its boundary."""
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise LaneAdjustmentError(f"{label} must be a finite image coordinate.")
+    if isinstance(value, Integral):
+        return int(value)
+    if not math.isfinite(value):
+        raise LaneAdjustmentError(f"{label} must be a finite image coordinate.")
+    return int(value) if value == math.floor(value) else float(value)
+
+
 def _size(size) -> tuple[int, int]:
     dimensions = _sequence(size, "Image size")
     if len(dimensions) != 2:
@@ -72,7 +83,7 @@ def _bounds(bounds, label: str) -> Bounds:
     values = _sequence(bounds, label)
     if len(values) != 4:
         raise LaneAdjustmentError(f"{label} must contain left, top, right, and bottom bounds.")
-    return tuple(_pixel(value, label) for value in values)
+    return tuple(_coordinate(value, label) for value in values)
 
 
 def _checked_wells(wells, size: tuple[int, int], *, allow_empty: bool = False) -> tuple[Well, ...]:
@@ -106,8 +117,9 @@ def validate_lane_adjustments(
 
     Lane input is one ``(left, top, right, bottom)`` rectangle per original
     well, in the original top-to-bottom order. Left edges are fixed; every
-    right bound must equal ``right_edge``. Bounds are finite integer pixel
-    boundaries and may touch, but lanes may not overlap or cross. Invalid
+    right bound must equal ``right_edge``. Bounds are finite image
+    boundaries and may touch, but lanes must be at least one pixel wide along
+    the cross-lane axis and may not overlap or cross. Invalid
     geometry is rejected, never silently rounded, reordered, or clamped.
     In wells-at-top mode the same rules use left-to-right order, fixed top
     edges and a shared bottom extent (the legacy ``right_edge`` argument).
@@ -138,14 +150,111 @@ def validate_lane_adjustments(
             raise LaneAdjustmentError(f"Lane {number}'s left edge must stay at its reviewed well's left edge.")
         if right != shared_right:
             raise LaneAdjustmentError("Every lane must use the same shared right edge.")
-        if not (0 <= top < bottom <= height):
+        lane_height = bottom - top
+        if (not (0 <= top < bottom <= height)
+                or (lane_height < 1 and not math.isclose(lane_height, 1, rel_tol=0, abs_tol=1e-10))):
             raise LaneAdjustmentError(f"Lane {number} must be at least one pixel high and stay inside the image.")
-        if adjusted and top < previous_bottom:
+        if adjusted and top < previous_bottom and not math.isclose(top, previous_bottom, rel_tol=0, abs_tol=1e-10):
             raise LaneAdjustmentError("Keep lanes in top-to-bottom order without overlapping or crossing their neighbors.")
         bounds = (left, top, well.bounds[2], bottom)
         adjusted.append(Well(bounds, ((left + well.bounds[2]) / 2, (top + bottom) / 2)))
         previous_bottom = bottom
     return tuple(adjusted)
+
+
+def seed_boundary_well(wells, points, right_edge, size, *, workflow_orientation="wells_left") -> Well:
+    """Reuse the first reviewed well, or place a manual seed at the guide start."""
+    dimensions = _size(size)
+    originals = _checked_wells(wells, dimensions, allow_empty=True)
+    top_mode = is_top(workflow_orientation)
+    if originals:
+        first = min(originals, key=lambda well: well.center[0 if top_mode else 1])
+        return validate_lane_adjustments(
+            (first,), (lane_bounds(first.bounds, right_edge, workflow_orientation),),
+            right_edge, dimensions, workflow_orientation=workflow_orientation,
+        )[0]
+    try:
+        ordered = validate_line(points, dimensions, workflow_orientation=workflow_orientation)
+    except SelectionError as exc:
+        raise LaneAdjustmentError(str(exc)) from exc
+    # append_lane supplies the same conservative dimensions as ordinary manual
+    # recovery. Translate its seed to the first guide endpoint, in displayed XY.
+    seed = append_lane((), ordered, right_edge, dimensions, workflow_orientation=workflow_orientation)[0]
+    width, height = seed.bounds[2] - seed.bounds[0], seed.bounds[3] - seed.bounds[1]
+    maximum_x = dimensions[0] if top_mode else right_edge
+    maximum_y = right_edge if top_mode else dimensions[1]
+    left = min(max(0, round(ordered[0][0] - width / 2)), maximum_x - width)
+    top = min(max(0, round(ordered[0][1] - height / 2)), maximum_y - height)
+    return Well((left, top, left + width, top + height), (left + width / 2, top + height / 2))
+
+
+def validate_boundary_adjustments(
+    original_wells, lanes, right_edge, size, stage, *, workflow_orientation="wells_left",
+) -> tuple[Well, ...]:
+    """Apply existing lane edits, keeping the confirmed first boundary fixed.
+
+    The last boundary may be moved across the first while editing; generation
+    separately checks their order. Its width is linked to the first boundary.
+    """
+    expected = {"boundary_first": 1, "boundary_last": 2}.get(stage)
+    if expected is None:
+        raise LaneAdjustmentError("Choose the first or last boundary well to adjust.")
+    originals = _checked_wells(original_wells, _size(size))
+    proposed = _sequence(lanes, "Boundary wells")
+    if len(originals) != expected or len(proposed) != expected:
+        raise LaneAdjustmentError(f"Keep exactly {expected} boundary well{'s' if expected == 2 else ''} in this step.")
+    adjusted = tuple(
+        validate_lane_adjustments((well,), (lane,), right_edge, size,
+                                  workflow_orientation=workflow_orientation)[0]
+        for well, lane in zip(originals, proposed)
+    )
+    if stage == "boundary_last":
+        if adjusted[0] != originals[0]:
+            raise LaneAdjustmentError("The first well is fixed. Use Back to revise it.")
+        _matching_boundary_geometry(*adjusted, workflow_orientation)
+    return adjusted
+
+
+def _matching_boundary_geometry(first, last, workflow_orientation):
+    a, b = first.bounds, last.bounds
+    if is_top(workflow_orientation):
+        a, b = swap_bounds(a), swap_bounds(b)
+    if a[0] != b[0] or a[2] != b[2]:
+        raise LaneAdjustmentError("Keep both boundary wells at the same upstream position and depth.")
+    if not math.isclose(a[3] - a[1], b[3] - b[1], rel_tol=0, abs_tol=1e-10):
+        raise LaneAdjustmentError("Keep the last well's width linked to the first well.")
+
+
+def generate_boundary_lanes(
+    first, last, count, right_edge, size, *, workflow_orientation="wells_left",
+) -> tuple[Well, ...]:
+    """Interpolate N total lanes, preserving both confirmed bounds exactly."""
+    if isinstance(count, (bool, np.bool_)) or not isinstance(count, Integral) or count < 2:
+        raise LaneAdjustmentError("Enter a whole-number total lane count of at least 2, including both boundary wells.")
+    endpoints = _checked_wells((first, last), _size(size))
+    first, last = validate_boundary_adjustments(
+        endpoints, tuple(lane_bounds(well.bounds, right_edge, workflow_orientation) for well in endpoints),
+        right_edge, size, "boundary_last", workflow_orientation=workflow_orientation,
+    )
+    axis = 0 if is_top(workflow_orientation) else 1
+    distance = last.center[axis] - first.center[axis]
+    if distance <= 0:
+        side = "right of" if axis == 0 else "below"
+        raise LaneAdjustmentError(f"Place the last well {side} the first well, at a distinct position.")
+    lane_width = first.bounds[axis + 2] - first.bounds[axis]
+    # Compare before division by the count (or allocating interiors), including
+    # Python integers too large to convert into a floating-point denominator.
+    if count - 1 > distance / lane_width + 1e-10:
+        raise LaneAdjustmentError("The lanes would overlap. Reduce the first well's width or move the boundaries farther apart.")
+    spacing = distance / (count - 1)
+    if spacing < lane_width and not math.isclose(spacing, lane_width, rel_tol=0, abs_tol=1e-10):
+        raise LaneAdjustmentError("The lanes would overlap. Reduce the first well's width or move the boundaries farther apart.")
+    interiors = []
+    for index in range(1, count - 1):
+        fraction = index / (count - 1)
+        bounds = tuple(start + (end - start) * fraction for start, end in zip(first.bounds, last.bounds))
+        interiors.append(Well(bounds, ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)))
+    return (first, *interiors, last)
 
 
 def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_orientation="wells_left") -> tuple[Well, ...]:
@@ -155,7 +264,7 @@ def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_or
     conservative image/guide-scaled dimensions seed manual recovery. Prefer a
     center at the lower endpoint; continue below the final lane when needed.
     A smaller new rectangle uses any remaining space without moving existing
-    lanes. At the image bottom, make one row by trimming the last lane, moving
+    lanes. With less than one row left, reserve one by trimming the last lane, moving
     a contiguous one-pixel tail upward only if needed. Every lane stays at
     least one pixel high, ordered, and inside the image.
     """
@@ -195,7 +304,7 @@ def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_or
         lane_height = min(height, max(4, round(min(height * 0.035, (lower[1] - upper[1]) * 0.12))))
         lane_width = max(4, round(min(width, height) * 0.025))
         gap, previous_bottom = 0, 0
-    if previous_bottom == height:
+    if height - previous_bottom < 1:
         if len(originals) >= height:
             raise LaneAdjustmentError("Every image row already contains a separate lane. Delete a lane before adding another.")
         # Reserve one bottom row with the smallest possible boundary change.
@@ -226,7 +335,10 @@ def append_lane(wells, points, right_edge, size: tuple[int, int], *, workflow_or
     left = min(max(0, int(round(center_x - lane_width / 2))), shared_right - lane_width)
     right = left + lane_width
     new_well = Well((left, top, right, bottom), ((left + right) / 2, center_y))
-    return (*originals, new_well)
+    result = (*originals, new_well)
+    return validate_lane_adjustments(
+        result, tuple(lane_bounds(well.bounds, shared_right) for well in result), shared_right, (width, height),
+    )
 
 
 def crop_lanes(image: Image.Image, wells, right_edge, *, workflow_orientation="wells_left") -> LaneCrop:
@@ -250,11 +362,11 @@ def crop_lanes(image: Image.Image, wells, right_edge, *, workflow_orientation="w
         raise LaneAdjustmentError("This image's pixel format cannot be cropped into a lossless PNG preview.")
     margin = max(3, round(image.width * 0.01))
     vertical_margin = max(3, round(image.height * 0.01))
-    left = max(0, min(well.bounds[0] for well in accepted) - margin)
-    top = max(0, min(well.bounds[1] for well in accepted) - vertical_margin)
-    bottom = min(image.height, max(well.bounds[3] for well in accepted) + vertical_margin)
+    left = max(0, math.floor(min(well.bounds[0] for well in accepted) - margin))
+    top = max(0, math.floor(min(well.bounds[1] for well in accepted) - vertical_margin))
+    bottom = min(image.height, math.ceil(max(well.bounds[3] for well in accepted) + vertical_margin))
     if is_top(workflow_orientation):
-        right = min(image.width, max(well.bounds[2] for well in accepted) + margin)
+        right = min(image.width, math.ceil(max(well.bounds[2] for well in accepted) + margin))
         crop_box = (left, top, right, shared_right)
     else:
         crop_box = (left, top, shared_right, bottom)

@@ -109,8 +109,12 @@ def save_project(state) -> bytes:
     """Capture semantic state and exact confirmed exports, without widget events."""
     if state.get("gel_image") is None:
         raise ProjectError("Open a gel image before saving a project.")
-    value = {"format": FORMAT, "version": VERSION,
-             "state": _encode({key: state.get(key, default) for key, default in _DEFAULTS.items()})}
+    snapshot = {key: state.get(key, default) for key, default in _DEFAULTS.items()}
+    # The guided boundaries are a cancellable draft, not an analysis result.
+    # Until Generate lanes, save the arrangement the draft would restore.
+    if state.get("lane_boundary_stage") and state.get("lane_boundary_backup"):
+        snapshot.update(state["lane_boundary_backup"])
+    value = {"format": FORMAT, "version": VERSION, "state": _encode(snapshot)}
     try:
         encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     except (TypeError, ValueError, RecursionError) as exc:
@@ -128,9 +132,10 @@ def _size(value):
     return tuple(value)
 
 
-def _bounds(value, size):
+def _bounds(value, size, *, raster=False):
     if (not isinstance(value, (tuple, list)) or len(value) != 4
-            or any(type(number) is not int for number in value)):
+            or any(type(number) not in (int, float) or not math.isfinite(number) for number in value)
+            or (raster and any(type(number) is not int for number in value))):
         raise ProjectError("The project contains invalid image bounds.")
     left, top, right, bottom = value
     if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
@@ -169,7 +174,7 @@ def _gel(value):
     _orientation(value.workflow_orientation)
     if not isinstance(value.filename, str) or len(value.filename) > 1000:
         raise ProjectError("The project has an invalid source filename.")
-    _bounds(value.crop_box, size)
+    _bounds(value.crop_box, size, raster=True)
     _image(value.source_bytes, size, ("TIFF", "PNG", "JPEG"), source=True)
     if value.orientation is not None:
         geometry = value.orientation
@@ -200,7 +205,11 @@ def _wells(values, size):
         if not isinstance(well, Well):
             raise ProjectError("The project has invalid well geometry.")
         left, top, right, bottom = _bounds(well.bounds, size)
-        if well.center != ((left + right) / 2, (top + bottom) / 2):
+        expected_center = ((left + right) / 2, (top + bottom) / 2)
+        if (not isinstance(well.center, tuple) or len(well.center) != 2
+                or any(type(value) not in (int, float) or not math.isfinite(value)
+                       or not math.isclose(value, expected, rel_tol=0, abs_tol=1e-10)
+                       for value, expected in zip(well.center, expected_center))):
             raise ProjectError("A well center does not match its bounds.")
 
 
@@ -292,7 +301,7 @@ def _validate(state):
         if not isinstance(crop, LaneCrop) or crop.workflow_orientation != orientation:
             raise ProjectError("The project's crop orientation does not match its gel.")
         crop_size = _size((crop.width, crop.height))
-        left, top, right, bottom = _bounds(crop.crop_box, size)
+        left, top, right, bottom = _bounds(crop.crop_box, size, raster=True)
         if crop_size != (right - left, bottom - top):
             raise ProjectError("The project's crop dimensions are inconsistent.")
         _image(crop.preview_png, crop_size, "PNG")
@@ -391,5 +400,7 @@ def load_project(data: bytes) -> dict:
         state[f"{editor}_error"] = None
     state.update(orientation_requested=False, orientation_manual_error=None,
                  well_detection_request=None, pending_upload=None, upload_error=None,
+                 lane_boundary_stage=None, lane_boundary_backup=None,
+                 lane_boundary_last=None, lane_boundary_count=None,
                  ladder_notice=None, band_editor_generation=int(uuid4().hex[:8], 16))
     return state

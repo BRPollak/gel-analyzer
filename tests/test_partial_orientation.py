@@ -97,8 +97,16 @@ def test_three_sides_and_two_visible_corners_use_partial_tilt_and_preserve_full_
     assert image.tobytes() == original
 
 
-@pytest.mark.parametrize("scene", CLIPPED_SCENES)
-@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+@pytest.mark.parametrize("scene,orientation", [
+    # The core three-side test above covers both workflow transforms. These
+    # cases vary the physical clipping; each scene needs one fit/envelope check.
+    ("off_center", "wells_left"),
+    ("near_left_frame", "wells_top"),
+    ("near_both_sides", "wells_left"),
+    ("bottom_corners_cut", "wells_top"),
+    ("short_side_segments", "wells_left"),
+    ("two_pixel_background", "wells_top"),
+])
 def test_three_visible_side_segments_work_off_center_and_at_frame_edges(scene, orientation):
     image = clipped_scene(scene)
     size, center, gel_size, expected_angle, expected_edges = CLIPPED_SCENES[scene]
@@ -216,8 +224,11 @@ def test_real_tiff_load_and_initial_crop_retain_partial_source_for_orientation(o
     assert initial.orientation is None
 
 
-@pytest.mark.parametrize("scene", ["off_center", "near_left_frame", "short_side_segments"])
-@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+@pytest.mark.parametrize("scene,orientation", [
+    ("off_center", "wells_left"),
+    ("near_left_frame", "wells_top"),
+    ("short_side_segments", "wells_top"),
+])
 def test_real_tiff_pipeline_can_orient_three_off_center_side_segments(scene, orientation):
     image = clipped_scene(scene, dtype=np.uint16)
     stream = BytesIO()

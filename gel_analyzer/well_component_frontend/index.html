@@ -30,7 +30,7 @@
     .center { fill: #fbbf24; }
     .number { fill: #fff; stroke: #111; stroke-width: 3px; paint-order: stroke; font-weight: 700; }
     .outline, #guide-halo, #guide, .dot { vector-effect: non-scaling-stroke; }
-    #gel[data-review-mode="borders"], #gel[data-review-mode="extent"] { cursor: default; }
+    #gel[data-review-mode="borders"], #gel[data-review-mode="extent"], #gel[data-review-mode^="boundary_"] { cursor: default; }
     .review-handle { outline: none; }
     .border-handle { cursor: ns-resize; }
     .extent-handle { cursor: ew-resize; }
@@ -38,11 +38,19 @@
     .review-grip { fill: #0f172a; stroke: #67e8f9; stroke-width: 2; vector-effect: non-scaling-stroke; }
     .review-symbol { fill: #67e8f9; pointer-events: none; }
     .review-hit { fill: none; stroke: transparent; stroke-width: 14; vector-effect: non-scaling-stroke; }
+    .review-body { fill: transparent; pointer-events: all; }
+    .position-handle { cursor: grab; }
+    #gel[data-dragging="true"] .position-handle { cursor: grabbing; }
     .review-handle:focus .review-grip { fill: #fff; stroke: #2563eb; stroke-width: 3; }
     .review-handle:focus .review-symbol { fill: #2563eb; }
     .review-line.extent-line { stroke: #fbbf24; stroke-width: 2; }
     .extent-handle .review-grip { stroke: #fbbf24; }
     .extent-handle .review-symbol { fill: #fbbf24; }
+    .lane.boundary-active { fill: #fbbf2412; stroke: #fbbf24; stroke-width: 2; opacity: 1; }
+    .outline.boundary-fixed { fill: none; stroke: #94a3b8; opacity: .65; }
+    .center.boundary-fixed { fill: #94a3b8; opacity: .65; }
+    .review-line.boundary-active, .boundary-active .review-grip { stroke: #fbbf24; }
+    .boundary-active .review-symbol { fill: #fbbf24; }
     .lane-delete { cursor: pointer; outline: none; }
     .delete-background { fill: #0f172a; stroke: #fda4af; stroke-width: 1.5; }
     .delete-symbol { fill: none; stroke: #fda4af; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

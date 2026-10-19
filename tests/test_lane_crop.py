@@ -118,11 +118,11 @@ def test_right_edge_requires_a_finite_integer_number(bad):
         validate_lane_adjustments(WELLS, LANES, bad, SIZE)
 
 
-@pytest.mark.parametrize("bad", [True, np.bool_(False), "17", None, float("nan"), -float("inf"), 17.5])
-def test_lane_bounds_reject_boolean_text_nonfinite_and_fractional_values(bad):
+@pytest.mark.parametrize("bad", [True, np.bool_(False), "17", None, float("nan"), -float("inf")])
+def test_lane_bounds_reject_boolean_text_and_nonfinite_values(bad):
     lanes = ((30, bad, 80, 45), LANES[1])
 
-    with pytest.raises(LaneAdjustmentError, match="whole-pixel"):
+    with pytest.raises(LaneAdjustmentError, match="finite image coordinate"):
         validate_lane_adjustments(WELLS, lanes, 80, SIZE)
 
 

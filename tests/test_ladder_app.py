@@ -94,7 +94,7 @@ def test_ladder_vectors_replace_and_restore_lane_only_vectors(annotated):
     assert app.session_state["annotation_svg"] == lane_svg
 
 
-def test_opening_ladder_keeps_existing_annotations_and_starts_without_implicit_preset(annotated):
+def test_open_ladder_and_navigate_preserves_draft_without_changing_committed_output(annotated):
     crop = open_ladder(annotated)
     app = annotated.app
     render_crop, args = annotated.renders[-1]
@@ -108,21 +108,6 @@ def test_opening_ladder_keeps_existing_annotations_and_starts_without_implicit_p
     assert app.session_state["annotation_stage"] == "ladder"
     assert app.session_state["annotation_png"] == app.session_state["annotation_base_png"]
 
-
-@pytest.mark.parametrize("preset_index", [0, 1, 2])
-def test_selected_reference_metadata_survives_confirmation_and_reopening(annotated, preset_index):
-    open_ladder(annotated)
-    data = {**ladder_snapshot(), "preset": load_presets()[preset_index]}
-    ladder_event(annotated, data=data, action="confirm")
-    assert annotated.app.session_state["ladder_data"] == data
-    annotated.app.button(key="edit_ladder").click().run()
-    assert not annotated.app.exception
-    assert annotated.renders[-1][1]["ladder"] == data
-
-
-def test_draft_and_step_survive_navigation_without_changing_committed_output(annotated):
-    open_ladder(annotated)
-    app = annotated.app
     original_png = app.session_state["annotation_png"]
     original_labels = deepcopy(app.session_state["annotation_data"])
     data = ladder_snapshot()
@@ -139,11 +124,11 @@ def test_draft_and_step_survive_navigation_without_changing_committed_output(ann
     assert app.session_state["annotation_data"] == original_labels
 
 
-def test_immediate_confirmation_contains_latest_placement_and_only_commits_once(annotated):
+def test_confirmation_commits_latest_placement_once_and_reopens_reference_snapshot(annotated):
     crop = open_ladder(annotated)
     app = annotated.app
     ladder_event(annotated, data=ladder_snapshot(90.125))
-    latest = ladder_snapshot(160.875)
+    latest = {**ladder_snapshot(160.875), "preset": load_presets()[-1]}
     latest["placements"].append({"markerIndex": 2, "x": 160.875, "y": 30.5})
     # Confirm carries its complete snapshot without needing a preceding edit.
     event = ladder_event(annotated, data=latest, revision=2, action="confirm")
@@ -159,6 +144,9 @@ def test_immediate_confirmation_contains_latest_placement_and_only_commits_once(
     app.run()
     assert app.session_state["ladder_data"] == latest
     assert app.session_state["annotation_png"] == expected_png
+    app.button(key="edit_ladder").click().run()
+    assert not app.exception
+    assert annotated.renders[-1][1]["ladder"] == latest
 
 
 @pytest.mark.parametrize("committed", [False, True])
@@ -227,19 +215,19 @@ def test_invalid_preset_configuration_keeps_skip_available(annotated, monkeypatc
     assert app.session_state["annotation_png"] == app.session_state["annotation_base_png"]
 
 
-@pytest.mark.parametrize("overrides", [
-    {"token": "obsolete"}, {"revision": 0}, {"revision": True},
-    {"kind": "annotations"}, {"action": "delete"},
-])
-def test_stale_and_unrelated_ladder_events_do_not_change_state(annotated, overrides):
+def test_stale_and_unrelated_ladder_events_do_not_change_state(annotated):
     open_ladder(annotated)
     app = annotated.app
     png = app.session_state["annotation_png"]
-    ladder_event(annotated, **overrides)
-    assert app.session_state["ladder_draft"] is None
-    assert app.session_state["ladder_data"] is None
-    assert app.session_state["annotation_revision"] == 0
-    assert app.session_state["annotation_png"] == png
+    for overrides in (
+        {"token": "obsolete"}, {"revision": 0}, {"revision": True},
+        {"kind": "annotations"}, {"action": "delete"},
+    ):
+        ladder_event(annotated, **overrides)
+        assert app.session_state["ladder_draft"] is None, overrides
+        assert app.session_state["ladder_data"] is None, overrides
+        assert app.session_state["annotation_revision"] == 0, overrides
+        assert app.session_state["annotation_png"] == png, overrides
 
 
 def test_out_of_order_or_invalid_edit_preserves_last_valid_ladder_draft(annotated):

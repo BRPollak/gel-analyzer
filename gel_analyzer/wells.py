@@ -18,7 +18,9 @@ from .workflow_orientation import is_top, orientation_text, swap_bounds, swap_po
 
 
 Point = tuple[float, float]
-Bounds = tuple[int, int, int, int]
+# Detected boundaries are integral; manually interpolated lanes may lie between
+# pixels so equal center spacing survives editing, cropping, and persistence.
+Bounds = tuple[float, float, float, float]
 
 
 class SelectionError(ValueError):

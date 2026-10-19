@@ -1,15 +1,12 @@
 """Verify staged manual lane review and cropping without changing source data."""
 
 from io import BytesIO
-from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 from PIL import Image
 import pytest
-from streamlit.testing.v1 import AppTest
 
-from gel_analyzer import image_io, well_component, wells
+from gel_analyzer import wells
 
 
 DETECTED_BOUNDS = ((30, 20, 46, 50), (32, 80, 49, 112))
@@ -17,45 +14,15 @@ REVIEWED_LANES = ((30, 17, 300, 55), (32, 75, 300, 118))
 
 
 @pytest.fixture
-def workflow(monkeypatch):
-    monkeypatch.setattr(
-        image_io, "find_gel_crop", lambda image: (0, 0, image.width, image.height)
-    )
-
-    def orient(image):
-        return SimpleNamespace(
-            image=image.transpose(Image.Transpose.TRANSPOSE),
-            rectangle=SimpleNamespace(
-                corners=((0, 0), (image.width, 0), image.size, (0, image.height))
-            ),
-            counterclockwise_degrees=90.0,
-            outline_complete=True,
-            supported_edges=(),
-        )
-
-    monkeypatch.setattr(image_io, "orient_gel", orient)
+def workflow(well_workflow):
     detected_wells = tuple(
         wells.Well(bounds, ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2))
         for bounds in DETECTED_BOUNDS
     )
-    result = wells.DetectionResult(
+    well_workflow.result = wells.DetectionResult(
         detected_wells, tuple((left, top, 300, bottom) for left, top, _, bottom in DETECTED_BOUNDS)
     )
-    harness = SimpleNamespace(event=None, renders=[], detections=[], expected_counts=[], result=result)
-
-    def component(*args, **kwargs):
-        harness.renders.append((args, kwargs))
-        return harness.event
-
-    def detect(image, points, *, expected_count=None):
-        harness.detections.append((image.copy(), points))
-        harness.expected_counts.append(expected_count)
-        return harness.result
-
-    monkeypatch.setattr(well_component, "render_well_component", component)
-    monkeypatch.setattr(wells, "detect_wells", detect)
-    harness.app = AppTest.from_file(Path(__file__).parents[1] / "app.py").run()
-    return harness
+    return well_workflow
 
 
 def upload(workflow, offset=0):
@@ -126,17 +93,6 @@ def finish_review(workflow, right_edge=230):
     assert not workflow.app.exception
 
 
-def test_manual_review_is_available_after_detection(workflow):
-    app = workflow.app
-    assert "adjust_lane_borders" not in keys(app)
-    upload(workflow)
-    assert "adjust_lane_borders" not in keys(app)
-    detect_lanes(workflow)
-    assert "adjust_lane_borders" in keys(app)
-    assert app.session_state["lane_stage"] is None
-    assert app.session_state["lane_crop"] is None
-
-
 @pytest.mark.parametrize("has_warning", [False, True])
 def test_confirm_detected_lanes_goes_directly_to_right_edge_without_reanalysis(workflow, has_warning):
     if has_warning:
@@ -187,8 +143,13 @@ def test_refined_lane_heights_survive_review_and_final_crop(workflow):
     app = workflow.app
     assert bounds(workflow) == ((30, 17, 46, 55), (32, 75, 49, 118))
     assert workflow.renders[-1][1]["lanes"] == REVIEWED_LANES
-    app.button(key="confirm_lane_borders").click().run()
-    app.button(key="confirm_lane_crop").click().run()
+    for stage, advance in (("borders", "confirm_lane_borders"),
+                           ("extent", "confirm_lane_crop"), ("cropped", None)):
+        assert app.session_state["lane_stage"] == stage
+        assert app.session_state["well_editing"] is False
+        assert not any(control.key == "expected_lane_count" for control in app.number_input)
+        if advance:
+            app.button(key=advance).click().run()
 
     assert not app.exception
     assert app.session_state["lane_crop"].crop_box == (27, 14, 300, 121)
@@ -196,46 +157,16 @@ def test_refined_lane_heights_survive_review_and_final_crop(workflow):
     assert len(workflow.detections) == 1
 
 
-@pytest.mark.parametrize("stage", ["borders", "extent", "cropped"])
-def test_review_and_crop_do_not_show_expected_lane_count_control(workflow, stage):
-    start_review(workflow)
-    app = workflow.app
-    if stage == "extent":
-        app.button(key="confirm_lane_borders").click().run()
-    elif stage == "cropped":
-        finish_review(workflow)
-    assert not any(control.key == "expected_lane_count" for control in app.number_input)
-    assert not any("Expected number of lanes" in control.label for control in app.number_input)
-    assert app.session_state["lane_stage"] == stage
-    assert app.session_state["well_editing"] is False
-    assert len(workflow.detections) == 1
-
-
-def test_empty_detection_has_three_controls_and_adjust_can_start_manual_review(workflow):
-    workflow.result = wells.DetectionResult((), (), ("No wells found.",))
-    detect_lanes(workflow)
-    app = workflow.app
-    assert keys(app) - {"clear_image"} == {
-        "confirm_detected_lanes", "adjust_lane_borders", "edit_well_line",
-    }
-    assert app.button(key="confirm_detected_lanes").disabled
-    assert not app.warning
-    app.button(key="adjust_lane_borders").click().run()
-    assert app.session_state["lane_stage"] == "borders"
-    assert bounds(workflow) == ()
-    assert app.session_state["lane_crop"] is None
-    assert app.button(key="confirm_lane_borders").disabled
-    assert keys(app) - {"clear_image"} == {
-        "confirm_lane_borders", "add_lane", "edit_well_line", "back_to_well_review",
-    }
-
-
 def test_empty_detection_can_add_adjust_and_crop_a_manual_lane(workflow):
     workflow.result = wells.DetectionResult((), (), ("No wells found.",))
     detect_lanes(workflow)
     app = workflow.app
     gel = app.session_state["gel_image"]
+    assert app.button(key="confirm_detected_lanes").disabled
+    assert not app.warning
     app.button(key="adjust_lane_borders").click().run()
+    assert bounds(workflow) == ()
+    assert app.button(key="confirm_lane_borders").disabled
     app.button(key="add_lane").click().run()
     assert not app.exception
     assert app.session_state["lane_stage"] == "borders"
@@ -366,6 +297,11 @@ def test_add_lane_ignores_late_guide_event_after_uncertain_detection_is_frozen(w
     workflow.event = pending
     points = app.session_state["well_points"]
     app.button(key="adjust_lane_borders").click().run()
+    assert app.session_state["well_result"] is workflow.result
+    assert app.session_state["well_points"] == points
+    assert app.session_state["well_editing"] is False
+    assert bounds(workflow) == DETECTED_BOUNDS
+    assert app.session_state["lane_crop"] is None
     app.button(key="add_lane").click().run()
     assert not app.exception
     assert app.session_state["well_result"] is workflow.result
@@ -375,17 +311,23 @@ def test_add_lane_ignores_late_guide_event_after_uncertain_detection_is_frozen(w
     assert len(workflow.detections) == 1
 
 
-@pytest.mark.parametrize("overrides", [
-    {"lane_index": -1}, {"lane_index": 2}, {"lane_index": True},
-    {"lane_index": "0"}, {"lane_index": None}, {"action": "replace"},
-    {"mode": "extent"}, {"token": "old-image"},
-    {"lanes": [[30, 17, 300, 55]]},
-])
-def test_delete_rejects_invalid_or_stale_requests(workflow, overrides):
+def test_delete_rejects_invalid_or_stale_requests(workflow):
     start_review(workflow)
     before = bounds(workflow)
-    lane_event(workflow, **{"action": "delete", "lane_index": 0, **overrides})
-    assert bounds(workflow) == before
+    for overrides in [
+        {"lane_index": -1},
+        {"lane_index": 2},
+        {"lane_index": True},
+        {"lane_index": "0"},
+        {"lane_index": None},
+        {"action": "replace"},
+        {"mode": "extent"},
+        {"token": "old-image"},
+        {"lanes": [[30, 17, 300, 55]]},
+    ]:
+        lane_event(workflow, **{"action": "delete", "lane_index": 0, **overrides})
+        assert bounds(workflow) == before, overrides
+        assert workflow.app.session_state["lane_revision"] == 0, overrides
 
 
 def test_extent_stage_cannot_delete_lanes(workflow):
@@ -397,31 +339,6 @@ def test_extent_stage_cannot_delete_lanes(workflow):
     lane_event(workflow, lanes=original_lanes, action="delete", lane_index=0)
     assert bounds(workflow) == before
     assert app.session_state["lane_stage"] == "extent"
-
-
-def test_pending_guide_event_cannot_change_frozen_detection_when_adjusting(workflow):
-    workflow.result = wells.DetectionResult(
-        workflow.result.wells, workflow.result.lanes, ("Review the uncertain boundaries.",)
-    )
-    detect_lanes(workflow)
-    app = workflow.app
-    token = app.session_state["well_token"]
-    pending = {"token": token, "revision": 2, "points": [[42, 18], [42, 115]]}
-    app.session_state[f"well_overlay_{token}"] = pending
-    workflow.event = pending
-    points = app.session_state["well_points"]
-
-    app.button(key="adjust_lane_borders").click().run()
-
-    assert not app.exception
-    assert app.session_state["well_result"] is workflow.result
-    assert app.session_state["well_points"] == points
-    assert app.session_state["well_editing"] is False
-    assert app.session_state["lane_stage"] == "borders"
-    assert bounds(workflow) == DETECTED_BOUNDS
-    assert app.session_state["lane_crop"] is None
-    assert "adjust_lane_borders" not in keys(app)
-    assert len(workflow.detections) == 1
 
 
 def test_border_edits_are_separate_from_detected_wells_and_require_confirmation(workflow):
@@ -450,9 +367,10 @@ def test_border_edits_are_separate_from_detected_wells_and_require_confirmation(
     assert workflow.renders[-1][1]["review_mode"] == "extent"
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
+def test_border_stage_rejects_stale_malformed_or_disallowed_edits(workflow):
+    start_review(workflow)
+    before = bounds(workflow)
+    for overrides in [
         {"token": "previous-image"},
         {"revision": True},
         {"revision": 0},
@@ -466,15 +384,12 @@ def test_border_edits_are_separate_from_detected_wells_and_require_confirmation(
         {"lanes": [[30, 17, 230, 55], [32, 75, 230, 118]], "right_edge": 230},
         {"lanes": [[30, 17, 300, 55]]},
         {"lanes": [[30, float("nan"), 300, 55], [32, 75, 300, 118]]},
-    ],
-)
-def test_border_stage_rejects_stale_malformed_or_disallowed_edits(workflow, overrides):
-    start_review(workflow)
-    before = bounds(workflow)
-    lane_event(workflow, **overrides)
-    assert bounds(workflow) == before
-    assert workflow.app.session_state["lane_right"] == 300
-    assert workflow.app.session_state["lane_crop"] is None
+    ]:
+        lane_event(workflow, **overrides)
+        assert bounds(workflow) == before, overrides
+        assert workflow.app.session_state["lane_revision"] == 0, overrides
+        assert workflow.app.session_state["lane_right"] == 300, overrides
+        assert workflow.app.session_state["lane_crop"] is None, overrides
 
 
 def test_extent_edits_change_only_the_shared_right_edge(workflow):
@@ -493,32 +408,30 @@ def test_extent_edits_change_only_the_shared_right_edge(workflow):
     assert len(workflow.detections) == 1
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
+def test_extent_stage_rejects_vertical_changes_or_invalid_right_edges(workflow):
+    start_review(workflow)
+    lane_event(workflow)
+    app = workflow.app
+    app.button(key="confirm_lane_borders").click().run()
+    before = bounds(workflow)
+    for overrides in [
         {"mode": "borders"},
         {"lanes": [[30, 16, 230, 55], [32, 75, 230, 118]]},
         {"lanes": [[29, 17, 230, 55], [32, 75, 230, 118]]},
         {"lanes": [[30, 17, 220, 55], [32, 75, 230, 118]]},
         {"lanes": [[30, 17, 301, 55], [32, 75, 301, 118]], "right_edge": 301},
         {"lanes": [[30, 17, 35, 55], [32, 75, 35, 118]], "right_edge": 35},
-    ],
-)
-def test_extent_stage_rejects_vertical_changes_or_invalid_right_edges(workflow, overrides):
-    start_review(workflow)
-    lane_event(workflow)
-    app = workflow.app
-    app.button(key="confirm_lane_borders").click().run()
-    before = bounds(workflow)
-    payload = {
-        "lanes": tuple((left, top, 230, bottom) for left, top, _, bottom in REVIEWED_LANES),
-        "right_edge": 230,
-        **overrides,
-    }
-    lane_event(workflow, **payload)
-    assert bounds(workflow) == before
-    assert app.session_state["lane_right"] == 300
-    assert app.session_state["lane_crop"] is None
+    ]:
+        payload = {
+            "lanes": tuple((left, top, 230, bottom) for left, top, _, bottom in REVIEWED_LANES),
+            "right_edge": 230,
+            **overrides,
+        }
+        lane_event(workflow, **payload)
+        assert bounds(workflow) == before, overrides
+        assert app.session_state["lane_revision"] == 0, overrides
+        assert app.session_state["lane_right"] == 300, overrides
+        assert app.session_state["lane_crop"] is None, overrides
 
 
 def test_back_to_borders_preserves_edits_and_discards_prior_stage_events(workflow):

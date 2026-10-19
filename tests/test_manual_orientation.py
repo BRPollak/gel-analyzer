@@ -109,8 +109,14 @@ def test_missing_selection_reports_draw_instruction(payload):
         rectangle_from_selection(payload, (80, 80))
 
 
-@pytest.mark.parametrize("value", [None, "40", True, float("nan"), float("inf"), -float("inf"), 10**1000])
-@pytest.mark.parametrize("field", ["cx", "cy", "width", "height", "angle_degrees"])
+@pytest.mark.parametrize("field,value", [
+    # All fields share numeric validation: cover each rejection category once,
+    # then ensure that every remaining field is actually validated.
+    ("cx", None), ("cx", "40"), ("cx", True), ("cx", float("nan")),
+    ("cx", float("inf")), ("cx", -float("inf")), ("cx", 10**1000),
+    ("cy", float("nan")), ("width", float("nan")),
+    ("height", float("nan")), ("angle_degrees", float("nan")),
+])
 def test_selection_rejects_invalid_numbers(field, value):
     with pytest.raises(OrientationError, match="finite numeric"):
         rectangle_from_selection(selection(**{field: value}), (80, 80))

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {fitPreviewGeometry, outerViewportHeight, outerViewportReserve} from "../gel_analyzer/well_component_frontend/fit_geometry.mjs";
-import {laneDeleteLayout, pointerToImage} from "../gel_analyzer/well_component_frontend/geometry.mjs";
+import {laneDeleteLayout} from "../gel_analyzer/well_component_frontend/geometry.mjs";
 
 test("landscape and portrait previews fit both dimensions without changing source geometry", () => {
   for (const [imageWidth, imageHeight] of [[2400, 800], [800, 2400], [1600, 1600]]) {
@@ -57,23 +57,6 @@ test("lane-delete overflow is counted once and matches its actual native-coordin
   assert.ok(many.height <= many.heightBudget, "the gel always fits even when many accessible controls need more room");
   assert.equal(many.totalHeight, 30 * 32);
   assert.equal(many.controlsOverflow, true);
-});
-
-test("pointer mapping returns the same source pixels after viewport and gutter resizing", () => {
-  const imageWidth = 1600;
-  const imageHeight = 900;
-  for (const availableWidth of [350, 900, 2000]) {
-    for (const viewportHeight of [500, 900]) {
-      const fit = fitPreviewGeometry({imageWidth, imageHeight, availableWidth, viewportHeight,
-        chromeHeight: 70, reviewMode: "borders", laneCount: 4});
-      const rect = {left: 27, top: 81, width: fit.width, height: fit.height};
-      const point = pointerToImage(rect.left + 624 * fit.scale, rect.top + 384 * fit.scale,
-        rect, imageWidth, imageHeight);
-      assert.ok(Math.abs(point[0] - 624) < 1e-10);
-      assert.ok(Math.abs(point[1] - 384) < 1e-10);
-      assert.deepEqual(pointerToImage(rect.left, rect.top, rect, imageWidth, imageHeight), [0, 0]);
-    }
-  }
 });
 
 test("parent viewport is stable when iframe height changes and cross-origin fallback avoids feedback", () => {

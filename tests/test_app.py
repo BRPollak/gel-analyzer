@@ -56,42 +56,43 @@ def assert_empty(app):
     assert not app.expander
     assert app.file_uploader[0].label == "Open a gel image"
     assert app.file_uploader[0].value is None
+    assert set(app.file_uploader[0].proto.type) == {".tif", ".tiff", ".png", ".jpeg", ".jpg"}
     assert app.session_state["gel_image"] is None
     assert all(button.disabled for button in app.button)
 
 
-def test_upload_same_name_replacement_clear_and_same_file_reupload(app):
-    first = tiff_bytes(size=(31, 9))
-    replacement = tiff_bytes(size=(9, 31), color=220)
+def test_upload_replacement_clear_removal_and_reupload(app):
     assert_empty(app)
-
-    upload(app, first)
-    assert_preview(app, first, (31, 9))
-    upload(app, replacement)
-    assert_preview(app, replacement, (9, 31))
-    app.run()
-    assert_preview(app, replacement, (9, 31))
+    # Same-name replacements, all source formats, and case-insensitive suffixes
+    # share one lifecycle. Pixel-mode validation belongs to test_image_io.py.
+    uploads = [
+        ("gel.tif", tiff_bytes(), (31, 9)),
+        ("gel.tif", tiff_bytes(size=(9, 31), color=220), (9, 31)),
+        ("gel.TIFF", tiff_bytes(size=(9, 31)), (9, 31)),
+        ("gel.PNG", image_bytes("PNG", size=(19, 23), mode="RGBA", color=(13, 53, 103, 143)), (19, 23)),
+        ("gel.JPG", image_bytes("JPEG", size=(25, 13), mode="RGB", color=(70, 80, 90)), (25, 13)),
+    ]
+    for filename, source, size in uploads:
+        upload(app, source, filename)
+        assert_preview(app, source, size, filename)
+        app.run()
+        assert_preview(app, source, size, filename)
 
     app.button(key="clear_image").click().run()
     assert_empty(app)
-    upload(app, replacement)
-    assert_preview(app, replacement, (9, 31))
-
-
-def test_removing_upload_clears_preview_and_metadata(app):
-    upload(app, tiff_bytes())
-
+    upload(app, source, "gel.jpeg")
+    assert_preview(app, source, size, "gel.jpeg")
     app.file_uploader[0].set_value(None).run()
-
     assert_empty(app)
+    upload(app, source, "gel.jpeg")
+    assert_preview(app, source, size, "gel.jpeg")
 
 
-@pytest.mark.parametrize("filename", ["gel.tif", "gel.png", "gel.jpg", "gel.jpeg"])
-def test_invalid_replacement_removes_stale_preview_and_recovers(app, filename):
+def test_invalid_replacement_removes_stale_preview_and_recovers(app):
     source = tiff_bytes()
     upload(app, source)
 
-    upload(app, b"not an image", filename)
+    upload(app, b"not an image", "gel.png")
 
     assert not app.exception
     assert len(app.error) == 1
@@ -111,57 +112,6 @@ def test_high_bit_depth_and_ultrawide_previews_preserve_source(app, mode, size, 
     upload(app, source)
 
     assert_preview(app, source, size)
-
-
-@pytest.mark.parametrize("filename", ["gel.tif", "gel.tiff", "gel.TIF", "gel.TIFF"])
-def test_tiff_filename_extensions(app, filename):
-    source = tiff_bytes()
-
-    upload(app, source, filename)
-
-    assert_preview(app, source, (31, 9), filename)
-
-
-def test_uploader_accepts_all_supported_image_extensions(app):
-    assert set(app.file_uploader[0].proto.type) == {".tif", ".tiff", ".png", ".jpeg", ".jpg"}
-
-
-@pytest.mark.parametrize(
-    "image_format,filename",
-    [
-        ("PNG", "gel.png"), ("PNG", "gel.PNG"),
-        ("JPEG", "gel.jpg"), ("JPEG", "gel.JPG"),
-        ("JPEG", "gel.jpeg"), ("JPEG", "gel.JPEG"),
-    ],
-)
-def test_png_and_jpeg_filename_extensions(app, image_format, filename):
-    source = image_bytes(image_format)
-
-    upload(app, source, filename)
-
-    assert_preview(app, source, (31, 9), filename)
-    app.run()
-    assert_preview(app, source, (31, 9), filename)
-
-
-def test_cross_format_replacement_clear_and_reupload(app):
-    tiff = tiff_bytes()
-    png = image_bytes("PNG", size=(19, 23), mode="RGBA", color=(13, 53, 103, 143))
-    jpeg = image_bytes("JPEG", size=(25, 13), mode="RGB", color=(70, 80, 90))
-
-    upload(app, tiff)
-    assert_preview(app, tiff, (31, 9))
-    upload(app, png, "gel.png")
-    assert_preview(app, png, (19, 23), "gel.png")
-    upload(app, jpeg, "gel.jpg")
-    assert_preview(app, jpeg, (25, 13), "gel.jpg")
-
-    app.button(key="clear_image").click().run()
-    assert_empty(app)
-    upload(app, jpeg, "gel.jpeg")
-    assert_preview(app, jpeg, (25, 13), "gel.jpeg")
-    upload(app, png, "gel.png")
-    assert_preview(app, png, (19, 23), "gel.png")
 
 
 def test_only_completed_crop_is_stored_and_displayed_with_crop_dimensions(
