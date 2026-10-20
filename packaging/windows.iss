@@ -85,8 +85,7 @@ begin
   Result := IsDotNetInstalled(net48, 0);
   if not Result then
     SuppressibleMsgBox(
-      'Gel Analyzer requires .NET Framework 4.8, which is included with Windows 10 22H2 and Windows 11.' +
-      #13#10#13#10 +
+      'Gel Analyzer requires .NET Framework 4.8, which is included with Windows 10 22H2 and Windows 11.' + #13#10#13#10 +
       'This Windows component is missing or unavailable. Ask your administrator to repair or enable it, then run Setup again.',
       mbCriticalError, MB_OK, IDOK);
 end;
