@@ -51,6 +51,26 @@ def test_pe_inspection_rejects_a_nonbinary(tmp_path):
         build_windows.inspect_pe(candidate)
 
 
+@pytest.mark.parametrize(
+    ("relative_path", "architecture", "allowed"),
+    [
+        ("_internal/webview/lib/runtimes/win-arm64/native/WebView2Loader.dll", "arm64", True),
+        ("_internal/webview/lib/runtimes/win-x86/native/WebView2Loader.dll", "x86", True),
+        ("_internal/webview/lib/runtimes/win-arm64/native/WebView2Loader.dll", "x86", False),
+        ("_internal/webview/lib/runtimes/win-x64/native/WebView2Loader.dll", "arm64", False),
+        ("_internal/webview/lib/runtimes/win-arm64/native/AnotherLibrary.dll", "arm64", False),
+        ("_internal/other/WebView2Loader.dll", "x86", False),
+        ("Gel Analyzer.exe", "arm64", False),
+    ],
+)
+def test_alternate_sdk_loaders_are_allowed_only_at_exact_vendor_paths(relative_path, architecture, allowed):
+    if allowed:
+        build_windows.verify_binary_architecture(relative_path, architecture)
+    else:
+        with pytest.raises(RuntimeError, match="Unexpected architecture"):
+            build_windows.verify_binary_architecture(relative_path, architecture)
+
+
 def test_bundle_cannot_omit_webview_runtime_loader(tmp_path):
     app = tmp_path / "app"
     write_pe(app / "Gel Analyzer.exe", 0x8664)
@@ -71,7 +91,8 @@ def test_bundle_rejects_native_arm64_dependency(tmp_path):
         path = app / "_internal" / resource
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".dll":
-            write_pe(path, 0x8664)
+            architecture = build_windows.ALTERNATE_WEBVIEW2_LOADERS.get(f"_internal/{resource}", "x64")
+            write_pe(path, {"x64": 0x8664, "arm64": 0xAA64, "x86": 0x14C}[architecture])
         else:
             path.touch()
     bridge = app / "_internal/webview/js/api.js"

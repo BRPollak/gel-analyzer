@@ -31,6 +31,10 @@ WORK = ROOT / "build" / "windows"
 APP = DIST / "Gel Analyzer"
 APP_ID = "org.benpollak.gelanalyzer.windows"
 MIN_WINDOWS = "10.0.19045"
+ALTERNATE_WEBVIEW2_LOADERS = {
+    "_internal/webview/lib/runtimes/win-arm64/native/WebView2Loader.dll": "arm64",
+    "_internal/webview/lib/runtimes/win-x86/native/WebView2Loader.dll": "x86",
+}
 REQUIRED_RESOURCES = (
     "app.py", ".streamlit/config.toml", "GelAnalyzer.ico",
     "streamlit/static/index.html", "gel_analyzer/ladder_presets.json",
@@ -41,7 +45,9 @@ REQUIRED_RESOURCES = (
     "gel_analyzer/annotation_component_frontend/ladder_references/neb-1-kb.webp",
     "webview/lib/Microsoft.Web.WebView2.Core.dll",
     "webview/lib/Microsoft.Web.WebView2.WinForms.dll",
+    "webview/lib/runtimes/win-arm64/native/WebView2Loader.dll",
     "webview/lib/runtimes/win-x64/native/WebView2Loader.dll",
+    "webview/lib/runtimes/win-x86/native/WebView2Loader.dll",
     "pythonnet/runtime/Python.Runtime.dll",
     "clr_loader/ffi/dlls/amd64/ClrLoader.dll",
     "licenses/python/LICENSE.txt",
@@ -184,6 +190,18 @@ def inspect_pe(path: Path) -> dict:
         }
 
 
+def verify_binary_architecture(relative_path: str, architecture: str) -> None:
+    """Allow other CPU loaders only in the two required upstream SDK paths."""
+    if relative_path in ALTERNATE_WEBVIEW2_LOADERS:
+        expected = (ALTERNATE_WEBVIEW2_LOADERS[relative_path],)
+    else:
+        expected = ("x64", "anycpu")
+    if architecture not in expected:
+        raise RuntimeError(
+            f"Unexpected architecture in {relative_path}: {architecture}; expected {' or '.join(expected)}"
+        )
+
+
 def verify_bundle(version: str, app: Path = APP) -> dict:
     executable = app / "Gel Analyzer.exe"
     if not executable.is_file():
@@ -202,9 +220,9 @@ def verify_bundle(version: str, app: Path = APP) -> dict:
         if not path.is_file() or path.suffix.lower() not in (".exe", ".dll", ".pyd"):
             continue
         info = inspect_pe(path)
-        if info["architecture"] not in ("x64", "anycpu"):
-            raise RuntimeError(f"Unexpected architecture in {path}: {info['architecture']}")
-        binaries.append({"path": path.relative_to(app).as_posix(), **info})
+        relative_path = path.relative_to(app).as_posix()
+        verify_binary_architecture(relative_path, info["architecture"])
+        binaries.append({"path": relative_path, **info})
     env = os.environ.copy()
     env["GEL_BUILD_APP_EXE"] = str(executable.resolve())
     executable_version = powershell_json(r"""

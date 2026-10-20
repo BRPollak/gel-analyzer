@@ -70,12 +70,14 @@ a = Analysis(
 
 
 def needed_windows_file(entry):
-    """The upstream hooks collect loaders for all architectures and for IE."""
+    """Remove unused CLR/IE binaries, preserving WebView2's SDK layout.
+
+    pywebview 6.2.1 resolves all three WebView2 loader directories at import,
+    including on x64. Retain those vendor files exactly as shipped.
+    """
     destination = entry[0].replace("\\", "/").lower()
     return not (
-        "/win-x86/" in destination
-        or "/win-arm64/" in destination
-        or destination.startswith("clr_loader/ffi/dlls/x86/")
+        destination.startswith("clr_loader/ffi/dlls/x86/")
         or destination.endswith(("webbrowserinterop.x86.dll", "webbrowserinterop.x64.dll"))
     )
 
