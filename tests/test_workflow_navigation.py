@@ -68,6 +68,68 @@ def test_return_to_lanes_captures_pending_labels_and_rejects_removed_editor_even
     assert app.session_state["annotation_data"] == saved
 
 
+@pytest.mark.parametrize("resume", ["confirm_detected_lanes", "adjust_lane_borders"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_well_summary_retains_annotations_and_checks_ladder_geometry(annotated, resume, changed):
+    original_crop = confirm_ladder(annotated)
+    app = annotated.app
+    labels = deepcopy(app.session_state["annotation_data"])
+    ladder = deepcopy(app.session_state["ladder_data"])
+    go(app, 1)
+    if changed:
+        lane_event(annotated.workflow, lanes=((30, 15, 230, 60), (32, 70, 230, 140)),
+                   right_edge=230, run=False)
+    old_tokens = {kind: app.session_state[f"{kind}_token"] for kind in ("lane", "annotation")}
+
+    app.button(key="back_to_well_review").click().run()
+
+    assert not app.exception
+    assert app.session_state["lane_stage"] is None
+    assert app.session_state["annotation_data"] == labels
+    assert app.session_state["ladder_data"] == ladder
+    assert app.session_state["annotation_png"] is None
+    assert app.session_state["annotation_svg"] is None
+    for kind, token in old_tokens.items():
+        assert app.session_state[f"{kind}_token"] != token
+    app.button(key=resume).click().run()
+    if resume == "adjust_lane_borders":
+        app.button(key="confirm_lane_borders").click().run()
+    app.button(key="confirm_lane_crop").click().run()
+
+    assert not app.exception
+    assert (app.session_state["lane_crop"] == original_crop) is not changed
+    assert app.session_state["annotation_data"] == labels
+    assert app.session_state["annotation_stage"] == "lanes"
+    assert app.session_state["annotation_png"] is None
+    if changed:
+        assert app.session_state["ladder_data"] is None
+        assert app.session_state["annotation_completed"] is False
+        assert any("place your ladder markers again" in message.value for message in app.info)
+    else:
+        assert app.session_state["ladder_data"] == ladder
+        assert app.session_state["annotation_completed"] is True
+        assert annotated.renders[-1][1]["ladder"] == ladder
+
+
+def test_new_detection_after_well_summary_discards_previous_annotations(annotated):
+    confirm_ladder(annotated)
+    app = annotated.app
+    go(app, 1)
+    app.button(key="back_to_well_review").click().run()
+    app.button(key="edit_well_line").click().run()
+    assert not app.exception
+    assert app.session_state["annotation_data"] is None
+    assert app.session_state["ladder_data"] is None
+    assert app.session_state["annotation_geometry"] is None
+    assert app.session_state["lane_review_resume_identity"] is None
+    app.button(key="confirm_well_line").click().run()
+    app.button(key="confirm_detected_lanes").click().run()
+    app.button(key="confirm_lane_crop").click().run()
+    assert not app.exception
+    assert [label["text"] for label in app.session_state["annotation_data"]["labels"]] == ["Lane 1", "Lane 2"]
+    assert app.session_state["ladder_data"] is None
+
+
 def test_return_to_borders_captures_pending_extent(workflow):
     start_review(workflow)
     app = workflow.app
