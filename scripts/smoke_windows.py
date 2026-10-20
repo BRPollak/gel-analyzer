@@ -213,8 +213,13 @@ def browser_smoke(url: str, output: Path) -> dict:
             for index, fixture in enumerate(fixtures):
                 if index:
                     page.get_by_role("button", name="Replace image", exact=True).click()
+                expect(page.locator('input[type="file"]')).to_have_value("")
                 page.locator('input[type="file"]').set_input_files(fixture)
-                expect(page.get_by_text(fixture.name, exact=True)).to_be_visible()
+                # The uploader shows its selected filename before the server
+                # has processed it. Wait for the analysis preview's st.text, so
+                # replacements cannot race callbacks.
+                expect(page.get_by_test_id("stText")).to_have_text(fixture.name)
+                expect(page.get_by_test_id("stImage").locator("img")).to_be_visible()
                 if index:
                     # Close the popover before interacting with the analysis.
                     page.keyboard.press("Escape")
@@ -229,6 +234,7 @@ def browser_smoke(url: str, output: Path) -> dict:
             expect(orientation.locator("#draw-new")).to_be_enabled()
             orientation.locator("#draw-new").click()
             button(page, "cancel_manual_orientation").click()
+            expect(page.locator('iframe[src*="orientation_rectangle"]')).to_have_count(0)
             button(page, "rotate_and_orient").click()
             button(page, "confirm_orientation").click()
             button(page, "define_wells").click()
@@ -261,8 +267,10 @@ def browser_smoke(url: str, output: Path) -> dict:
             expect(page.get_by_text("Prepared 4 wells and 4 horizontal lanes.", exact=True)).to_be_visible()
             button(page, "adjust_lane_borders").click()
             review = component_frame(page, "well_line_overlay")
+            expect(review.locator("#gel")).to_have_attribute("data-review-mode", "borders")
             expect(review.locator("#lane-review")).to_be_visible()
             button(page, "confirm_lane_borders").click()
+            expect(review.locator("#gel")).to_have_attribute("data-review-mode", "extent")
             button(page, "confirm_lane_crop").click()
             editor = component_frame(page, "lane_annotations")
             labels = editor.locator('.image-label[contenteditable="true"]')
