@@ -11,8 +11,8 @@ Requires an **Apple Silicon Mac (M1 or later) with macOS 14 or later**. Check
 **Apple menu → About This Mac**. Python and everything else the app needs are
 included.
 
-1. Open the [Mac download page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.1).
-   Under **Assets**, download `Gel-Analyzer-1.0.1-macOS-arm64.dmg`.
+1. Open the [Mac download page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.2).
+   Under **Assets**, download `Gel-Analyzer-1.0.2-macOS-arm64.dmg`.
 2. Double-click the downloaded DMG, then drag **Gel Analyzer.app** onto
    **Applications** in the window that opens.
 3. Eject the disk image in Finder. Open **Applications** and double-click
