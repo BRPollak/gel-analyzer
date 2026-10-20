@@ -70,8 +70,12 @@ var
 begin
   Result := RegQueryStringValue(RootKey, WebView2Key, 'pv', Version);
   if Result then
+    { Locked pywebview SDK 1.0.3856.49 targets Runtime 146; the old v86 load
+      floor lacks our editor's structuredClone and newer InPrivate APIs.
+      Keep gel_analyzer/windows_runtime.py aligned.
+      https://learn.microsoft.com/en-us/microsoft-edge/webview2/release-notes/sdk/ }
     Result := StrToVersion(Version, PackedVersion) and
-      (ComparePackedVersion(PackedVersion, PackVersionComponents(86, 0, 622, 0)) >= 0);
+      (ComparePackedVersion(PackedVersion, PackVersionComponents(146, 0, 3856, 49)) >= 0);
 end;
 
 function HasWebView2: Boolean;

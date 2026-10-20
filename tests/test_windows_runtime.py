@@ -32,11 +32,12 @@ def registry(monkeypatch):
 
 @pytest.mark.parametrize("root,view", [("user", 1), ("machine", 513)])
 @pytest.mark.parametrize("build", [19045, 22621])
-def test_supported_windows_with_user_or_machine_webview(registry, monkeypatch, root, view, build):
+@pytest.mark.parametrize("version", ["146.0.3856.49", "154.0.4258.31"])
+def test_supported_windows_with_user_or_machine_webview(registry, monkeypatch, root, view, build, version):
     monkeypatch.setattr(sys, "getwindowsversion",
                         lambda: SimpleNamespace(major=10, minor=0, build=build))
     registry[(root, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{windows_runtime.WEBVIEW2_CLIENT}", view)] = {
-        "pv": "130.0.2849.68",
+        "pv": version,
     }
     assert windows_runtime.prerequisite_error() is None
 
@@ -64,6 +65,18 @@ def test_missing_or_invalid_webview_has_repair_instructions(registry, version):
     assert "WebView2 Runtime" in error
     assert "installer again" in error
     assert "without internet access" in error
+
+
+@pytest.mark.parametrize("root,view", [("user", 1), ("machine", 513)])
+@pytest.mark.parametrize("version", ["86.0.622.0", "97.0.1072.69", "130.0.2849.68", "146.0.3856.48"])
+def test_registered_but_old_webview_requires_bundled_upgrade(registry, root, view, version):
+    registry[(root, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{windows_runtime.WEBVIEW2_CLIENT}", view)] = {
+        "pv": version,
+    }
+    error = windows_runtime.prerequisite_error()
+    assert error is not None
+    assert "WebView2 Runtime" in error
+    assert "installer again" in error
 
 
 def test_missing_registry_keys_are_treated_as_missing_runtime(registry):

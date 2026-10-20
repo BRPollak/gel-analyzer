@@ -8,6 +8,11 @@ import sys
 WEBVIEW2_CLIENT = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 NET_FRAMEWORK_48_RELEASE = 528040
 MINIMUM_WINDOWS_BUILD = 19045
+# Match the locked pywebview 6.2.1 SDK (1.0.3856.49) to Runtime 146:
+# https://learn.microsoft.com/en-us/microsoft-edge/webview2/release-notes/sdk/
+# The engine's old v86 load floor does not cover our structuredClone-based
+# editor or pywebview's newer InPrivate controller APIs. Keep windows.iss aligned.
+MINIMUM_WEBVIEW2_VERSION = (146, 0, 3856, 49)
 
 
 def _registry_value(root, path: str, name: str, *, view: int = 0):
@@ -43,7 +48,7 @@ def prerequisite_error() -> str | None:
             parts = tuple(int(part) for part in str(installed).split("."))
         except ValueError:
             continue
-        if len(parts) == 4 and parts >= (86, 0, 622, 0):
+        if len(parts) == 4 and parts >= MINIMUM_WEBVIEW2_VERSION:
             return None
     return ("Gel Analyzer requires Microsoft Edge WebView2 Runtime. "
             "Run the Gel Analyzer installer again to install it, then reopen the app.\n\n"
