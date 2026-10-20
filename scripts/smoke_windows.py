@@ -13,7 +13,7 @@ against a separately running app, for developing this cross-platform harness.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import ctypes
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -34,7 +34,6 @@ from uuid import uuid4
 from xml.etree import ElementTree
 
 from PIL import Image
-from playwright.sync_api import expect, sync_playwright
 
 
 HTTP = build_opener(ProxyHandler({}))
@@ -75,6 +74,76 @@ def frozen_environment(logs: Path) -> dict[str, str]:
     return environment
 
 
+@contextmanager
+def temporary_webview2_policy(registry, executable_name: str, port: int, profile: Path):
+    """Temporarily configure only this app on an elevated disposable CI runner.
+
+    WebView2 150+ ignores environment overrides for elevated processes. Use its
+    documented machine policy, preserving every previous value and removing
+    only empty keys created by this context. Injecting winreg keeps rollback
+    testable on platforms without a Windows registry.
+    """
+    root = registry.HKEY_LOCAL_MACHINE
+    view = registry.KEY_WOW64_64KEY
+    access = registry.KEY_READ | registry.KEY_WRITE | view
+    prefix = r"SOFTWARE\Policies\Microsoft\Edge\WebView2"
+    specifications = (
+        (prefix + r"\AdditionalBrowserArguments", f"--remote-debugging-port={port}"),
+        (prefix + r"\UserDataFolder", str(profile)),
+    )
+    missing = object()
+    created = []
+    previous = []
+
+    def ensure_key(path):
+        for end in range(1, len(path.split("\\")) + 1):
+            partial = "\\".join(path.split("\\")[:end])
+            try:
+                key = registry.OpenKey(root, partial, 0, access)
+            except FileNotFoundError:
+                key = registry.CreateKeyEx(root, partial, 0, access)
+                created.append(partial)
+            key.Close()
+
+    try:
+        for path, value in specifications:
+            ensure_key(path)
+            with registry.OpenKey(root, path, 0, access) as key:
+                try:
+                    original = registry.QueryValueEx(key, executable_name)
+                except FileNotFoundError:
+                    original = missing
+                previous.append((path, original))
+                registry.SetValueEx(key, executable_name, 0, registry.REG_SZ, value)
+        yield
+    finally:
+        errors = []
+        for path, original in reversed(previous):
+            try:
+                with registry.OpenKey(root, path, 0, access) as key:
+                    if original is missing:
+                        try:
+                            registry.DeleteValue(key, executable_name)
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        registry.SetValueEx(key, executable_name, 0, original[1], original[0])
+            except OSError as error:
+                errors.append(str(error))
+        for path in reversed(created):
+            try:
+                with registry.OpenKey(root, path, 0, access) as key:
+                    subkeys, values, _ = registry.QueryInfoKey(key)
+                if subkeys == 0 and values == 0:
+                    registry.DeleteKeyEx(root, path, view, 0)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                errors.append(str(error))
+        if errors:
+            raise RuntimeError("Could not restore temporary WebView2 test policy: " + "; ".join(errors))
+
+
 def synthetic_images(directory: Path) -> list[Path]:
     """Reproduce the public synthetic well fixture, never use research images."""
     image = Image.new("I;16", (520, 360), 24000)
@@ -102,6 +171,8 @@ def synthetic_images(directory: Path) -> list[Path]:
 
 
 def component_frame(page, name: str):
+    from playwright.sync_api import expect
+
     # Locator waits pump the browser protocol and survive Streamlit rerenders.
     frame = page.frame_locator(f'iframe[src*="{name}"]')
     expect(frame.locator("body")).to_be_visible()
@@ -119,6 +190,8 @@ def choose_option(page, label: str, value: str):
 
 
 def browser_smoke(url: str, output: Path) -> dict:
+    from playwright.sync_api import expect, sync_playwright
+
     expect.set_options(timeout=45_000)
     browser_errors = []
     requests = []
@@ -323,16 +396,32 @@ class WindowsUI:
 
 
 def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
-    import psutil
+    import winreg
 
-    ui = WindowsUI()
     logs = output / ("forced-close" if force else "normal-close")
     logs.mkdir(parents=True, exist_ok=True)
     debug_port = free_port()
+    profile = Path(tempfile.mkdtemp(prefix="Gel WebView smoke "))
     environment = frozen_environment(logs)
-    # WebView2's supported environment setting enables inspection in this test
-    # process only. Release launches never expose a debugging endpoint.
     environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"--remote-debugging-port={debug_port}"
+    environment["WEBVIEW2_USER_DATA_FOLDER"] = str(profile)
+    elevated = bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
+    policy = temporary_webview2_policy(winreg, executable.name, debug_port, profile) if elevated else nullcontext()
+    try:
+        with policy:
+            result = _native_smoke(executable, logs, debug_port, environment, force=force)
+        result["debugging_configuration"] = "temporary app-specific machine policy" if elevated else "environment"
+        return result
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def _native_smoke(executable: Path, logs: Path, debug_port: int,
+                  environment: dict[str, str], *, force: bool) -> dict:
+    import psutil
+    from playwright.sync_api import expect, sync_playwright
+
+    ui = WindowsUI()
     process = subprocess.Popen([str(executable)], cwd=executable.parent, env=environment,
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL)
@@ -382,7 +471,30 @@ def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
             except (OSError, URLError):
                 return False
 
-        wait_until(debugging_ready, "WebView2 inspection endpoint")
+        def save_native_diagnostics():
+            descendants = []
+            try:
+                live_children = parent.children(recursive=True)
+            except psutil.NoSuchProcess:
+                live_children = []
+            for child in live_children:
+                try:
+                    descendants.append({"pid": child.pid, "name": child.name(),
+                                        "command": child.cmdline()})
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            (logs / "native-processes.json").write_text(json.dumps({
+                "debugging_port": debug_port,
+                "app_exit_code": process.poll(),
+                "windows": [{"handle": handle, "title": title}
+                            for handle, title in ui.windows(process.pid)],
+                "children": descendants,
+            }, indent=2), encoding="utf-8")
+
+        try:
+            wait_until(debugging_ready, "WebView2 inspection endpoint")
+        finally:
+            save_native_diagnostics()
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
             pages = [page for context in browser.contexts for page in context.pages]

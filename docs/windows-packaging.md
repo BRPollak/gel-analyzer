@@ -66,6 +66,12 @@ The installer test installs and removes Gel Analyzer for the current Windows
 account. Run it only on a disposable test account or CI runner without an
 existing installation or unsaved Gel Analyzer session.
 
+For native-window inspection, the smoke harness enables WebView2 debugging only
+for its test launch. On an elevated runner, it temporarily sets app-specific
+machine policies for the debugging port and test profile, then restores them.
+This uses Microsoft's supported mechanism for elevated WebView2 hosts; normal
+application launches do not enable debugging.
+
 CI also compiles an installer fixture with the same payload but version 1.0.2,
 then upgrades it to 1.0.3. This verifies versioned installer replacement and
 uninstall registration; it is not a historical Windows release. Pass this
