@@ -158,6 +158,10 @@ def show_expected_well_count() -> None:
 
 
 def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
+    component_key = f"well_overlay_{st.session_state.well_token}"
+    # A rerun may recreate the iframe, so its initial arguments must already
+    # contain the latest received click rather than the previous guide snapshot.
+    accept_well_event(st.session_state.get(component_key), gel)
     result = st.session_state.well_result
     with image_panel:
         event = render_well_component(
@@ -167,7 +171,7 @@ def show_well_selection(gel: GelImage, image_panel, controls_panel) -> None:
             lanes=result.lanes if result else [],
             editable=st.session_state.well_editing,
             token=st.session_state.well_token,
-            key=f"well_overlay_{st.session_state.well_token}",
+            key=component_key,
             **axis_options(gel),
         )
         accept_well_event(event, gel)

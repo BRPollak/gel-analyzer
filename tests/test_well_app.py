@@ -145,6 +145,43 @@ def test_clicks_drags_and_reruns_do_not_detect_until_confirmed(workflow):
     assert len(workflow.detections) == 1
 
 
+@pytest.mark.parametrize("points, expected", [
+    (((34, 20),), ((34.0, 20.0),)),
+    (((34, 20), (38, 180)), ((34.0, 20.0), (34.0, 180.0))),
+])
+def test_pending_click_is_rendered_in_initial_args_after_iframe_remount(workflow, points, expected):
+    begin_selection(workflow)
+    if len(points) == 2:
+        event(workflow, points=points[:1], revision=1)
+    app = workflow.app
+    token = app.session_state["well_token"]
+    key = f"well_overlay_{token}"
+    pending = {"token": token, "revision": 2, "points": [list(point) for point in points]}
+    # Streamlit receives the click before the rerun. A recreated iframe has no
+    # local geometry and must initialize from this run's component arguments.
+    app.session_state[key] = pending
+    workflow.event = pending
+    workflow.renders.clear()
+
+    app.run()
+
+    assert not app.exception
+    assert len(workflow.renders) == 1
+    rendered = workflow.renders[0][1]
+    assert rendered["key"] == key
+    assert rendered["token"] == token
+    assert rendered["points"] == expected
+    assert rendered["editable"] is True
+    assert app.session_state["well_points"] == expected
+    assert app.session_state["well_revision"] == 2
+    assert not workflow.detections
+    # Returning the same widget event again must not reset accepted geometry.
+    app.run()
+    assert not app.exception
+    assert workflow.renders[-1][1]["points"] == expected
+    assert app.session_state["well_revision"] == 2
+
+
 @pytest.mark.parametrize("warnings", [(), ("Review uncertain well boundaries.",)])
 def test_detected_summary_has_only_confirm_adjust_and_back_without_count_or_warnings(workflow, warnings):
     begin_selection(workflow)
