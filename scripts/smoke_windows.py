@@ -209,6 +209,24 @@ def browser_smoke(url: str, output: Path) -> dict:
         try:
             page.goto(url, wait_until="domcontentloaded")
             expect(page.get_by_role("heading", name="Agarose Gel Analyzer")).to_be_visible()
+            # Observe rerun completion without replacing component events or
+            # application state. Old attribute values retain even transitions
+            # too quick for Playwright polling, and this survives iframe remounts.
+            page.evaluate("""() => {
+                window.gelSmokeRunCompletions = 0;
+                new MutationObserver(records => {
+                    for (const record of records) {
+                        if (record.target.matches('[data-testid="stApp"]') &&
+                            record.oldValue === "running" &&
+                            record.target.getAttribute("data-test-script-state") === "notRunning") {
+                            window.gelSmokeRunCompletions++;
+                        }
+                    }
+                }).observe(document.documentElement, {
+                    subtree: true, attributes: true, attributeOldValue: true,
+                    attributeFilter: ["data-test-script-state"]
+                });
+            }""")
             fixtures = synthetic_images(output / "synthetic-inputs")
             for index, fixture in enumerate(fixtures):
                 if index:
@@ -252,15 +270,29 @@ def browser_smoke(url: str, output: Path) -> dict:
                 # for that server rerender before clicks, or the count callback
                 # can discard points drawn on the previous token.
                 expect(svg).not_to_have_attribute("data-token", original_token)
+            expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
             expect(svg).to_have_attribute("data-editable", "true")
             expect(svg).to_have_attribute("data-point-count", "0")
-            # Use the real SVG's viewBox: browser fitting need not be 1:1.
-            bounds = svg.bounding_box()
-            dimensions = svg.evaluate("(node) => [node.viewBox.baseVal.width, node.viewBox.baseVal.height]")
-            assert bounds and dimensions[0] > 0 and dimensions[1] > 0
+            guide_token = svg.get_attribute("data-token")
+            assert guide_token
             for index, (x, y) in enumerate(((36, 36), (36, 291)), start=1):
-                svg.click(position={"x": x / dimensions[0] * bounds["width"],
-                                    "y": y / dimensions[1] * bounds["height"]})
+                ready_svg = overlay.locator(
+                    f'#gel[data-token="{guide_token}"][data-editable="true"]'
+                    f'[data-point-count="{index - 1}"]')
+                # Remeasure after each acknowledgement: fitting and iframe
+                # layout can change as the instruction text is updated.
+                bounds = ready_svg.bounding_box()
+                dimensions = ready_svg.evaluate(
+                    "(node) => [node.viewBox.baseVal.width, node.viewBox.baseVal.height]")
+                assert bounds and dimensions[0] > 0 and dimensions[1] > 0
+                completed_runs = page.evaluate("window.gelSmokeRunCompletions")
+                ready_svg.click(position={"x": x / dimensions[0] * bounds["width"],
+                                          "y": y / dimensions[1] * bounds["height"]})
+                page.wait_for_function(
+                    "(completed) => window.gelSmokeRunCompletions > completed",
+                    arg=completed_runs)
+                expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
+                expect(svg).to_have_attribute("data-token", guide_token)
                 expect(svg).to_have_attribute("data-point-count", str(index))
             expect(button(page, "confirm_well_line")).to_be_enabled()
             button(page, "confirm_well_line").click()
