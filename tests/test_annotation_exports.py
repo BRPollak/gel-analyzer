@@ -151,7 +151,8 @@ process.stdout.write(JSON.stringify({svg:annotationSvg(layout),width:layout.widt
                             f"state.workflow_orientation={json.dumps(orientation)};state.annotations.laneLabelAngle={angle};\n"
                             "const layout=layoutAnnotations(state,measure);")
     result = subprocess.run(["node", "--input-type=module", "-e", script], check=True,
-                            capture_output=True, text=True, cwd=Path(__file__).parents[1])
+                            capture_output=True, text=True, encoding="utf-8",
+                            cwd=Path(__file__).parents[1])
     event = json.loads(result.stdout)
     root = ET.fromstring(validate_svg_composition(event, crop))
     labels = root.findall("{http://www.w3.org/2000/svg}text")

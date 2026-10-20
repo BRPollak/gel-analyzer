@@ -78,8 +78,8 @@ native save-dialog testing.
 
 ## Release
 
-After both workflow jobs pass on the release commit, download the
-`windows-installer` and `windows-validation` artifacts. Verify the installer
+After all three workflow jobs pass on the release commit, download the
+`windows-installer`, `windows-unit-tests`, and `windows-validation` artifacts. Verify the installer
 against `SHA256SUMS-windows.txt`. Publish the installer, checksums, and validation
 records with the version tag matching `pyproject.toml`, using the release notes
 in `docs/release-<version>.md`. Do not replace existing macOS release assets.

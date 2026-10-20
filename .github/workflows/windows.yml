@@ -40,9 +40,9 @@ jobs:
       - name: Verify macOS desktop lifecycle
         run: uv run --locked --group desktop pytest -q tests/test_desktop.py tests/test_windows_runtime.py
 
-  windows:
+  windows-tests:
     runs-on: windows-2022
-    timeout-minutes: 50
+    timeout-minutes: 20
     defaults:
       run:
         shell: pwsh
@@ -55,20 +55,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install locked test dependencies
+        run: uv sync --locked --group desktop --group build
+      - name: Run Python and JavaScript suites
+        run: |
+          New-Item -ItemType Directory -Force build/windows | Out-Null
+          uv run --locked --group desktop --group build pytest -q --junitxml=build/windows/pytest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tests = Get-ChildItem tests -Filter "*.mjs" | ForEach-Object { $_.FullName }
+          node --test $tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain Python test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unit-tests
+          path: build/windows/pytest.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
       - name: Install locked x64 build and test dependencies
         run: |
           uv python install 3.12 --default
           uv sync --locked --group desktop --group build --group test-smoke
           uv run --locked --group desktop --group build --group test-smoke python -c "import platform, struct; assert struct.calcsize('P') == 8 and platform.machine().lower() in ('amd64', 'x86_64'), 'x64 Python required'"
           uv run --locked --group desktop --group build --group test-smoke python -m playwright install chromium
-      - name: Run Python and JavaScript suites
-        run: |
-          New-Item -ItemType Directory -Force build/windows | Out-Null
-          uv run --locked --group desktop --group build --group test-smoke pytest -q --junitxml=build/windows/pytest.xml
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $tests = Get-ChildItem tests -Filter "*.mjs" | ForEach-Object { $_.FullName }
-          node --test $tests
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Download Microsoft offline WebView2 prerequisite
         run: |
           New-Item -ItemType Directory -Force build/windows/prerequisites | Out-Null
@@ -89,7 +112,7 @@ jobs:
           $version = .venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
           ./scripts/test_windows_installer.ps1 -Installer "dist/windows/Gel-Analyzer-$version-Windows-x64-Setup.exe" -Version $version -PreviousInstaller "build/windows/upgrade-fixture/Gel-Analyzer-1.0.2-Windows-x64-Setup.exe" -OutputDirectory "build/windows/installer-tests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Retain verified installer and checksums
+      - name: Retain installer and checksums
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
@@ -106,7 +129,6 @@ jobs:
           name: windows-validation
           path: |
             build/windows/validation.json
-            build/windows/pytest.xml
             build/windows/installer-tests/
             build/windows/pyinstaller/**/warn-*.txt
           if-no-files-found: warn
