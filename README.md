@@ -21,9 +21,10 @@ features and export formats. Choose the installer for your computer:
 > save dialogs, still need manual testing.
 
 Both downloads are on the [same v1.0.3 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
-Sign in to GitHub with access to this private repository to download them.
-After downloading, installation and use can work offline. You do not need
-Python, terminal commands, or a GitHub account to run the installed app.
+This repository and its downloads are public. Anyone can download and use the
+app without a GitHub account or sign-in. After downloading, installation and
+use can work offline. You do not need Python or terminal commands to run the
+installed app.
 
 [Windows installation](#install-on-windows) · [Mac installation](#install-on-mac) ·
 [How to use the app](#use-the-app) · [Testing status](#testing-status)
