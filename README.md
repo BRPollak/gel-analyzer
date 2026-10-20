@@ -5,6 +5,46 @@ labeled image for your lab notebook. Straighten and crop your image, label
 samples, and optionally mark a ladder with known sizes. Analysis runs on your
 computer.
 
+## Install and open the Windows app
+
+Requires **Windows 10 version 22H2 or Windows 11 on a 64-bit Intel or AMD PC**
+and **.NET Framework 4.8 or later**, included with those Windows versions.
+Windows on ARM and 32-bit Windows are not supported.
+
+1. Open the [Windows download page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
+   Under **Assets**, download `Gel-Analyzer-1.0.3-Windows-x64-Setup.exe`.
+   This repository is private, so downloading requires repository access.
+2. Double-click the installer and follow the setup steps. It installs for your
+   Windows account, without administrator rights, and offers an optional desktop
+   shortcut.
+3. Open the Start menu, search for **Gel Analyzer**, and open it.
+
+Python and the app's supporting software are included. The installer also
+includes Microsoft's full WebView2 Runtime installer and installs it if needed;
+setup and analysis can run without an internet connection. You do not need a
+GitHub account to run the installed app. WebView2 may update itself when the
+computer is online.
+
+### If Windows blocks the app
+
+The Windows installer and app are **unsigned**, so Windows may show an unknown
+publisher or a **Windows protected your PC** message. Check that you downloaded
+the file from the release above and trust its source. If SmartScreen offers
+**More info → Run anyway**, use that to continue. Organization policies may
+prevent this; on a managed computer, ask your administrator for help.
+
+### Update, uninstall, and diagnostics
+
+Export your results and close Gel Analyzer before updating, then run the newer
+installer. To uninstall, open **Settings → Apps**, find **Gel Analyzer**, and
+choose **Uninstall**. Your original images, exported files, and the shared
+Microsoft WebView2 Runtime are retained.
+
+Diagnostic logs are in `%LOCALAPPDATA%\Gel Analyzer\Logs`; paste that path into
+File Explorer's address bar. If startup reports that WebView2 is missing or
+damaged, close the app and rerun the installer. A missing .NET Framework requires
+Windows repair or administrator assistance.
+
 ## Install and open the Mac app
 
 Requires an **Apple Silicon Mac (M1 or later) with macOS 14 or later**. Check
@@ -39,7 +79,7 @@ help. See [Apple's security guidance](https://support.apple.com/en-us/102445) an
 
 ## Use the app
 
-These steps work in both versions. Check automatic suggestions against your
+These steps work in the Windows app, Mac app, and browser version. Check automatic suggestions against your
 image and correct them before relying on the results.
 
 1. **Open an image.** Under **Open a gel image**, click **Upload** and choose one
@@ -168,3 +208,8 @@ To stop, export your results, return to Terminal or PowerShell, and press
 **Ctrl+C** (Control, not Command, on Mac). Closing the browser tab alone does
 not stop the app. If startup says port 8502 is already in use, change `8502`
 to `8503` in the launch command and open `http://127.0.0.1:8503` instead.
+
+## Build the Windows installer
+
+See [Windows packaging and verification](docs/windows-packaging.md) for the
+locked build command, offline prerequisite, and automated test instructions.

@@ -1,6 +1,6 @@
 """Own the native window and its private, local Streamlit backend.
 
-Keep imports of Streamlit and Cocoa inside their respective entry points: the
+Keep imports of Streamlit and native UI inside their respective entry points: the
 same bundled executable is also launched as the backend subprocess.
 """
 
@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import tomllib
+import traceback
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 from uuid import uuid4
@@ -42,18 +43,40 @@ class BackendError(RuntimeError):
 
 
 def resource_root() -> Path:
-    """Resolve bundled assets independently of Finder's working directory."""
+    """Resolve bundled assets independently of the launcher's working directory."""
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 
 
 def log_directory() -> Path:
     override = os.environ.get("GEL_ANALYZER_LOG_DIR")
-    return Path(override).expanduser() if override else Path.home() / "Library" / "Logs" / APP_NAME
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        root = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        return root / APP_NAME / "Logs"
+    return Path.home() / "Library" / "Logs" / APP_NAME
+
+
+def ensure_standard_streams(log_path: Path | None = None) -> None:
+    """Windowed Windows executables have no Python console streams."""
+    if sys.stdin is None:
+        sys.stdin = open(os.devnull, "r", encoding="utf-8")
+    if sys.stdout is None or sys.stderr is None:
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+        output = open(log_path or os.devnull, "a", encoding="utf-8",
+                      errors="backslashreplace", buffering=1)
+        if sys.stdout is None:
+            sys.stdout = output
+        if sys.stderr is None:
+            sys.stderr = output
 
 
 def configure_logging(directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(directory / "desktop.log", maxBytes=2_000_000, backupCount=2)
+    handler = RotatingFileHandler(directory / "desktop.log", maxBytes=2_000_000,
+                                  backupCount=2, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     LOGGER.setLevel(logging.INFO)
     LOGGER.addHandler(handler)
@@ -70,8 +93,42 @@ def backend_command(port: int, base_path: str, parent_pipe: int) -> list[str]:
     command = [sys.executable]
     if not getattr(sys, "frozen", False):
         command.append(str(resource_root() / "desktop_app.py"))
+    parent_option = "--parent-handle" if sys.platform == "win32" else "--parent-pipe"
     return command + ["--gel-backend", "--port", str(port), "--base-path", base_path,
-                      "--parent-pipe", str(parent_pipe)]
+                      parent_option, str(parent_pipe)]
+
+
+def parent_pipe_from_handle(handle: int) -> int:
+    """Take ownership of an inherited Windows handle as a local descriptor."""
+    import msvcrt
+
+    os.set_handle_inheritable(handle, False)
+    return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+
+
+def spawn_backend(port: int, base_path: str, read_pipe: int, log, directory: Path):
+    """Inherit only the liveness pipe and redirected standard handles."""
+    environment = os.environ.copy()
+    environment["GEL_ANALYZER_LOG_DIR"] = str(directory.resolve())
+    options = dict(cwd=resource_root(), stdin=subprocess.DEVNULL, stdout=log,
+                   stderr=subprocess.STDOUT, env=environment)
+    if sys.platform != "win32":
+        return subprocess.Popen(backend_command(port, base_path, read_pipe),
+                                pass_fds=(read_pipe,), **options)
+
+    import msvcrt
+
+    handle = msvcrt.get_osfhandle(read_pipe)
+    startup = subprocess.STARTUPINFO()
+    startup.lpAttributeList = {"handle_list": [handle]}
+    # The write end stays non-inheritable, so GUI crashes always produce EOF.
+    os.set_handle_inheritable(handle, True)
+    try:
+        return subprocess.Popen(backend_command(port, base_path, handle),
+                                startupinfo=startup, close_fds=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW, **options)
+    finally:
+        os.set_handle_inheritable(handle, False)
 
 
 def backend_options(root: Path, port: int, base_path: str) -> dict[str, object]:
@@ -144,24 +201,24 @@ class Backend:
             base_path = f"gel-{uuid4().hex}"
             self.url = f"http://127.0.0.1:{port}/{base_path}/"
             self.directory.mkdir(parents=True, exist_ok=True)
-            self._log = (self.directory / "backend.log").open("wb")
-            read_pipe, write_pipe = os.pipe()
+            # The windowed child may reopen this file for its Python streams.
+            # Both handles append so their independent offsets cannot overwrite.
+            self._log = (self.directory / "backend.log").open("ab")
+            read_pipe = write_pipe = None
             try:
-                self.process = subprocess.Popen(
-                    backend_command(port, base_path, read_pipe),
-                    cwd=resource_root(), stdin=subprocess.DEVNULL,
-                    stdout=self._log, stderr=subprocess.STDOUT,
-                    pass_fds=(read_pipe,),
-                )
+                read_pipe, write_pipe = os.pipe()
+                self.process = spawn_backend(port, base_path, read_pipe, self._log, self.directory)
                 self._parent_pipe = write_pipe
                 LOGGER.info("Started local analysis process %s on port %s", self.process.pid, port)
             except BaseException:
-                os.close(write_pipe)
+                if write_pipe is not None:
+                    os.close(write_pipe)
                 self._log.close()
                 self._log = None
                 raise
             finally:
-                os.close(read_pipe)
+                if read_pipe is not None:
+                    os.close(read_pipe)
 
     def _healthy(self) -> bool:
         try:
@@ -229,16 +286,25 @@ def status_page(title: str, message: str, *, log_path: Path | None = None) -> st
 
 
 def run_desktop() -> int:
-    import webview
-
     directory = log_directory()
     configure_logging(directory)
+    if sys.platform == "win32":
+        from .windows_runtime import prerequisite_error, show_error
+
+        error = prerequisite_error()
+        if error:
+            LOGGER.error(error)
+            show_error(error)
+            return 1
+
+    import webview
+
     backend = Backend(directory)
     atexit.register(backend.stop)
     webview.settings["ALLOW_DOWNLOADS"] = True
     webview.settings["SHOW_DEFAULT_MENUS"] = True
-    # Streamlit creates download links in a new window. Keep them in WKWebView,
-    # whose download delegate supplies the suggested name and native save panel.
+    # Keep Streamlit's new-window download links in the native webview so its
+    # download delegate supplies the suggested name and native save dialog.
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
     window = webview.create_window(
         APP_NAME,
@@ -266,8 +332,9 @@ def run_desktop() -> int:
                 window.load_html(status_page("Unable to open the workspace", str(error), log_path=directory))
 
     try:
-        # Cocoa must run on the main thread; pywebview runs this callback in a worker.
-        webview.start(launch_workspace, gui="cocoa", debug=False, private_mode=True)
+        # Native UI runs on the main thread; this callback runs in a worker.
+        gui = "edgechromium" if sys.platform == "win32" else "cocoa"
+        webview.start(launch_workspace, gui=gui, debug=False, private_mode=True)
     finally:
         backend.stop()
         atexit.unregister(backend.stop)
@@ -276,12 +343,28 @@ def run_desktop() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if "--gel-backend" in args:
-        parser = argparse.ArgumentParser(description="Gel Analyzer local analysis process")
-        parser.add_argument("--gel-backend", action="store_true")
-        parser.add_argument("--port", type=int, required=True)
-        parser.add_argument("--base-path", required=True)
-        parser.add_argument("--parent-pipe", type=int, required=True)
-        options = parser.parse_args(args)
-        return run_backend(options.port, options.base_path, options.parent_pipe)
-    return run_desktop()
+    backend_mode = "--gel-backend" in args
+    try:
+        ensure_standard_streams(log_directory() / "backend.log" if backend_mode else None)
+        if backend_mode:
+            parser = argparse.ArgumentParser(description="Gel Analyzer local analysis process")
+            parser.add_argument("--gel-backend", action="store_true")
+            parser.add_argument("--port", type=int, required=True)
+            parser.add_argument("--base-path", required=True)
+            parent = parser.add_mutually_exclusive_group(required=True)
+            parent.add_argument("--parent-pipe", type=int)
+            parent.add_argument("--parent-handle", type=int)
+            options = parser.parse_args(args)
+            pipe = (parent_pipe_from_handle(options.parent_handle)
+                    if options.parent_handle is not None else options.parent_pipe)
+            return run_backend(options.port, options.base_path, pipe)
+        return run_desktop()
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        if not backend_mode and sys.platform == "win32":
+            from .windows_runtime import show_error
+
+            LOGGER.exception("Unable to start Gel Analyzer")
+            show_error(f"Gel Analyzer could not start. Try running the installer again.\n\n"
+                       f"Diagnostic logs: {log_directory()}")
+        return 1

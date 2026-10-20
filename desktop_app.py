@@ -1,4 +1,4 @@
-"""Finder and PyInstaller entry point for Gel Analyzer."""
+"""Native launcher and PyInstaller entry point for Gel Analyzer."""
 
 from gel_analyzer.desktop import main
 

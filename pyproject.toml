@@ -1,7 +1,7 @@
 [project]
 name = "agarose-gel-analyzer"
-version = "1.0.2"
-description = "Local gel image analysis and annotation for macOS and the browser."
+version = "1.0.3"
+description = "Local gel image analysis and annotation for Windows, macOS, and the browser."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -12,8 +12,9 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]
-desktop = ["pywebview>=6,<7; sys_platform == 'darwin'"]
-build = ["pyinstaller>=6.16,<7; sys_platform == 'darwin'"]
+desktop = ["pywebview>=6,<7; sys_platform == 'darwin' or sys_platform == 'win32'"]
+build = ["pyinstaller>=6.16,<7; sys_platform == 'darwin' or sys_platform == 'win32'"]
+test-smoke = ["playwright>=1.56,<2", "psutil>=7,<8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
