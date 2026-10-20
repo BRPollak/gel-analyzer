@@ -1,7 +1,9 @@
 """Reject incomplete, wrongly targeted or unauthenticated Windows packages."""
 
 import hashlib
+import json
 from pathlib import Path
+import shutil
 import struct
 
 import pytest
@@ -71,17 +73,51 @@ def test_alternate_sdk_loaders_are_allowed_only_at_exact_vendor_paths(relative_p
             build_windows.verify_binary_architecture(relative_path, architecture)
 
 
-def test_bundle_cannot_omit_webview_runtime_loader(tmp_path):
+@pytest.mark.parametrize("missing", [
+    "webview/lib/runtimes/win-x64/native/WebView2Loader.dll",
+    "licenses/streamlit/LICENSE.txt",
+    "licenses/proxy_tools/LICENSE.txt",
+])
+def test_bundle_cannot_omit_required_runtime_or_license(tmp_path, missing):
     app = tmp_path / "app"
     write_pe(app / "Gel Analyzer.exe", 0x8664)
-    missing = "webview/lib/runtimes/win-x64/native/WebView2Loader.dll"
     for resource in build_windows.REQUIRED_RESOURCES:
         if resource != missing:
             path = app / "_internal" / resource
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
-    with pytest.raises(RuntimeError, match="win-x64/native/WebView2Loader.dll"):
+    with pytest.raises(RuntimeError, match=missing):
         build_windows.verify_bundle("1.0.3", app)
+
+
+def supplemental_license_fixture(tmp_path, monkeypatch):
+    resources = tmp_path / "_internal"
+    source = build_windows.ROOT / "packaging/licenses"
+    shutil.copytree(source, resources / "licenses")
+    manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+    versions = {license["distribution"]: license["version"] for license in manifest}
+    monkeypatch.setattr(build_windows, "package_version", versions.__getitem__)
+    return resources, manifest
+
+
+def test_supplemental_licenses_match_recorded_upstream_bytes(tmp_path, monkeypatch):
+    resources, manifest = supplemental_license_fixture(tmp_path, monkeypatch)
+    assert build_windows.verify_supplemental_licenses(resources) == manifest
+
+
+def test_supplemental_license_rejects_truncated_text(tmp_path, monkeypatch):
+    resources, _ = supplemental_license_fixture(tmp_path, monkeypatch)
+    path = resources / "licenses/streamlit/LICENSE.txt"
+    path.write_text("Apache License 2.0", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Missing or changed bundled license: streamlit/LICENSE.txt"):
+        build_windows.verify_supplemental_licenses(resources)
+
+
+def test_supplemental_license_requires_refresh_for_new_dependency_version(tmp_path, monkeypatch):
+    resources, _ = supplemental_license_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(build_windows, "package_version", lambda name: "9.9.9")
+    with pytest.raises(RuntimeError, match="Refresh the supplemental license for streamlit"):
+        build_windows.verify_supplemental_licenses(resources)
 
 
 def test_bundle_rejects_native_arm64_dependency(tmp_path):

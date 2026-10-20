@@ -28,6 +28,10 @@ datas = [
     (str(ROOT / ".streamlit" / "config.toml"), ".streamlit"),
     (str(ROOT / "packaging" / "GelAnalyzer.ico"), "."),
     (str(python_license), "licenses/python"),
+    (str(ROOT / "packaging" / "licenses" / "streamlit" / "LICENSE.txt"), "licenses/streamlit"),
+    (str(ROOT / "packaging" / "licenses" / "proxy_tools" / "LICENSE.txt"), "licenses/proxy_tools"),
+    (str(ROOT / "packaging" / "licenses" / "README.md"), "licenses"),
+    (str(ROOT / "packaging" / "licenses" / "manifest.json"), "licenses"),
 ]
 datas += collect_data_files("gel_analyzer")
 datas += collect_data_files("streamlit")

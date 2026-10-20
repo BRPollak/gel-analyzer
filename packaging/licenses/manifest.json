@@ -1,0 +1,16 @@
+[
+  {
+    "distribution": "streamlit",
+    "version": "1.65.0",
+    "path": "streamlit/LICENSE.txt",
+    "source_url": "https://raw.githubusercontent.com/streamlit/streamlit/ff22743ac9b00f19f7416d6b2cf4be19b0fa37ea/LICENSE",
+    "sha256": "c95bae1d1ce0235ecccd3560b772ec1efb97f348a79f0fbe0a634f0c2ccefe2c"
+  },
+  {
+    "distribution": "proxy-tools",
+    "version": "0.1.0",
+    "path": "proxy_tools/LICENSE.txt",
+    "source_url": "https://raw.githubusercontent.com/jtushman/proxy_tools/db43f1e35d4f90a65c5a4d56d9e9af88212ec6e6/LICENSE.txt",
+    "sha256": "a428fb8a2e762af3eb0a6edbbb88e9b42ccfee80fd9b423958bcacf9b9abbfe4"
+  }
+]

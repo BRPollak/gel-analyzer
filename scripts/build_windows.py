@@ -51,6 +51,10 @@ REQUIRED_RESOURCES = (
     "pythonnet/runtime/Python.Runtime.dll",
     "clr_loader/ffi/dlls/amd64/ClrLoader.dll",
     "licenses/python/LICENSE.txt",
+    "licenses/streamlit/LICENSE.txt",
+    "licenses/proxy_tools/LICENSE.txt",
+    "licenses/README.md",
+    "licenses/manifest.json",
 )
 
 
@@ -202,6 +206,22 @@ def verify_binary_architecture(relative_path: str, architecture: str) -> None:
         )
 
 
+def verify_supplemental_licenses(resources: Path) -> list[dict]:
+    """Keep supplemental notices tied to the exact locked dependency versions."""
+    manifest = json.loads((ROOT / "packaging/licenses/manifest.json").read_text(encoding="utf-8"))
+    for license in manifest:
+        installed_version = package_version(license["distribution"])
+        if installed_version != license["version"]:
+            raise RuntimeError(
+                f"Refresh the supplemental license for {license['distribution']}: "
+                f"recorded {license['version']}, installed {installed_version}"
+            )
+        path = resources / "licenses" / license["path"]
+        if not path.is_file() or sha256(path) != license["sha256"]:
+            raise RuntimeError(f"Missing or changed bundled license: {license['path']}")
+    return manifest
+
+
 def verify_bundle(version: str, app: Path = APP) -> dict:
     executable = app / "Gel Analyzer.exe"
     if not executable.is_file():
@@ -223,6 +243,7 @@ def verify_bundle(version: str, app: Path = APP) -> dict:
         relative_path = path.relative_to(app).as_posix()
         verify_binary_architecture(relative_path, info["architecture"])
         binaries.append({"path": relative_path, **info})
+    supplemental_licenses = verify_supplemental_licenses(resources)
     env = os.environ.copy()
     env["GEL_BUILD_APP_EXE"] = str(executable.resolve())
     executable_version = powershell_json(r"""
@@ -244,6 +265,7 @@ $info = (Get-Item -LiteralPath $env:GEL_BUILD_APP_EXE).VersionInfo
         "signature": "unsigned",
         "application_id": APP_ID, "executable_version": executable_version,
         "binaries": binaries,
+        "supplemental_licenses": supplemental_licenses,
         "runtime_testing": "Not performed by this structural build check; run the Windows smoke tests.",
     }
 
