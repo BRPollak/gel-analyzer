@@ -120,3 +120,27 @@ def test_valid_prerequisite_records_content_hash_and_version(tmp_path, monkeypat
     assert report["sha256"] == hashlib.sha256(candidate.read_bytes()).hexdigest()
     assert report["product_version"] == "1.2.3.4"
     assert report["signature_status"] == "Valid"
+
+
+@pytest.mark.parametrize("modern_available", [True, False])
+@pytest.mark.parametrize("module_path_key", ["PSModulePath", "PSMODULEPATH"])
+def test_signature_shell_does_not_inherit_incompatible_module_paths(monkeypatch, modern_available, module_path_key):
+    available = {
+        "powershell.exe": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+    }
+    if modern_available:
+        available["pwsh.exe"] = r"C:\Program Files\PowerShell\7\pwsh.exe"
+    monkeypatch.setattr(build_windows.shutil, "which", available.get)
+    calls = []
+    monkeypatch.setattr(
+        build_windows, "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or '{"signature_status":"Valid"}',
+    )
+    parent_env = {module_path_key: r"C:\Program Files\PowerShell\7\Modules", "GEL_BUILD_APP_EXE": "app.exe"}
+    assert build_windows.powershell_json("Get-AuthenticodeSignature app.exe", env=parent_env) == {
+        "signature_status": "Valid",
+    }
+    command, options = calls[0]
+    assert command[0] == available["pwsh.exe" if modern_available else "powershell.exe"]
+    assert options["env"] == {"GEL_BUILD_APP_EXE": "app.exe"}
+    assert module_path_key in parent_env  # The parent shell's environment is unchanged.

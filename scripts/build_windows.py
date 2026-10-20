@@ -74,9 +74,19 @@ def sha256(path: Path) -> str:
 def powershell_json(script: str, *, env: dict | None = None) -> dict:
     # EncodedCommand avoids shell interpolation of installer paths.
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
+    if shell is None:
+        raise RuntimeError("PowerShell is required to inspect Windows Authenticode signatures.")
+    child_env = dict(os.environ if env is None else env)
+    # A PowerShell 7 parent can pass its module directories to Windows
+    # PowerShell 5.1, which then finds incompatible Security/Utility modules.
+    # These checks use only built-ins; let the chosen shell build its own paths.
+    for key in list(child_env):
+        if key.lower() == "psmodulepath":
+            del child_env[key]
     output = run(
-        "powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
-        "-EncodedCommand", encoded, capture=True, env=env,
+        shell, "-NoLogo", "-NoProfile", "-NonInteractive",
+        "-EncodedCommand", encoded, capture=True, env=child_env,
     )
     return json.loads(output.lstrip("\ufeff").strip())
 
