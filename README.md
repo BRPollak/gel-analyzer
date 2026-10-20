@@ -1,62 +1,80 @@
-# Agarose Gel Analyzer
+# Gel Analyzer
 
-Turn a photo of a gel—a material used to separate DNA pieces by size—into a
-labeled image for your lab notebook. Straighten and crop your image, label
-samples, and optionally mark a ladder with known sizes. Analysis runs on your
-computer.
+Turn a gel photo into a labeled image for your lab notebook. Straighten and crop
+it, label samples, and optionally mark a ladder with known sizes. Analysis runs
+on your computer. Export your finished image as PNG, JPEG, TIFF, or SVG.
 
-## Install and open the Windows app
+## Download Gel Analyzer 1.0.3
 
-Requires **Windows 10 version 22H2 or Windows 11 on a 64-bit Intel or AMD PC**
-and **.NET Framework 4.8 or later**, included with those Windows versions.
-Windows on ARM and 32-bit Windows are not supported.
+**Windows and Mac are the same app version: 1.0.3**, with the same analysis
+features and export formats. Choose the installer for your computer:
 
-1. Open the [Windows download page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
-   Under **Assets**, download `Gel-Analyzer-1.0.3-Windows-x64-Setup.exe`.
-   This repository is private, so downloading requires repository access.
-2. Double-click the installer and follow the setup steps. It installs for your
-   Windows account, without administrator rights, and offers an optional desktop
-   shortcut.
-3. Open the Start menu, search for **Gel Analyzer**, and open it.
+| Computer | Download | Requirements |
+| --- | --- | --- |
+| Windows PC | [Download Windows installer (.exe)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-Windows-x64-Setup.exe) | Windows 10 version 22H2 or Windows 11; 64-bit Intel/AMD; .NET Framework 4.8 or later |
+| Mac | [Download Mac installer (.dmg)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-macOS-arm64.dmg) | Apple Silicon (M1 or later); macOS 14 or later |
 
-Python and the app's supporting software are included. The installer also
-includes Microsoft's full WebView2 Runtime installer and installs it if needed;
-setup and analysis can run without an internet connection. You do not need a
-GitHub account to run the installed app. WebView2 may update itself when the
-computer is online.
+> [!WARNING]
+> **The Windows installer has not yet been manually tested on a Windows 10/11 PC.**
+> Automated build, installation, and app checks passed on GitHub's Windows Server
+> runner. Installation and everyday use on a separate Windows PC, including native
+> save dialogs, still need manual testing.
 
-### If Windows blocks the app
+Both downloads are on the [same v1.0.3 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
+Sign in to GitHub with access to this private repository to download them.
+After downloading, installation and use can work offline. You do not need
+Python, terminal commands, or a GitHub account to run the installed app.
 
-The Windows installer and app are **unsigned**, so Windows may show an unknown
-publisher or a **Windows protected your PC** message. Check that you downloaded
-the file from the release above and trust its source. If SmartScreen offers
-**More info → Run anyway**, use that to continue. Organization policies may
-prevent this; on a managed computer, ask your administrator for help.
+[Windows installation](#install-on-windows) · [Mac installation](#install-on-mac) ·
+[How to use the app](#use-the-app) · [Testing status](#testing-status)
 
-### Update, uninstall, and diagnostics
+## Install on Windows
 
-Export your results and close Gel Analyzer before updating, then run the newer
-installer. To uninstall, open **Settings → Apps**, find **Gel Analyzer**, and
-choose **Uninstall**. Your original images, exported files, and the shared
-Microsoft WebView2 Runtime are retained.
+**Manual Windows PC testing is still pending; see the notice above.**
+Windows on ARM and 32-bit Windows are not supported. The required .NET Framework
+4.8 or later is included with the supported Windows versions.
 
-Diagnostic logs are in `%LOCALAPPDATA%\Gel Analyzer\Logs`; paste that path into
-File Explorer's address bar. If startup reports that WebView2 is missing or
-damaged, close the app and rerun the installer. A missing .NET Framework requires
-Windows repair or administrator assistance.
+1. **Download** [Gel-Analyzer-1.0.3-Windows-x64-Setup.exe](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-Windows-x64-Setup.exe).
+   If you use the release page instead, find this exact file under **Assets**.
+   You only need the `.exe`; the source-code ZIP and validation files are for developers.
+2. **Install.** Double-click the downloaded file and follow the setup prompts.
+   It installs for your Windows account without administrator rights. You can
+   choose to add a desktop shortcut. Allow setup to finish if it needs to install
+   Microsoft's WebView2 Runtime; the complete runtime installer is included.
+3. **Open.** In the Start menu, search for **Gel Analyzer** and open it.
+   Wait for the image upload screen, then follow [Use the app](#use-the-app).
 
-## Install and open the Mac app
+### If Windows displays a security warning
+
+The installer and app are **unsigned**. Windows may show an unknown-publisher
+warning or **Windows protected your PC**. Check that the download came from
+this repository's release page and that you trust its source. If available,
+choose **More info → Run anyway** to continue. On a managed work or school
+computer, policy may block installation; ask your administrator for help.
+
+### Update, uninstall, or find logs
+
+- **Update:** export your work, close Gel Analyzer, then run the newer installer.
+  It updates the existing installation.
+- **Uninstall:** open **Settings → Apps**, find **Gel Analyzer**, and choose
+  **Uninstall**. Your original images and exports are retained. The shared
+  Microsoft WebView2 Runtime is also retained because other apps may use it.
+- **Find logs:** paste `%LOCALAPPDATA%\Gel Analyzer\Logs` into File Explorer's
+  address bar. These logs can help diagnose startup problems.
+- **WebView2 error:** close the app and rerun the installer. If the error remains,
+  share the logs when asking for help. WebView2 can update itself when online.
+  A missing or damaged .NET Framework may require Windows repair or administrator help.
+
+## Install on Mac
 
 Requires an **Apple Silicon Mac (M1 or later) with macOS 14 or later**. Check
-**Apple menu → About This Mac**. Python and everything else the app needs are
-included.
+**Apple menu → About This Mac**. Intel Macs are not supported by this installer.
 
-1. Open the [Mac download page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.2).
-   Under **Assets**, download `Gel-Analyzer-1.0.2-macOS-arm64.dmg`.
-2. Double-click the downloaded DMG, then drag **Gel Analyzer.app** onto
-   **Applications** in the window that opens.
-3. Eject the disk image in Finder. Open **Applications** and double-click
-   **Gel Analyzer**.
+1. **Download** [Gel-Analyzer-1.0.3-macOS-arm64.dmg](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-macOS-arm64.dmg).
+2. **Install.** Double-click the downloaded DMG, then drag **Gel Analyzer.app**
+   onto **Applications** in the window that opens.
+3. **Open.** Eject the disk image in Finder. Open **Applications** and
+   double-click **Gel Analyzer**.
 
 ### If macOS blocks the app
 
@@ -68,77 +86,92 @@ trust the download source and are sure the app has not been altered.
 2. Open **Apple menu → System Settings → Privacy & Security** and scroll to
    **Security**. If **Allow apps downloaded from** is set to **App Store** only,
    select **App Store and identified developers**.
-3. Find the message about **Gel Analyzer** and click **Open Anyway** (some macOS
-   versions show **Open** first). Confirm opening it and enter your Mac login
-   password if asked. This saves an exception for this app.
+3. Find the message about **Gel Analyzer**, click **Open Anyway**, and confirm.
+   Enter your Mac login password if asked. This saves an exception for this app.
 
 If the option is missing, try opening the app again and return to these settings
-within an hour. On a managed work or school Mac, you may need your administrator's
-help. See [Apple's security guidance](https://support.apple.com/en-us/102445) and
-[app-specific opening steps](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
+within an hour. On a managed computer, your administrator may need to help.
+See [Apple's security guidance](https://support.apple.com/en-us/102445).
+
+### Update, uninstall, or find logs
+
+- **Update:** export your work and quit Gel Analyzer, then install the newer DMG
+  and replace the existing app in Applications when Finder asks.
+- **Uninstall:** quit Gel Analyzer and move it from Applications to the Trash.
+  Keep your original images and exported files separately.
+- **Find logs:** in Finder, choose **Go → Go to Folder** and paste
+  `~/Library/Logs/Gel Analyzer/`.
+
+The previous Mac 1.0.2 download remains available in the
+[older release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.2).
 
 ## Use the app
 
-These steps work in the Windows app, Mac app, and browser version. Check automatic suggestions against your
-image and correct them before relying on the results.
+The steps are the same on Windows and Mac. Check automatic suggestions against
+your image and correct them before relying on the results.
 
 1. **Open an image.** Under **Open a gel image**, click **Upload** and choose one
-   TIFF, PNG, or JPEG file. The app crops the surrounding background when it can.
-2. **Orient it.** **Wells** are the small pockets where samples were loaded.
-   Set **Workflow orientation** to **Wells at left** or **Wells at top** for the
-   arrangement you want. Click **Rotate and Orient**, inspect the preview, then
-   **Confirm**. To fix an outline, use **Adjust outline manually**; this editor
-   also opens if detection fails. Drag to draw a rectangle if none appears,
-   drag inside to move it, use corners to resize and the round handle to rotate.
-   Click **Preview manual orientation**, then **Confirm**.
+   TIFF, PNG, or JPEG file. The app crops surrounding background when it can.
+2. **Orient it.** Wells are the small pockets where samples were loaded. Set
+   **Workflow orientation** to **Wells at left** or **Wells at top**, then click
+   **Rotate and Orient**. Inspect the preview. If it looks right, click **Confirm**;
+   otherwise, use **Adjust outline manually**: draw or move the rectangle,
+   resize with its corners, and rotate with the round handle. Click
+   **Preview manual orientation**, then **Confirm**.
 3. **Find the samples.** Click **Define wells**. Click two points spanning the
    outside edges of the first and last wells, with the guide passing through
-   their centers: vertically for wells at left, horizontally for wells at top.
-   Enter the required **Number of wells**, including unloaded wells. Detection
-   fits exactly this many wells within the guide. Click **Confirm**.
-   For faint regular combs, detection compares well spacing and sizes, checks
-   contrast around both well walls, and uses bands farther along the gel to
-   help recover merged or partial outlines. Visible unloaded wells are kept.
-4. **Check and crop.** Each **lane** is one sample's path through the gel.
-   Click **Confirm** if the proposed lanes look right, or **Adjust** to drag
-   their borders, remove one with its trash button, or **Add lane**, then
-   **Confirm**. Drag the shared right edge (wells at left) or bottom edge
-   (wells at top) to include the bands you want. Click **Confirm lanes and crop**.
-   During manual adjustment, lanes cycle through cyan, gold, and lavender with
-   matching, staggered handles. Hover or click a lane to identify it by its
-   outline and label; numbered trash buttons identify the lane they remove.
-   Remaining lanes keep their colors when you resize or delete a well.
-5. **Label samples.** Click a lane label on the image and type a name.
-   Command-click (Ctrl-click on Windows) to add or remove labels from your
-   selection, then use bold, italic, or text color to format them together.
-   A regular click selects just one label. **Create lane groups**, below the
-   label controls, lets you label related samples together. Click **Confirm annotations**.
-6. **Add a size reference, if available.** A **ladder** is a reference sample
-   with bands of known sizes. Choose **Annotate ladder**. For a preset, select
-   the **Ladder preset** matching your experiment and click **Continue**. Select
-   **Ladder lane**, click **Use this lane**, then choose each size and click its
-   matching band. Or choose **Manual ladder**, click individual bands, and enter
-   your own labels, such as **500 bp** or **25 kDa**, before adding them.
-   Manual markers use the same off-gel dash and label as preset markers.
-   Select a manual label to edit or delete it; choose **Move marker** and click
-   a new band to reposition it. Markers stay aligned with their bands when you
-   zoom or resize the window. Finish with
-   **Confirm ladder annotations**. To omit ladder labels, choose **Skip** at the
-   initial offer or **Skip ladder** in the editor. DNA sizes use **bp** (base
-   pairs, a measure of DNA length).
-7. **Save your labeled image.** Choose **Image file type**: PNG, JPEG, TIFF, or
-   SVG. PNG is a simple choice for your lab notebook. Leave **Print setting (DPI)** at its
-   default unless you need a particular print setting, then click
-   **Download annotated PNG** (the button name follows your chosen format).
-   Use **Edit annotations** if labels need correcting.
+   their centers. Enter the required **Number of wells**, including unloaded
+   wells, then click **Confirm**.
+4. **Check the lanes and crop.** Each lane is one sample's path through the gel.
+   Accept the proposed lanes with **Confirm**, or use **Adjust** to move their
+   borders, delete a lane, or **Add lane**, then click **Confirm**.
+   Drag the shared right edge (wells at left) or bottom edge (wells at top)
+   to include the bands you want. Click
+   **Confirm lanes and crop**.
+5. **Label samples.** Click a lane label and type a name. Ctrl-click on Windows
+   or Command-click on Mac to select multiple labels and format them together.
+   Use **Create lane groups** for related samples, then **Confirm annotations**.
+6. **Add a ladder, if needed.** A ladder is a reference sample with known band
+   sizes. Choose **Annotate ladder**, select a **Ladder preset**, and **Continue**.
+   Select the **Ladder lane**, click **Use this lane**, and match each size to its
+   band. Or choose **Manual ladder** to enter labels such as **500 bp** or
+   **25 kDa** yourself. Select a manual label to edit or delete it; use
+   **Move marker** to reposition it. Finish with **Confirm ladder annotations**,
+   or choose **Skip** / **Skip ladder** if you do not need a reference.
+7. **Save the image.** Choose **Image file type**: PNG, JPEG, TIFF, or SVG.
+   PNG is a simple choice for a lab notebook. Leave **Print setting (DPI)** at
+   its default unless you need a particular print setting. Click
+   **Download annotated PNG** (the name follows your chosen format), then choose
+   where to save it. Use **Edit annotations** if labels need correcting.
 
-**Export before closing the app or replacing the image.** Editable work lasts
-only for the current session; an exported image cannot reopen that work.
-Keep your original gel image. Open **Replace image** to choose a replacement.
-Choosing a new file discards the current analysis, including lanes, crop, and
-labels, and starts over with the new image.
+> [!IMPORTANT]
+> **Export before closing the app or replacing the image.** Editable work lasts
+> only for the current session; an exported image cannot reopen that work.
+> Keep your original gel image. **Replace image** starts over and discards the
+> current lanes, crop, and labels.
 
-## Run locally in a browser
+## Testing status
+
+**Windows manual testing is pending.** Automated tests passed for installation,
+reinstallation, a simulated upgrade, shortcuts, uninstall, native-window startup,
+backend cleanup, synthetic image uploads, interactive controls, and exports.
+These checks ran on GitHub's Windows Server runner. A clean Windows 10/11 PC,
+installation without an existing WebView2 runtime while offline, the downloaded
+file's SmartScreen experience, and native save dialogs have not been manually
+verified. The installer should be treated as awaiting real-PC validation.
+
+The [v1.0.3 release notes](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3)
+list the completed checks and remaining limits for each platform. The Windows
+validation archive and checksum files are available there for anyone who wants
+to inspect the build evidence.
+
+## Optional: run locally in a browser
+
+The installers above are the easiest way to use Gel Analyzer. If you prefer to
+run from source, expand the instructions below.
+
+<details>
+<summary>Browser setup with terminal commands (macOS or Windows)</summary>
 
 Use this alternative on macOS or Windows with an internet connection for setup
 and a web browser. Install **uv** below; it downloads Python 3.12 and the app's
@@ -209,7 +242,16 @@ To stop, export your results, return to Terminal or PowerShell, and press
 not stop the app. If startup says port 8502 is already in use, change `8502`
 to `8503` in the launch command and open `http://127.0.0.1:8503` instead.
 
-## Build the Windows installer
+</details>
 
-See [Windows packaging and verification](docs/windows-packaging.md) for the
-locked build command, offline prerequisite, and automated test instructions.
+## Build the app
+
+See [Windows packaging and verification](docs/windows-packaging.md) for Windows
+build instructions. On an Apple Silicon Mac, use the locked Python 3.12 environment:
+
+```sh
+uv run --locked --group desktop --group build python scripts/build_macos.py
+```
+
+Build outputs are placed in `dist/`. These commands are for developers;
+normal installation uses the downloads above.

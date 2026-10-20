@@ -1,5 +1,11 @@
 # Windows packaging and verification
 
+Gel Analyzer 1.0.3 is available for both Windows and macOS in the
+[same release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
+**The Windows installer has not yet been manually tested on a Windows 10/11 PC.**
+The automated checks below do not replace that outstanding validation.
+For ordinary installation, see the [README](../README.md#install-on-windows).
+
 The Windows installer is built natively on x64 Windows with Python 3.12,
 PyInstaller, and Inno Setup 6. It wraps a one-folder, windowed executable in a
 per-user installer. The Python environment is pinned by `uv.lock`.

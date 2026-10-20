@@ -1,3 +1,6 @@
+> [!NOTE]
+> **This is the previous Mac release.** [Gel Analyzer 1.0.3 for both Windows and macOS](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3) is now available. Both current downloads are the same app version and feature set. The Windows installer still awaits manual testing on a Windows 10/11 PC.
+
 # Gel Analyzer 1.0.2
 
 Version 1.0.2 improves well detection, manual lane editing, and gel annotations.
