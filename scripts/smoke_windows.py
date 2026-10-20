@@ -233,18 +233,30 @@ def browser_smoke(url: str, output: Path) -> dict:
             button(page, "confirm_orientation").click()
             button(page, "define_wells").click()
             count = page.get_by_role("spinbutton", name="Number of wells", exact=True)
-            count.fill("4")
-            count.press("Enter")
             overlay = component_frame(page, "well_line_overlay")
             svg = overlay.locator("#gel")
             expect(svg).to_be_visible()
+            expect(svg).to_have_attribute("data-editable", "true")
+            original_token = svg.get_attribute("data-token")
+            assert original_token, "Well component did not receive its initial state"
+            if count.input_value() != "4":
+                count.fill("4")
+                count.press("Enter")
+                # Changing the well count creates a new component session. Wait
+                # for that server rerender before clicks, or the count callback
+                # can discard points drawn on the previous token.
+                expect(svg).not_to_have_attribute("data-token", original_token)
+            expect(svg).to_have_attribute("data-editable", "true")
+            expect(svg).to_have_attribute("data-point-count", "0")
             # Use the real SVG's viewBox: browser fitting need not be 1:1.
             bounds = svg.bounding_box()
             dimensions = svg.evaluate("(node) => [node.viewBox.baseVal.width, node.viewBox.baseVal.height]")
             assert bounds and dimensions[0] > 0 and dimensions[1] > 0
-            for x, y in ((36, 36), (36, 291)):
+            for index, (x, y) in enumerate(((36, 36), (36, 291)), start=1):
                 svg.click(position={"x": x / dimensions[0] * bounds["width"],
                                     "y": y / dimensions[1] * bounds["height"]})
+                expect(svg).to_have_attribute("data-point-count", str(index))
+            expect(button(page, "confirm_well_line")).to_be_enabled()
             button(page, "confirm_well_line").click()
             expect(page.get_by_text("Prepared 4 wells and 4 horizontal lanes.", exact=True)).to_be_visible()
             button(page, "adjust_lane_borders").click()
