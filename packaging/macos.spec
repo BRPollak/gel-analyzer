@@ -15,6 +15,8 @@ datas = [
     (str(ROOT / "app.py"), "."),
     (str(ROOT / ".streamlit" / "config.toml"), ".streamlit"),
     (str(Path(sys.base_prefix) / "lib" / "python3.12" / "LICENSE.txt"), "licenses/python"),
+    (str(ROOT / "packaging/licenses/streamlit/LICENSE.txt"), "licenses/streamlit"),
+    (str(ROOT / "packaging/licenses/proxy_tools/LICENSE.txt"), "licenses/proxy_tools"),
 ]
 datas += collect_data_files("gel_analyzer")
 datas += collect_data_files("streamlit")
