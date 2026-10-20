@@ -312,14 +312,14 @@ class WindowsUI:
 
     def accept_quit(self, pid: int):
         for handle, _ in self.windows(pid):
-            # pywebview's WinForms quit confirmation is a Yes/No MessageBox.
+            # pywebview's WinForms quit confirmation is an OK/Cancel MessageBox.
             window_class = ctypes.create_unicode_buffer(256)
             self.api.GetClassNameW(handle, window_class, len(window_class))
             if window_class.value != "#32770":
                 continue
-            yes = self.api.GetDlgItem(handle, 6)  # IDYES
-            if yes:
-                self.api.PostMessageW(yes, 0x00F5, 0, 0)  # BM_CLICK
+            confirm = self.api.GetDlgItem(handle, 1)  # IDOK
+            if confirm:
+                self.api.PostMessageW(confirm, 0x00F5, 0, 0)  # BM_CLICK
 
 
 def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
@@ -389,7 +389,7 @@ def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
             assert pages, "WebView2 has no inspectable page"
             native_page = pages[0]
             native_page.wait_for_url(url + "**", timeout=60_000)
-            expect(native_page.get_by_role("heading", name="Agarose Gel Analyzer")).to_be_visible()
+            expect(native_page.get_by_role("heading", name="Agarose Gel Analyzer")).to_be_visible(timeout=45_000)
             native_page.screenshot(path=str(logs / "native-window.png"))
             # Stopping the Playwright driver disconnects inspection; do not send
             # Browser.close to the application being tested.
@@ -412,8 +412,13 @@ def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=10)
-        if backend is not None and backend.is_running():
-            backend.kill()
+        if backend is not None:
+            try:
+                if backend.is_running():
+                    backend.kill()
+                    backend.wait(timeout=10)
+            except psutil.NoSuchProcess:
+                pass
 
 
 def main() -> int:
