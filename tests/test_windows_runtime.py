@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gel_analyzer import desktop, windows_runtime
+from gel_analyzer import desktop, desktop_downloads, windows_runtime
 
 
 @pytest.fixture
@@ -103,10 +103,14 @@ def test_windows_desktop_requests_edge_and_native_downloads(monkeypatch, tmp_pat
     monkeypatch.setenv("GEL_ANALYZER_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(desktop, "configure_logging", lambda directory: None)
     monkeypatch.setattr(windows_runtime, "prerequisite_error", lambda: None)
-    class ClosedEvent:
+    class Event:
+        def __init__(self):
+            self.callbacks = []
+
         def __iadd__(self, callback):
+            self.callbacks.append(callback)
             return self
-    window = SimpleNamespace(events=SimpleNamespace(closed=ClosedEvent()))
+    window = SimpleNamespace(events=SimpleNamespace(closed=Event(), initialized=Event()))
     settings, calls = {}, []
     fake_webview = SimpleNamespace(
         settings=settings,
@@ -116,5 +120,6 @@ def test_windows_desktop_requests_edge_and_native_downloads(monkeypatch, tmp_pat
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
     assert desktop.run_desktop() == 0
     assert calls == [{"gui": "edgechromium", "debug": False, "private_mode": True}]
-    assert settings["ALLOW_DOWNLOADS"] is True
+    assert settings["ALLOW_DOWNLOADS"] is False, "Downloads stay disabled until the adapter is installed"
+    assert window.events.initialized.callbacks == [desktop_downloads.configure_downloads]
     assert settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] is False

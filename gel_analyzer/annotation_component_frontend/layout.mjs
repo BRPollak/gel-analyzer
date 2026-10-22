@@ -104,7 +104,7 @@ function overlapsVertically(top, bottom, otherTop, otherBottom) {
   return top < otherBottom + VERTICAL_GAP && bottom > otherTop - VERTICAL_GAP;
 }
 
-/** Greedy interval partitioning keeps overlapping groups in separate columns. */
+/** Greedy interval partitioning keeps overlapping lane labels in separate columns. */
 function partitionTracks(items) {
   const tracks = [];
   for (const item of [...items].sort((a, b) => a.start - b.start || a.end - b.end)) {
@@ -286,12 +286,12 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     const label = oneLine(group.label ?? group.text);
     const spec = textSpec(group, label, requestedFontSize, measure);
     groupLabels.push({...spec, kind: "group", id: String(group.id ?? `group-${index}`),
-      index, set: group.set === 1 ? 1 : 0, label, lanes: membership, top, bottom, y,
+      index, set: group.set === 1 ? 1 : 0, track: 0, label, lanes: membership, top, bottom, y,
       ticks: selected.map(lane => lane.y),
       start: Math.min(top - 1, y - spec.boxHeight / 2),
       end: Math.max(bottom + 1, y + spec.boxHeight / 2)});
   }
-  const groupTracks = [0, 1].map(set => partitionTracks(groupLabels.filter(group => group.set === set)));
+  const groupSets = [0, 1].map(set => groupLabels.filter(group => group.set === set));
   let left = -IMAGE_GAP;
   for (const track of laneTracks) {
     for (const label of track.items) {
@@ -302,35 +302,32 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
   }
   const brackets = [];
   const placedLabels = [...laneLabels];
-  for (const tracks of groupTracks) {
-    for (const track of tracks) {
-      for (const label of track.items) {
-        // Keep a clear buffer from the nearest visible ink in this span.
-        // Editor minimum widths and unrelated labels must not push it left.
-        const top = Math.min(label.top, label.y - (label.ascent + label.descent) / 2);
-        const bottom = Math.max(label.bottom, label.y + (label.ascent + label.descent) / 2);
-        let boundary = -IMAGE_GAP;
-        for (const other of placedLabels) {
-          if (!other.hasInk) continue;
-          const ink = inkBounds(other);
-          if (overlapsVertically(top, bottom, ink.top, ink.bottom)) {
-            boundary = Math.min(boundary, ink.left);
-          }
+  for (const groups of groupSets) {
+    // A selected set is one column. Fit the whole column against nearby lane
+    // ink and the preceding group column before placing any of its members.
+    // Within-set brackets/text may touch or overlap; they must never stagger.
+    let boundary = -IMAGE_GAP;
+    for (const label of groups) {
+      const top = Math.min(label.top, label.y - (label.ascent + label.descent) / 2);
+      const bottom = Math.max(label.bottom, label.y + (label.ascent + label.descent) / 2);
+      for (const other of placedLabels) {
+        if (!other.hasInk) continue;
+        const ink = inkBounds(other);
+        if (other.kind === "group" || overlapsVertically(top, bottom, ink.top, ink.bottom)) {
+          boundary = Math.min(boundary, ink.left);
         }
-        for (const other of brackets) {
-          if (overlapsVertically(top, bottom, other.top, other.bottom)) {
-            boundary = Math.min(boundary, other.x);
-          }
-        }
-        const bracketX = boundary - bracketGap - BRACKET_DEPTH;
-        label.x = bracketX - bracketGap - label.overhangRight;
-        label.width = label.measuredWidth - label.overhangRight;
-        brackets.push({id: label.id, set: label.set, track: label.track,
-          x: bracketX, top: label.top, bottom: label.bottom, ticks: [...label.ticks],
-          depth: BRACKET_DEPTH, color: "#000000"});
-        placedLabels.push(label);
       }
     }
+    for (const other of brackets) boundary = Math.min(boundary, other.x);
+    const bracketX = boundary - bracketGap - BRACKET_DEPTH;
+    for (const label of groups) {
+      label.x = bracketX - bracketGap - label.overhangRight;
+      label.width = label.measuredWidth - label.overhangRight;
+      brackets.push({id: label.id, set: label.set, track: label.track,
+        x: bracketX, top: label.top, bottom: label.bottom, ticks: [...label.ticks],
+        depth: BRACKET_DEPTH, color: "#000000"});
+    }
+    placedLabels.push(...groups);
   }
   const allLabels = [...laneLabels, ...groupLabels];
   const annotationTop = Math.min(0, ...allLabels.map(label => label.start));
@@ -455,9 +452,6 @@ function layoutTopAnnotations({width, height, lanes, annotations, ladder}, measu
     label.editorTop = label.baselineY + label.editorLocalTop;
     label.editorBottom = label.baselineY + label.editorLocalBottom;
   }
-  function position(label, bottom) {
-    atBaseline(label, bottom - Math.max(label.localBottom, label.editorLocalBottom));
-  }
   for (const label of labels) prepare(label, label.y - source.gelY);
 
   // Every lane label ends at its lane center on one shared horizontal line.
@@ -510,31 +504,36 @@ function layoutTopAnnotations({width, height, lanes, annotations, ladder}, measu
   }
   const placed = [...source.laneLabels];
   const brackets = [];
-  // Process both sets in their established order. Only overlapping annotations
-  // push a group farther from the gel; sparse groups keep their original ticks.
+  // Each selected set is one row, just as it is one column with wells at left.
+  // Resolve clearance for all members together without staggering close groups.
   for (const set of [0, 1]) {
-    for (const label of source.groupLabels.filter(label => label.set === set)) {
+    const groups = source.groupLabels.filter(label => label.set === set);
+    let boundary = -IMAGE_GAP;
+    for (const label of groups) {
       const left = Math.min(...label.lanes.map(index => lanes[index][0]));
       const right = Math.max(...label.lanes.map(index => lanes[index][2]));
       const spanLeft = Math.min(left, label.start), spanRight = Math.max(right, label.end);
-      let boundary = -IMAGE_GAP;
       for (const other of placed) {
-        if (other.start < spanRight + VERTICAL_GAP && other.end > spanLeft - VERTICAL_GAP) {
+        if (other.kind === "group"
+          || (other.start < spanRight + VERTICAL_GAP && other.end > spanLeft - VERTICAL_GAP)) {
           boundary = Math.min(boundary, other.inkTop, other.editorTop);
         }
       }
-      for (const other of brackets) {
-        if (other.left < spanRight + VERTICAL_GAP && other.right > spanLeft - VERTICAL_GAP) {
-          boundary = Math.min(boundary, other.y);
-        }
-      }
-      const y = boundary - source.bracketGap - BRACKET_DEPTH;
+    }
+    for (const other of brackets) boundary = Math.min(boundary, other.y);
+    const y = boundary - source.bracketGap - BRACKET_DEPTH;
+    const anchorY = y - source.bracketGap - Math.max(0, ...groups.map(label =>
+      Math.max(label.localBottom, label.editorLocalBottom) - label.endOffsetY));
+    for (const label of groups) {
+      const left = Math.min(...label.lanes.map(index => lanes[index][0]));
+      const right = Math.max(...label.lanes.map(index => lanes[index][2]));
       brackets.push({id: label.id, set, track: label.track, horizontal: true,
         left, right, y, ticks: label.lanes.map(index => (lanes[index][0] + lanes[index][2]) / 2),
         depth: BRACKET_DEPTH, color: "#000000"});
-      position(label, y - source.bracketGap);
-      placed.push(label);
+      label.anchorY = anchorY;
+      atBaseline(label, anchorY - label.endOffsetY);
     }
+    placed.push(...groups);
   }
   // The existing ladder fitter measures collision spacing along migration.
   // Transpose its positional geometry, then render horizontal readable text.
@@ -568,7 +567,7 @@ function layoutTopAnnotations({width, height, lanes, annotations, ladder}, measu
   for (const label of labels) {
     for (const key of ["baselineX", "anchor", "inkLeft", "inkRight", "editorLeft", "editorRight", "start", "end"]) label[key] += gelX;
     for (const key of ["baselineY", "inkTop", "inkBottom", "editorTop", "editorBottom"]) label[key] += gelY;
-    if (label.kind === "lane") label.anchorY += gelY;
+    label.anchorY += gelY;
   }
   for (const bracket of brackets) {
     bracket.left += gelX; bracket.right += gelX; bracket.y += gelY;

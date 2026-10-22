@@ -52,6 +52,10 @@ function assertLabelsFit(layout) {
   }
   for (let index = 0; index < layout.labels.length; index++) {
     for (const other of layout.labels.slice(index + 1)) {
+      // Groups in the same user-selected column may overlap instead of moving
+      // an individual bracket and label farther away from the gel.
+      if (layout.labels[index].kind === "group" && other.kind === "group"
+        && layout.labels[index].set === other.set) continue;
       assert.equal(rectanglesIntersect(layout.labels[index], other), false,
         `Visible text overlaps: ${layout.labels[index].text}, ${other.text}`);
     }
@@ -93,7 +97,8 @@ test("both group sets coexist, use independent columns, and retain sparse member
   assert.equal(outer.top, layout.gelY);
   assert.equal(outer.bottom, layout.gelY + 100);
   assert.deepEqual(outer.ticks, [layout.gelY + 4, layout.gelY + 94]);
-  assert.notEqual(outer.track, nested.track);
+  assert.equal(outer.track, nested.track);
+  assert.equal(outer.x, nested.x, "overlapping members retain the selected group column");
   assert.ok(set1.x < Math.min(outer.x, nested.x));
   assert.ok(Math.abs(set1.x + set1.depth - (Math.min(...layout.groupLabels
     .filter(label => label.id !== "replicate").map(label => label.inkLeft)) - layout.bracketGap)) < 1e-9,
@@ -111,7 +116,7 @@ test("both group sets coexist, use independent columns, and retain sparse member
   assertLabelsFit(layout);
 });
 
-test("disjoint groups share a column while editing membership recomputes the span and tracks", () => {
+test("editing membership recomputes group spans without breaking the selected column", () => {
   const spec = {...input, height: 250, lanes: [[0, 20, 400, 40], [0, 170, 400, 190]],
     annotations: {labels: [{text: "A"}, {text: "B"}], groups: [
       {id: "a", set: 0, label: "First", lanes: [0]},
@@ -121,9 +126,9 @@ test("disjoint groups share a column while editing membership recomputes the spa
   assert.equal(original.brackets[0].x, original.brackets[1].x);
   spec.annotations.groups[0].lanes = [0, 1];
   const edited = layoutAnnotations(spec, measure);
-  assert.notEqual(edited.brackets[0].x, edited.brackets[1].x);
+  assert.equal(edited.brackets[0].x, edited.brackets[1].x);
   assert.equal(edited.brackets[0].bottom - edited.gelY, 190);
-  assert.ok(edited.width > original.width);
+  assert.equal(edited.width, original.width, "overlapping spans do not create another column");
   spec.annotations.groups = [];
   const deleted = layoutAnnotations(spec, measure);
   assert.equal(deleted.brackets.length, 0);
@@ -143,23 +148,61 @@ test("long, bold italic labels expand the margin using ink bounds without resizi
   assertLabelsFit(layout);
 });
 
-test("group brackets follow visible ink, ignoring editor padding and unrelated longer labels", () => {
+test("a shared group column fits visible lane ink, ignoring padding and unrelated longer labels", () => {
   const specification = {width: 400, height: 260,
     lanes: [[0, 0, 400, 30], [0, 100, 400, 130], [0, 210, 400, 240]],
     annotations: {fontSize: 20, labels: [{text: "A"}, {text: "Very long unrelated lane"}, {text: "BC"}],
       groups: [{id: "top", set: 0, label: "Top", lanes: [0]},
         {id: "bottom", set: 0, label: "Bottom", lanes: [2]}]}};
   const layout = layoutAnnotations(specification, measure);
+  const boundary = Math.min(...[0, 2].map(index => layout.laneLabels[index].inkLeft));
   for (const [index, laneIndex] of [0, 2].entries()) {
     const bracket = layout.brackets[index];
     const lane = layout.laneLabels[laneIndex];
-    assert.equal(bracket.x + bracket.depth, lane.inkLeft - layout.bracketGap);
+    assert.equal(bracket.x + bracket.depth, boundary - layout.bracketGap);
     assert.ok(bracket.x > lane.x - lane.width,
       "the bracket can use empty editor-box padding beside a short label");
   }
-  assert.notEqual(layout.brackets[0].x, layout.brackets[1].x,
-    "each disjoint group fits the visible labels in its own span");
+  assert.equal(layout.brackets[0].x, layout.brackets[1].x,
+    "different lane-label lengths cannot stagger groups within a column");
+  assert.equal(layout.groupLabels[0].inkRight, layout.groupLabels[1].inkRight);
   assertLabelsFit(layout);
+});
+
+test("close groups in each column stay aligned even when brackets and text overlap", () => {
+  const specification = {width: 400, height: 160,
+    lanes: [[0, 0, 400, 20], [0, 18, 400, 38], [0, 120, 400, 140]],
+    annotations: {fontSize: 20, labels: [{text: "A"}, {text: "Long adjacent lane", italic: true}, {text: "C"}],
+      groups: [
+        {id: "first", set: 0, label: "First", lanes: [0]},
+        {id: "second", set: 0, label: "Second", lanes: [1], italic: true},
+        {id: "third", set: 0, label: "Third", lanes: [2]},
+        {id: "outer-top", set: 1, label: "Outer top", lanes: [0]},
+        {id: "outer-bottom", set: 1, label: "Outer bottom", lanes: [2]},
+      ]}};
+  const original = structuredClone(specification);
+  const layout = layoutAnnotations(specification, measure);
+  for (const set of [0, 1]) {
+    assert.equal(new Set(layout.brackets.filter(bracket => bracket.set === set).map(bracket => bracket.x)).size, 1);
+    assert.equal(new Set(layout.groupLabels.filter(label => label.set === set).map(label => label.inkRight)).size, 1);
+  }
+  const [first, second] = layout.brackets;
+  assert.equal(first.bottom - second.top, 2, "small bracket overlap preserves the original lane spans");
+  assert.equal(rectanglesIntersect(layout.groupLabels[0], layout.groupLabels[1]), true,
+    "a close group label is allowed to overlap instead of moving to another column");
+  assertLabelsFit(layout);
+  const reversed = layoutAnnotations({...specification,
+    annotations: {...specification.annotations, groups: [...specification.annotations.groups].reverse()}}, measure);
+  for (const bracket of layout.brackets) {
+    assert.deepEqual(reversed.brackets.find(other => other.id === bracket.id), bracket,
+      "group creation order does not change the aligned brackets");
+  }
+  for (const label of layout.groupLabels) {
+    const other = reversed.groupLabels.find(other => other.id === label.id);
+    assert.equal(other.inkRight, label.inkRight);
+    assert.equal(other.y, label.y);
+  }
+  assert.deepEqual(specification, original, "alignment must not change saved membership or formatting");
 });
 
 test("group brackets use visible mixed-font ink and keep both buffers as fonts grow", () => {
@@ -559,6 +602,51 @@ test("invalid ladder coordinates and oversized top gutters fail before canvas al
 });
 
 for (const angle of [90, 45]) {
+  test(`wells at top ${angle}° groups share one row per set regardless of overlap and creation order`, () => {
+    const specification = {width: 160, height: 400, workflow_orientation: "wells_top",
+      lanes: [[0, 0, 20, 400], [18, 0, 38, 400], [120, 0, 140, 400]],
+      annotations: {fontSize: 20, laneLabelAngle: angle,
+        labels: [{text: "A"}, {text: "Long adjacent lane", italic: true}, {text: "C"}], groups: [
+          {id: "first", set: 0, label: "First group", lanes: [0]},
+          {id: "second", set: 0, label: "Second group", lanes: [1], italic: true},
+          {id: "third", set: 0, label: "Third", lanes: [2]},
+          {id: "outer-top", set: 1, label: "Outer first", lanes: [0]},
+          {id: "outer-bottom", set: 1, label: "Outer last", lanes: [2]},
+        ]}};
+    const original = structuredClone(specification);
+    const layout = layoutAnnotations(specification, measure);
+    for (const set of [0, 1]) {
+      const brackets = layout.brackets.filter(bracket => bracket.set === set);
+      const labels = layout.groupLabels.filter(label => label.set === set);
+      assert.equal(new Set(brackets.map(bracket => bracket.y)).size, 1);
+      assert.equal(new Set(labels.map(label => label.anchorY)).size, 1,
+        "group text ends share the same line, including italic glyph overhang");
+      for (const label of labels) {
+        assert.ok(Math.abs(label.baselineY + label.endOffsetY - label.anchorY) < 1e-9);
+        assert.ok(label.inkTop >= 0 && label.editorTop >= 0);
+        assert.ok(label.inkBottom <= brackets[0].y - layout.bracketGap + 1e-9);
+        assert.ok(label.editorBottom <= brackets[0].y - layout.bracketGap + 1e-9);
+      }
+    }
+    assert.equal(layout.brackets[0].right - layout.brackets[1].left, 2,
+      "adjacent groups keep their spans instead of moving to different rows");
+    assert.ok(layout.brackets.find(bracket => bracket.set === 1).y
+      < Math.min(...layout.groupLabels.filter(label => label.set === 0).map(label => label.inkTop)),
+    "the second row stays above the first row's text");
+    const reversed = layoutAnnotations({...specification,
+      annotations: {...specification.annotations, groups: [...specification.annotations.groups].reverse()}}, measure);
+    for (const bracket of layout.brackets) {
+      assert.deepEqual(reversed.brackets.find(other => other.id === bracket.id), bracket);
+    }
+    for (const label of layout.groupLabels) {
+      const other = reversed.groupLabels.find(other => other.id === label.id);
+      assert.equal(other.anchorY, label.anchorY);
+      assert.equal(other.baselineX, label.baselineX);
+      assert.equal(other.baselineY, label.baselineY);
+    }
+    assert.deepEqual(specification, original);
+  });
+
   test(`wells at top ${angle}° labels, sparse groups and left ladder fit without touching the gel`, () => {
     const specification = {width: 220, height: 400, workflow_orientation: "wells_top",
       lanes: [[0, 0, 18, 400], [22, 0, 40, 400], [202, 0, 220, 400]],

@@ -298,10 +298,11 @@ def run_desktop() -> int:
             return 1
 
     import webview
+    from .desktop_downloads import configure_downloads
 
     backend = Backend(directory)
     atexit.register(backend.stop)
-    webview.settings["ALLOW_DOWNLOADS"] = True
+    webview.settings["ALLOW_DOWNLOADS"] = False
     webview.settings["SHOW_DEFAULT_MENUS"] = True
     # Keep Streamlit's new-window download links in the native webview so its
     # download delegate supplies the suggested name and native save dialog.
@@ -314,6 +315,7 @@ def run_desktop() -> int:
         background_color="#FAFBFC", text_select=True, confirm_close=True,
         localization={"global.quitConfirmation": QUIT_MESSAGE},
     )
+    window.events.initialized += configure_downloads
     window.events.closed += backend.stop
 
     def launch_workspace() -> None:
