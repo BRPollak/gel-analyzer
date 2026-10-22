@@ -4,23 +4,23 @@ Turn a gel photo into a labeled image for your lab notebook. Straighten and crop
 it, label samples, and optionally mark a ladder with known sizes. Analysis runs
 on your computer. Export your finished image as PNG, JPEG, TIFF, or SVG.
 
-## Download Gel Analyzer 1.0.3
+## Download Gel Analyzer 1.0.4
 
-**Windows and Mac are the same app version: 1.0.3**, with the same analysis
+**Windows and Mac are the same app version: 1.0.4**, with the same analysis
 features and export formats. Choose the installer for your computer:
 
 | Computer | Download | Requirements |
 | --- | --- | --- |
-| Windows PC | [Download Windows installer (.exe)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-Windows-x64-Setup.exe) | Windows 10 version 22H2 or Windows 11; 64-bit Intel/AMD; .NET Framework 4.8 or later |
-| Mac | [Download Mac installer (.dmg)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-macOS-arm64.dmg) | Apple Silicon (M1 or later); macOS 14 or later |
+| Windows PC | [Download Windows installer (.exe)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-Windows-x64-Setup.exe) | Windows 10 version 22H2 or Windows 11; 64-bit Intel/AMD; .NET Framework 4.8 or later |
+| Mac | [Download Mac installer (.dmg)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-macOS-arm64.dmg) | Apple Silicon (M1 or later); macOS 14 or later |
 
 > [!WARNING]
 > **The Windows installer has not yet been manually tested on a Windows 10/11 PC.**
-> Automated build, installation, and app checks passed on GitHub's Windows Server
-> runner. Installation and everyday use on a separate Windows PC, including native
-> save dialogs, still need manual testing.
+> Automated build, installation, and app checks run on GitHub's Windows Server
+> runner; see the release notes for results. Installation and everyday use on a
+> separate Windows PC, including native save dialogs, still need manual testing.
 
-Both downloads are on the [same v1.0.3 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
+Both downloads are on the [same v1.0.4 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.4).
 This repository and its downloads are public. Anyone can download and use the
 app without a GitHub account or sign-in. After downloading, installation and
 use can work offline. You do not need Python or terminal commands to run the
@@ -35,7 +35,7 @@ installed app.
 Windows on ARM and 32-bit Windows are not supported. The required .NET Framework
 4.8 or later is included with the supported Windows versions.
 
-1. **Download** [Gel-Analyzer-1.0.3-Windows-x64-Setup.exe](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-Windows-x64-Setup.exe).
+1. **Download** [Gel-Analyzer-1.0.4-Windows-x64-Setup.exe](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-Windows-x64-Setup.exe).
    If you use the release page instead, find this exact file under **Assets**.
    You only need the `.exe`; the source-code ZIP and validation files are for developers.
 2. **Install.** Double-click the downloaded file and follow the setup prompts.
@@ -71,7 +71,7 @@ computer, policy may block installation; ask your administrator for help.
 Requires an **Apple Silicon Mac (M1 or later) with macOS 14 or later**. Check
 **Apple menu → About This Mac**. Intel Macs are not supported by this installer.
 
-1. **Download** [Gel-Analyzer-1.0.3-macOS-arm64.dmg](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.3/Gel-Analyzer-1.0.3-macOS-arm64.dmg).
+1. **Download** [Gel-Analyzer-1.0.4-macOS-arm64.dmg](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-macOS-arm64.dmg).
 2. **Install.** Double-click the downloaded DMG, then drag **Gel Analyzer.app**
    onto **Applications** in the window that opens.
 3. **Open.** Eject the disk image in Finder. Open **Applications** and
@@ -103,8 +103,8 @@ See [Apple's security guidance](https://support.apple.com/en-us/102445).
 - **Find logs:** in Finder, choose **Go → Go to Folder** and paste
   `~/Library/Logs/Gel Analyzer/`.
 
-The previous Mac 1.0.2 download remains available in the
-[older release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.2).
+The previous Windows and Mac 1.0.3 downloads remain available in the
+[older release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
 
 ## Use the app
 
@@ -143,7 +143,9 @@ your image and correct them before relying on the results.
    PNG is a simple choice for a lab notebook. Leave **Print setting (DPI)** at
    its default unless you need a particular print setting. Click
    **Download annotated PNG** (the name follows your chosen format), then choose
-   where to save it. Use **Edit annotations** if labels need correcting.
+   where to save it. The desktop save dialog keeps the filename extension
+   consistent with the selected format. Use **Edit annotations** if labels need
+   correcting.
 
 > [!IMPORTANT]
 > **Export before closing the app or replacing the image.** Editable work lasts
@@ -153,18 +155,19 @@ your image and correct them before relying on the results.
 
 ## Testing status
 
-**Windows manual testing is pending.** Automated tests passed for installation,
+**Windows manual testing is pending.** The automated suite checks installation,
 reinstallation, a simulated upgrade, shortcuts, uninstall, native-window startup,
-backend cleanup, synthetic image uploads, interactive controls, and exports.
-These checks ran on GitHub's Windows Server runner. A clean Windows 10/11 PC,
-installation without an existing WebView2 runtime while offline, the downloaded
-file's SmartScreen experience, and native save dialogs have not been manually
-verified. The installer should be treated as awaiting real-PC validation.
+backend cleanup, synthetic image uploads, interactive controls, and exports
+on GitHub's Windows Server runner. See the release notes for the current build
+results. A clean Windows 10/11 PC, installation without an existing WebView2
+runtime while offline, the downloaded file's SmartScreen experience, and native
+save dialogs have not been manually verified. The installer should be treated
+as awaiting real-PC validation.
 
-The [v1.0.3 release notes](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3)
-list the completed checks and remaining limits for each platform. The Windows
-validation archive and checksum files are available there for anyone who wants
-to inspect the build evidence.
+The [v1.0.4 release notes](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.4)
+list the completed checks and remaining limits for each platform, including
+Mac native save-dialog checks for the export fix. Release assets include
+validation records and checksums for inspecting the build evidence.
 
 ## Optional: run locally in a browser
 
