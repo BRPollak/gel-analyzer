@@ -17,6 +17,11 @@ export function annotationSvg(layout) {
     `<rect x="0" y="0" width="${layout.width}" height="${layout.height}" fill="#ffffff"/>`,
     `<image x="${layout.gelX}" y="${layout.gelY}" width="${layout.imageWidth}" height="${layout.imageHeight}"/>`,
   ];
+  for (const band of layout.extractedBands ?? []) {
+    const x = layout.gelX + band.x, y = layout.gelY + band.y;
+    const path = `M ${x} ${y} L ${x + band.width} ${y} L ${x + band.width} ${y + band.height} L ${x} ${y + band.height} L ${x} ${y}`;
+    parts.push(`<path d="${path}" fill="none" stroke="#dc2626" stroke-width="2" stroke-linecap="butt"/>`);
+  }
   for (const bracket of layout.brackets) {
     let path;
     if (bracket.horizontal) {

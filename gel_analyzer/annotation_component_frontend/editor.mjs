@@ -1,9 +1,11 @@
 import {layoutAnnotations, drawAnnotations} from "./layout.mjs";
 import {annotationSvg} from "./svg.mjs";
 import {createLadderEditor} from "./ladder.mjs";
+import {createExtractedBandEditor} from "./extracted_bands.mjs";
 import {createGroupEditor} from "./groups.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
 import {selectLabelKeys, selectedFormatting, formatSelectedLabels} from "./label_selection.mjs";
+import {navigateLaneLabel} from "./label_navigation.mjs";
 import {cleanText, cleanStyle, labelRuns, textSnapshot, editText,
   readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
 
@@ -38,18 +40,21 @@ const histories = new Map();
 
 const ladderEditor = createLadderEditor({getState: () => state, getLayout: () => layout,
   canvas, onChange: changed, onAction: finishAction, status, onLayout: scheduleZoom});
+const extractedBandEditor = createExtractedBandEditor({getState: () => state, getLayout: () => layout,
+  canvas, onChange: changed, onAction: finishAction, status});
 const groupEditor = createGroupEditor({getState: () => state, isDisabled: () => confirming,
   onChange: changed, onSelect: id => selectLabel(`group:${id}`, false),
   onRename: (id, text) => setLabelText(`group:${id}`, text), status,
   onLayout: () => { scheduleZoom(); resizeFrame(); }});
 
 function syncMode() {
-  const ladderMode = state?.mode === "ladder";
+  const laneMode = state?.mode === "lanes";
   component.dataset.mode = state?.mode || "lanes";
-  document.querySelectorAll(".lane-only").forEach(node => { node.hidden = ladderMode; });
-  byId("confirm").hidden = ladderMode;
-  inputLayer.hidden = ladderMode;
-  byId("label-angle-field").hidden = ladderMode || state?.workflow_orientation !== "wells_top";
+  document.querySelectorAll(".lane-only").forEach(node => { node.hidden = !laneMode; });
+  byId("actions").hidden = !laneMode;
+  byId("confirm").hidden = !laneMode;
+  inputLayer.hidden = !laneMode;
+  byId("label-angle-field").hidden = !laneMode || state?.workflow_orientation !== "wells_top";
   byId("auto-size").title = "Choose a text size that fits the lanes";
   const top = state?.workflow_orientation === "wells_top";
   byId("group-set-label").textContent = top ? "Row" : "Column";
@@ -201,7 +206,7 @@ function setLabelText(key, text, range) {
 }
 
 function updateInputs() {
-  if (state.mode === "ladder") return;
+  if (state.mode !== "lanes") return;
   const boxes = [
     ...layout.laneLabels.map(label => ({...label, key: `lane:${label.index}`, accessible: `Lane ${label.index + 1} label`})),
     ...layout.groupLabels.map(label => ({...label, key: `group:${label.id}`, accessible: `Group set ${label.set + 1} label: ${label.text || label.label || "untitled"}`})),
@@ -266,6 +271,7 @@ function updateInputs() {
       });
       node.addEventListener("drop", event => event.preventDefault());
       node.addEventListener("keydown", event => {
+        if (navigateLaneLabel(event, node, inputNodes)) { captureSelection(); return; }
         if ((event.ctrlKey || event.metaKey) && ["b", "i"].includes(event.key.toLowerCase())) {
           event.preventDefault(); applyFormat(event.key.toLowerCase() === "b" ? "bold" : "italic"); return;
         }
@@ -363,6 +369,7 @@ function updateZoom() {
   const scale = fit ? Math.min(1, availableWidth / layout.width, availableHeight / layout.height) : Number(zoom);
   component.style.setProperty("--selection-outline-width", `${2 / scale}px`);
   component.style.setProperty("--selection-outline-offset", `${1 / scale}px`);
+  component.style.setProperty("--band-outline-width", `${2 / scale}px`);
   byId("preview-stage").style.transform = `scale(${scale})`;
   byId("preview-stage").style.width = `${layout.width}px`;
   byId("preview-stage").style.height = `${layout.height}px`;
@@ -425,6 +432,7 @@ function repaint() {
     syncMode();
     updateInputs();
     ladderEditor.setDisabled(confirming, false);
+    extractedBandEditor.setDisabled(confirming);
     updateZoom();
     byId("confirm").disabled = confirming;
     return true;
@@ -432,6 +440,7 @@ function repaint() {
     previewError = error instanceof Error ? error.message : "The annotation preview could not be drawn.";
     byId("confirm").disabled = true;
     ladderEditor.setDisabled(confirming, true);
+    extractedBandEditor.setDisabled(true);
     status(previewError, true);
     return false;
   }
@@ -448,15 +457,16 @@ function canvasSnapshot(target, geometry) {
 function emit(action) {
   if (!state) return;
   if (action === "confirm" && (!layout || previewError)) return;
-  const value = {kind: state.mode === "ladder" ? "ladder" : "annotations",
+  const value = {kind: state.mode === "ladder" ? "ladder" : state.mode === "extracted" ? "extracted_bands" : "annotations",
     action, token: state.token, revision};
   if (state.mode === "ladder") {
     value.ladder = state.ladder;
     value.ladder_step = state.ladderStep;
-  } else value.annotations = state.annotations;
+  } else if (state.mode === "extracted") value.extracted_bands = state.extractedBands;
+  else value.annotations = state.annotations;
   if (action === "confirm") {
     Object.assign(value, canvasSnapshot(canvas, layout));
-    if (state.mode === "lanes" && state.ladder) {
+    if ((state.mode === "lanes" || state.mode === "extracted") && state.ladder) {
       const baseCanvas = document.createElement("canvas");
       const baseLayout = layoutAnnotations({...state, ladder: null});
       drawAnnotations(baseCanvas, image, baseLayout, state.annotations);
@@ -471,7 +481,7 @@ function changed() {
   revision = Math.max(revision + 1, Date.now() * 1000);
   component.dataset.revision = String(revision);
   status("");
-  if (state.mode !== "ladder") {
+  if (state.mode === "lanes") {
     refreshTargets();
     syncToolbar();
     groupEditor.render();
@@ -506,6 +516,7 @@ function setConfirming(value) {
   byId("editor").querySelectorAll("input, select, button").forEach(node => { node.disabled = value; });
   inputNodes.forEach(node => { node.contentEditable = String(!value); });
   ladderEditor.setDisabled(value, Boolean(previewError));
+  extractedBandEditor.setDisabled(value || Boolean(previewError));
   byId("confirm").textContent = value ? "Composing annotations…" : "Confirm annotations";
   if (!value) {
     groupEditor.render();
@@ -584,7 +595,7 @@ byId("edit-selected-group").addEventListener("click", () => {
 byId("zoom").addEventListener("change", updateZoom);
 function finishAction(action = "confirm") {
   if (confirming || !state) return;
-  if (action === "confirm" && state.mode !== "ladder" && !groupEditor.validate()) return;
+  if (action === "confirm" && state.mode === "lanes" && !groupEditor.validate()) return;
   clearTimeout(pendingEdit);
   pendingEdit = null;
   if (action === "confirm" && !repaint()) return;
@@ -636,12 +647,14 @@ window.addEventListener("message", event => {
       lanes: args.lanes.map(lane => [...lane]),
       workflow_orientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
       bandCandidates: args.band_candidates ?? [],
-      mode: args.mode === "ladder" ? "ladder" : "lanes",
+      mode: ["ladder", "extracted"].includes(args.mode) ? args.mode : "lanes",
+      extractedBands: structuredClone(args.extracted_bands || []),
       ladder: args.ladder ? structuredClone(args.ladder) : null,
       presets: structuredClone(args.presets || []),
       ladderStep: args.ladder_step || "preset", confirmedLadder: Boolean(args.confirmed_ladder),
       annotations: readAnnotations(args.annotations, args.lanes, args.fontSize, args.workflow_orientation)};
     ladderEditor.reset();
+    extractedBandEditor.reset();
     syncMode();
     component.dataset.token = args.token;
     component.dataset.revision = String(revision);
@@ -680,6 +693,7 @@ window.addEventListener("message", event => {
     revision = incomingRevision;
     state.annotations = readAnnotations(args.annotations, state.lanes, args.fontSize, state.workflow_orientation);
     state.ladder = args.ladder ? structuredClone(args.ladder) : null;
+    state.extractedBands = structuredClone(args.extracted_bands || []);
     state.ladderStep = args.ladder_step || "preset";
     refreshTargets();
     syncToolbar();

@@ -393,7 +393,7 @@ def workflow_stage() -> int | None:
         return None
     if confirmed_gel() is not None:
         if st.session_state.lane_stage == "cropped":
-            return 3 if st.session_state.annotation_stage == "final" else 2
+            return 3 if st.session_state.annotation_stage in ("final", "extracted") else 2
         return 1
     return 0
 

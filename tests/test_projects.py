@@ -91,6 +91,62 @@ def test_manual_ladder_project_round_trip_keeps_labels_positions_and_independent
     assert state["ladder_draft"] == draft
 
 
+@pytest.mark.parametrize("orientation", ["wells_left", "wells_top"])
+def test_extracted_band_project_round_trip_preserves_draft_and_confirmed_output(orientation):
+    from test_extracted_bands_app import marked_composition
+
+    state = project_state(orientation)
+    crop = state["lane_crop"]
+    marks = [{"x": 1.125, "y": 2.5, "width": 8.75, "height": 4.25}]
+    draft = marks + [{"x": 14, "y": 20, "width": 5, "height": 7}]
+    event, png = marked_composition(crop, marks)
+    state.update(extracted_bands=marks, extracted_bands_draft=draft,
+                 annotation_stage="extracted", annotation_completed=True,
+                 annotation_png=png, annotation_dimensions=(event["width"], event["height"]),
+                 annotation_base_png=png, annotation_base_dimensions=(event["width"], event["height"]))
+    restored = load_project(save_project(state))
+    assert restored["extracted_bands"] == marks
+    assert restored["extracted_bands_draft"] == draft
+    assert restored["annotation_stage"] == "extracted"
+    assert restored["annotation_png"] == png
+    restored["extracted_bands_draft"][0]["x"] = 20
+    assert restored["extracted_bands"] == marks
+    assert state["extracted_bands_draft"] == draft
+
+
+def test_legacy_project_without_extracted_bands_restores_empty_marks():
+    document = json.loads(save_project(project_state()))
+    document["state"].pop("extracted_bands")
+    document["state"].pop("extracted_bands_draft")
+    restored = load_project(json.dumps(document).encode())
+    assert restored["extracted_bands"] == []
+    assert restored["extracted_bands_draft"] is None
+
+
+@pytest.mark.parametrize("field", ["extracted_bands", "extracted_bands_draft"])
+@pytest.mark.parametrize("marks", [None, [{"x": -1, "y": 2, "width": 5, "height": 7}],
+                                   [{"x": 1, "y": 2, "width": 1000, "height": 7}]])
+def test_project_rejects_invalid_extracted_band_coordinates(field, marks):
+    if field == "extracted_bands_draft" and marks is None:
+        return
+    state = project_state()
+    state[field] = marks
+    with pytest.raises(ProjectError):
+        load_project(save_project(state))
+
+
+def test_project_rejects_drawing_stage_before_ladder_offer_is_finished():
+    from test_annotations import composition
+
+    state = project_state()
+    event, png = composition(state["lane_crop"])
+    state.update(annotation_stage="extracted", annotation_completed=False,
+                 extracted_bands_draft=[], annotation_png=png,
+                 annotation_dimensions=(event["width"], event["height"]))
+    with pytest.raises(ProjectError, match="completed lane and ladder annotation"):
+        load_project(save_project(state))
+
+
 @pytest.mark.parametrize("change", [
     {"id": "unsafe id"}, {"label": ""}, {"label": "two\nlines"}, {"x": -1},
 ])

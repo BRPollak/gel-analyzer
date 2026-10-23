@@ -99,6 +99,16 @@
     #ladder-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     #ladder-confirm { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
     #ladder-overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: auto; }
+    #extracted-band-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #extracted-band-overlay[data-drawing="true"] { pointer-events: auto; touch-action: none; cursor: crosshair; }
+    .extracted-band-outline { stroke: #dc2626; stroke-width: var(--band-outline-width, 2px); fill: none; pointer-events: none; }
+    .extracted-band-outline[data-draft="true"] { stroke-dasharray: 5 3; }
+    #extracted-band-panel h2 { font-size: 16px; margin: 0 0 10px; }
+    #extracted-band-list { list-style: none; margin: 10px 0 0; padding: 0; }
+    #extracted-band-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+    #extracted-band-list button { color: #b42318; }
+    #extracted-band-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    #extracted-band-done { color: white; background: var(--accent); border-color: var(--accent); font-weight: bold; }
     #ladder-overlay[data-step="lane"], #ladder-overlay[data-step="markers"] { cursor: crosshair; }
     .ladder-lane-outline { fill: transparent; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; pointer-events: none; }
     .ladder-lane-outline[data-selected="true"] { fill: #18786f18; stroke-width: 2; stroke-dasharray: none; }
@@ -198,6 +208,7 @@
               <line id="ladder-cursor-line"></line><circle id="ladder-cursor-dot"></circle>
             </g>
           </svg>
+          <svg id="extracted-band-overlay" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Extracted band rectangles; click and drag on the gel to mark a band" hidden></svg>
         </div></div>
       </div>
       <aside id="ladder-reference" class="panel" aria-labelledby="ladder-reference-heading" hidden>
@@ -211,6 +222,12 @@
       </aside>
       <aside id="workflow-panel" aria-label="Current annotation step">
       <div id="workflow-scroll">
+      <section id="extracted-band-panel" class="panel" aria-label="Mark extracted bands" hidden>
+        <h2>Mark extracted bands</h2>
+        <p class="hint">Click and drag on the gel to outline an extracted band. Drag in any direction and repeat for more bands. Press Escape to cancel an unfinished rectangle.</p>
+        <p id="extracted-band-count" class="hint" aria-live="polite"></p>
+        <ul id="extracted-band-list" aria-label="Marked extracted bands"></ul>
+      </section>
       <div id="toolbar" class="panel" role="group" aria-label="Annotation formatting">
         <strong id="selection-name" class="lane-only">Lane 1</strong>
         <p id="formatting-scope" class="lane-only" aria-live="polite">Formatting: whole label</p>
@@ -314,6 +331,10 @@
       </section>
       </div>
       <div id="workflow-actions">
+      <div id="extracted-band-actions" hidden>
+        <button id="extracted-band-done" type="button">Done marking</button>
+        <button id="extracted-band-cancel" type="button">Cancel</button>
+      </div>
       <div class="row" id="actions"><button id="confirm" type="button">Confirm annotations</button><p id="size-hint" class="hint"></p></div>
       <div id="ladder-actions" hidden>
         <button id="ladder-confirm" type="button" hidden>Confirm ladder annotations</button>

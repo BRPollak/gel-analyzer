@@ -1,6 +1,7 @@
 """Session drafts, optional ladder workflow, and clean confirmed PNGs."""
 
 from copy import deepcopy
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
@@ -11,6 +12,7 @@ from .annotations import (
     AnnotationError, default_annotations, default_label, validate_annotations, validate_composition,
 )
 from .annotation_exports import EXPORT_FORMATS, export_composition, validate_svg_composition
+from .extracted_bands import validate_extracted_bands
 from .ladders import load_presets, validate_ladder
 
 
@@ -31,6 +33,7 @@ def invalidate_confirmation() -> None:
     st.session_state.annotation_base_svg = None
     st.session_state.annotation_base_dimensions = None
     st.session_state.ladder_draft = None
+    st.session_state.extracted_bands_draft = None
 
 
 def reset_annotations() -> None:
@@ -43,20 +46,24 @@ def reset_annotations() -> None:
     st.session_state.annotation_geometry = None
     st.session_state.annotation_completed = False
     st.session_state.ladder_notice = None
+    st.session_state.extracted_bands = []
     invalidate_confirmation()
 
 
 def _sync_crop(crop) -> None:
     geometry = (crop.crop_box, crop.width, crop.height, tuple(crop.lanes),
-                getattr(crop, "workflow_orientation", "wells_left"))
+                getattr(crop, "workflow_orientation", "wells_left"),
+                sha256(crop.preview_png).hexdigest())
     previous = st.session_state.get("annotation_geometry")
-    if previous is not None and previous != geometry:
+    if previous is not None and previous != geometry[:len(previous)]:
         if st.session_state.get("ladder_data") or st.session_state.get("ladder_draft"):
             st.session_state.ladder_notice = "The crop or lanes changed. Please place your ladder markers again."
         st.session_state.ladder_data = None
         st.session_state.ladder_draft = None
         st.session_state.ladder_step = "preset"
         st.session_state.annotation_completed = False
+        st.session_state.extracted_bands = []
+        st.session_state.extracted_bands_draft = None
     st.session_state.annotation_geometry = geometry
 
 
@@ -183,12 +190,60 @@ def accept_ladder_event(event: object, crop) -> bool:
     return True
 
 
+def start_extracted_bands() -> None:
+    if st.session_state.get("annotation_stage") != "final":
+        return
+    st.session_state.extracted_bands_draft = deepcopy(st.session_state.get("extracted_bands", []))
+    st.session_state.annotation_stage = "extracted"
+    _new_event_identity()
+
+
+def accept_extracted_bands_event(event: object, crop) -> bool:
+    """Keep drawing drafts separate until a complete image is confirmed."""
+    if not _accept_identity(event, crop, "extracted_bands", "extracted", ("edit", "confirm", "cancel")):
+        return False
+    if event["action"] == "cancel":
+        st.session_state.extracted_bands_draft = None
+        st.session_state.annotation_stage = "final"
+        _new_event_identity()
+        return True
+    try:
+        draft = validate_extracted_bands(event.get("extracted_bands"), crop)
+        st.session_state.extracted_bands_draft = draft
+        if event["action"] == "confirm":
+            png = validate_composition(event, crop)
+            svg = validate_svg_composition(event, crop)
+            base = event.get("base") if st.session_state.get("ladder_data") else event
+            if not isinstance(base, dict):
+                raise AnnotationError("The lane-only image could not be composed. Please try again.")
+            base_png = validate_composition(base, crop)
+            base_svg = svg if base is event else validate_svg_composition(base, crop)
+            # The no-ladder image must include marks too, so removing a ladder
+            # later cannot restore an outdated composition without rectangles.
+            st.session_state.annotation_base_png = base_png
+            st.session_state.annotation_base_svg = base_svg
+            st.session_state.annotation_base_dimensions = (base["width"], base["height"])
+            st.session_state.annotation_png = png
+            st.session_state.annotation_svg = svg
+            st.session_state.annotation_dimensions = (event["width"], event["height"])
+            st.session_state.extracted_bands = draft
+            st.session_state.extracted_bands_draft = None
+            st.session_state.annotation_stage = "final"
+            _new_event_identity()
+        st.session_state.annotation_error = None
+    except AnnotationError as exc:
+        st.session_state.annotation_error = str(exc)
+    return True
+
+
 def consume_latest_event() -> None:
     crop = st.session_state.get("lane_crop")
     if crop is not None and st.session_state.get("annotation_token"):
         event = st.session_state.get(f"annotation_editor_{st.session_state.annotation_token}")
         if st.session_state.get("annotation_stage") == "ladder":
             accept_ladder_event(event, crop)
+        elif st.session_state.get("annotation_stage") == "extracted":
+            accept_extracted_bands_event(event, crop)
         else:
             accept_annotation_event(event, crop)
 
@@ -217,7 +272,7 @@ def show_annotations(crop, filename: str) -> None:
     stage = st.session_state.annotation_stage
     if stage not in ("ladder_offer", "final"):
         with st.container(key="gel_annotation_heading"):
-            st.subheader("Annotate ladder" if stage == "ladder" else "Annotate lanes")
+            st.subheader({"ladder": "Annotate ladder", "extracted": "Mark extracted bands"}.get(stage, "Annotate lanes"))
             if stage == "lanes":
                 count = len(crop.lanes)
                 st.caption(f"{count} lane{'s' if count != 1 else ''} · Click a label to edit. Command-click (Ctrl-click on Windows) to select several labels.")
@@ -260,6 +315,7 @@ def show_annotations(crop, filename: str) -> None:
                         st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
                                   key="edit_ladder", on_click=start_ladder)
                         st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)
+                        st.button("Mark extracted bands", key="mark_extracted_bands", on_click=start_extracted_bands)
                     exported = export_composition(
                         st.session_state.annotation_png, image_format, dpi,
                         svg=st.session_state.get("annotation_svg"),
@@ -283,12 +339,14 @@ def show_annotations(crop, filename: str) -> None:
         token=st.session_state.annotation_token, revision=st.session_state.annotation_revision,
         error=st.session_state.annotation_error,
         key=f"annotation_editor_{st.session_state.annotation_token}",
-        mode="ladder" if stage == "ladder" else "lanes",
+        mode=stage if stage in ("ladder", "extracted") else "lanes",
         ladder=st.session_state.ladder_draft if stage == "ladder" else st.session_state.ladder_data,
         presets=presets, ladder_step=st.session_state.ladder_step,
         confirmed_ladder=st.session_state.ladder_data is not None,
+        extracted_bands=(st.session_state.get("extracted_bands_draft", []) if stage == "extracted"
+                         else st.session_state.get("extracted_bands", [])),
     )
-    accept = accept_ladder_event if stage == "ladder" else accept_annotation_event
+    accept = {"ladder": accept_ladder_event, "extracted": accept_extracted_bands_event}.get(stage, accept_annotation_event)
     if accept(event, crop):
         st.rerun()
     if st.session_state.annotation_error:

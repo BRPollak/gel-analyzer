@@ -4,15 +4,15 @@ Turn a gel photo into a labeled image for your lab notebook. Straighten and crop
 it, label samples, and optionally mark a ladder with known sizes. Analysis runs
 on your computer. Export your finished image as PNG, JPEG, TIFF, or SVG.
 
-## Download Gel Analyzer 1.0.4
+## Download Gel Analyzer 1.0.5
 
-**Windows and Mac are the same app version: 1.0.4**, with the same analysis
+**Windows and Mac are the same app version: 1.0.5**, with the same analysis
 features and export formats. Choose the installer for your computer:
 
 | Computer | Download | Requirements |
 | --- | --- | --- |
-| Windows PC | [Download Windows installer (.exe)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-Windows-x64-Setup.exe) | Windows 10 version 22H2 or Windows 11; 64-bit Intel/AMD; .NET Framework 4.8 or later |
-| Mac | [Download Mac installer (.dmg)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-macOS-arm64.dmg) | Apple Silicon (M1 or later); macOS 14 or later |
+| Windows PC | [Download Windows installer (.exe)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.5/Gel-Analyzer-1.0.5-Windows-x64-Setup.exe) | Windows 10 version 22H2 or Windows 11; 64-bit Intel/AMD; .NET Framework 4.8 or later |
+| Mac | [Download Mac installer (.dmg)](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.5/Gel-Analyzer-1.0.5-macOS-arm64.dmg) | Apple Silicon (M1 or later); macOS 14 or later |
 
 > [!WARNING]
 > **The Windows installer has not yet been manually tested on a Windows 10/11 PC.**
@@ -20,7 +20,7 @@ features and export formats. Choose the installer for your computer:
 > runner; see the release notes for results. Installation and everyday use on a
 > separate Windows PC, including native save dialogs, still need manual testing.
 
-Both downloads are on the [same v1.0.4 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.4).
+Both downloads are on the [same v1.0.5 release page](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.5).
 This repository and its downloads are public. Anyone can download and use the
 app without a GitHub account or sign-in. After downloading, installation and
 use can work offline. You do not need Python or terminal commands to run the
@@ -35,7 +35,7 @@ installed app.
 Windows on ARM and 32-bit Windows are not supported. The required .NET Framework
 4.8 or later is included with the supported Windows versions.
 
-1. **Download** [Gel-Analyzer-1.0.4-Windows-x64-Setup.exe](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-Windows-x64-Setup.exe).
+1. **Download** [Gel-Analyzer-1.0.5-Windows-x64-Setup.exe](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.5/Gel-Analyzer-1.0.5-Windows-x64-Setup.exe).
    If you use the release page instead, find this exact file under **Assets**.
    You only need the `.exe`; the source-code ZIP and validation files are for developers.
 2. **Install.** Double-click the downloaded file and follow the setup prompts.
@@ -71,7 +71,7 @@ computer, policy may block installation; ask your administrator for help.
 Requires an **Apple Silicon Mac (M1 or later) with macOS 14 or later**. Check
 **Apple menu → About This Mac**. Intel Macs are not supported by this installer.
 
-1. **Download** [Gel-Analyzer-1.0.4-macOS-arm64.dmg](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.4/Gel-Analyzer-1.0.4-macOS-arm64.dmg).
+1. **Download** [Gel-Analyzer-1.0.5-macOS-arm64.dmg](https://github.com/BRPollak/gel-analyzer/releases/download/v1.0.5/Gel-Analyzer-1.0.5-macOS-arm64.dmg).
 2. **Install.** Double-click the downloaded DMG, then drag **Gel Analyzer.app**
    onto **Applications** in the window that opens.
 3. **Open.** Eject the disk image in Finder. Open **Applications** and
@@ -103,8 +103,8 @@ See [Apple's security guidance](https://support.apple.com/en-us/102445).
 - **Find logs:** in Finder, choose **Go → Go to Folder** and paste
   `~/Library/Logs/Gel Analyzer/`.
 
-The previous Windows and Mac 1.0.3 downloads remain available in the
-[older release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.3).
+The previous Windows and Mac 1.0.4 downloads remain available in the
+[older release](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.4).
 
 ## Use the app
 
@@ -131,6 +131,8 @@ your image and correct them before relying on the results.
    **Confirm lanes and crop**.
 5. **Label samples.** Click a lane label and type a name. Ctrl-click on Windows
    or Command-click on Mac to select multiple labels and format them together.
+   Tab selects all text in the next lane label; Shift+Tab does the same for the
+   previous label, so typing replaces its name immediately.
    Use **Create lane groups** for related samples, then **Confirm annotations**.
 6. **Add a ladder, if needed.** A ladder is a reference sample with known band
    sizes. Choose **Annotate ladder**, select a **Ladder preset**, and **Continue**.
@@ -139,7 +141,12 @@ your image and correct them before relying on the results.
    **25 kDa** yourself. Select a manual label to edit or delete it; use
    **Move marker** to reposition it. Finish with **Confirm ladder annotations**,
    or choose **Skip** / **Skip ladder** if you do not need a reference.
-7. **Save the image.** Choose **Image file type**: PNG, JPEG, TIFF, or SVG.
+7. **Mark extracted bands, if needed.** After completing or skipping the ladder,
+   choose **Mark extracted bands** and drag rectangles around bands in any
+   direction. Red outlines leave the bands visible. Use a band's **Remove**
+   button to correct a rectangle, then **Done marking** to include the marks in
+   the final image. **Cancel** discards the current drawing session's changes.
+8. **Save the image.** Choose **Image file type**: PNG, JPEG, TIFF, or SVG.
    PNG is a simple choice for a lab notebook. Leave **Print setting (DPI)** at
    its default unless you need a particular print setting. Click
    **Download annotated PNG** (the name follows your chosen format), then choose
@@ -164,7 +171,7 @@ runtime while offline, the downloaded file's SmartScreen experience, and native
 save dialogs have not been manually verified. The installer should be treated
 as awaiting real-PC validation.
 
-The [v1.0.4 release notes](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.4)
+The [v1.0.5 release notes](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.5)
 list the completed checks and remaining limits for each platform, including
 Mac native save-dialog checks for the export fix. Release assets include
 validation records and checksums for inspecting the build evidence.
