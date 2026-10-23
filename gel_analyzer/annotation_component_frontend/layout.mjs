@@ -219,10 +219,10 @@ function layoutLadder(ladder, laneFontSize, annotationTop, measure) {
  * include gelX/gelY, which are the original gel's offset in the final canvas.
  * measureText can be injected for tests; its signature is (text, font).
  */
-export function layoutAnnotations({width, height, lanes = [], annotations = {}, ladder = null, workflow_orientation = "wells_left"}, measureText = browserMeasure) {
+export function layoutAnnotations({width, height, lanes = [], annotations = {}, ladder = null, extractedBands = [], workflow_orientation = "wells_left"}, measureText = browserMeasure) {
   if (ladder?.mode === "manual") {
     const preset = manualLadderAsPreset(ladder, width, height);
-    const layout = layoutAnnotations({width, height, lanes, annotations, ladder: preset, workflow_orientation}, measureText);
+    const layout = layoutAnnotations({width, height, lanes, annotations, ladder: preset, extractedBands, workflow_orientation}, measureText);
     // Editing metadata belongs to the saved native point. Every visible label
     // and dash uses precisely the same gutter geometry as a preset marker.
     for (const label of layout.ladderLabels) {
@@ -236,7 +236,7 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     return layout;
   }
   if (workflow_orientation === "wells_top") {
-    return layoutTopAnnotations({width, height, lanes, annotations, ladder}, measureText);
+    return layoutTopAnnotations({width, height, lanes, annotations, ladder, extractedBands}, measureText);
   }
   if (!Number.isInteger(width) || width < 1 || !Number.isInteger(height) || height < 1) {
     throw new Error("The cropped image could not be loaded. Return to the crop step and try again.");
@@ -381,7 +381,8 @@ export function layoutAnnotations({width, height, lanes = [], annotations = {}, 
     imageWidth: width, imageHeight: height, gelX, gelY, fontSize, requestedFontSize,
     denseFallback: laneTracks.length > 1, reducedFont: fontSize < requestedFontSize, bracketGap,
     laneLabels, groupLabels, brackets, labels: allLabels,
-    ladderLabels, guides, ladderTiers: ladderLayout.tiers};
+    ladderLabels, guides, ladderTiers: ladderLayout.tiers,
+    extractedBands: extractedBands.map(band => ({...band}))};
 }
 
 /** Adapt custom text to the preset renderer without changing saved snapshots. */
@@ -405,7 +406,7 @@ function manualLadderAsPreset(ladder, width, height) {
 /** Reuse measured text, lane membership and group semantics for the top gutter.
  * Geometry changes, while the native gel pixels and saved XY coordinates do not.
  */
-function layoutTopAnnotations({width, height, lanes, annotations, ladder}, measureText) {
+function layoutTopAnnotations({width, height, lanes, annotations, ladder, extractedBands}, measureText) {
   const source = layoutAnnotations({width: height, height: width,
     lanes: lanes.map(([x0, y0, x1, y1]) => [y0, x0, y1, x1]), annotations}, measureText);
   const angle = annotations.laneLabelAngle === 45 ? 45 : 90;
@@ -585,10 +586,11 @@ function layoutTopAnnotations({width, height, lanes, annotations, ladder}, measu
   return {...source, width: outputWidth, height: outputHeight, imageWidth: width, imageHeight: height,
     gelX, gelY, workflow_orientation: "wells_top", laneLabelAngle: angle,
     denseFallback: false, laneFontSize, reducedFont: laneFontSize < source.fontSize - 0.01,
-    labels, brackets, ladderLabels, guides, ladderTiers: ladderLayout.tiers};
+    labels, brackets, ladderLabels, guides, ladderTiers: ladderLayout.tiers,
+    extractedBands: extractedBands.map(band => ({...band}))};
 }
 
-/** Paint only exportable pixels: white margin, unchanged gel, labels, brackets. */
+/** Paint only exportable pixels: white margin, gel, labels, brackets and band outlines. */
 export function drawAnnotations(canvas, image, layout, _annotations) {
   canvas.width = layout.width;
   canvas.height = layout.height;
@@ -598,6 +600,19 @@ export function drawAnnotations(canvas, image, layout, _annotations) {
   context.fillRect(0, 0, layout.width, layout.height);
   // The three-argument form preserves the source gel's pixel dimensions.
   context.drawImage(image, layout.gelX, layout.gelY);
+  context.lineWidth = 2;
+  context.strokeStyle = "#dc2626";
+  context.lineCap = "butt";
+  for (const band of layout.extractedBands ?? []) {
+    const x = layout.gelX + band.x, y = layout.gelY + band.y;
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x + band.width, y);
+    context.lineTo(x + band.width, y + band.height);
+    context.lineTo(x, y + band.height);
+    context.lineTo(x, y);
+    context.stroke();
+  }
   context.lineWidth = 1.5;
   context.lineCap = "butt";
   for (const bracket of layout.brackets) {

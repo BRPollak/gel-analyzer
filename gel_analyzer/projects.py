@@ -22,6 +22,7 @@ from PIL import Image
 
 from .annotation_exports import validate_svg_composition
 from .annotations import validate_annotations
+from .extracted_bands import validate_extracted_bands
 from .image_io import GelImage, GelOrientation, decode_source_image
 from .lane_crop import LaneCrop, validate_lane_adjustments
 from .ladders import validate_ladder
@@ -51,6 +52,7 @@ _DEFAULTS = {
     "annotation_base_png": None, "annotation_base_svg": None,
     "annotation_base_dimensions": None,
     "ladder_data": None, "ladder_draft": None, "ladder_step": "preset",
+    "extracted_bands": [], "extracted_bands_draft": None,
     "band_data": None, "band_geometry": None,
 }
 
@@ -328,7 +330,7 @@ def _validate(state):
             raise ProjectError("The project's crop does not match its reviewed lanes.")
     if state["lane_stage"] == "cropped" and (crop is None or not crop.lanes):
         raise ProjectError("The project's cropped stage is missing its crop.")
-    if state["annotation_stage"] not in ("lanes", "ladder_offer", "ladder", "final"):
+    if state["annotation_stage"] not in ("lanes", "ladder_offer", "ladder", "extracted", "final"):
         raise ProjectError("The project contains an unknown annotation step.")
     if state["ladder_step"] not in ("preset", "lane", "markers"):
         raise ProjectError("The project contains an unknown ladder step.")
@@ -339,7 +341,7 @@ def _validate(state):
     annotation_crop = crop
     geometry = state["annotation_geometry"]
     if annotation_crop is None and geometry is not None:
-        if not isinstance(geometry, tuple) or len(geometry) not in (4, 5):
+        if not isinstance(geometry, tuple) or len(geometry) not in (4, 5, 6):
             raise ProjectError("The project has invalid annotation geometry.")
         _, width, height, lanes, *_ = geometry
         _size((width, height))
@@ -347,12 +349,24 @@ def _validate(state):
             raise ProjectError("The project has invalid annotation lanes.")
         for lane in lanes:
             _bounds(lane, (width, height))
+        if len(geometry) == 6 and (not isinstance(geometry[5], str)
+                                  or re.fullmatch("[0-9a-f]{64}", geometry[5]) is None):
+            raise ProjectError("The project has invalid annotation image identity.")
         annotation_crop = SimpleNamespace(width=width, height=height, lanes=lanes)
     for key in ("ladder_data", "ladder_draft"):
         if state[key] is not None:
             if annotation_crop is None:
                 raise ProjectError("The project's ladder is missing its crop geometry.")
             state[key] = validate_ladder(state[key], annotation_crop)
+    for key in ("extracted_bands", "extracted_bands_draft"):
+        if key == "extracted_bands_draft" and state[key] is None:
+            continue
+        if annotation_crop is None and state[key] != []:
+            raise ProjectError("The project's extracted bands are missing their crop geometry.")
+        state[key] = validate_extracted_bands(state[key], annotation_crop)
+    if state["annotation_stage"] == "extracted" and (
+            not state["annotation_completed"] or state["extracted_bands_draft"] is None):
+        raise ProjectError("The project's extracted bands require completed lane and ladder annotation.")
     bands = state["band_data"]
     if bands is not None:
         if annotation_crop is None or not isinstance(bands, list) or len(bands) != len(annotation_crop.lanes):

@@ -15,7 +15,8 @@ _component = components.declare_component(
 
 def render_annotation_component(crop, *, annotations, token, revision, error, key,
                                 mode="lanes", ladder=None, presets=(),
-                                ladder_step="preset", confirmed_ladder=False):
+                                ladder_step="preset", confirmed_ladder=False,
+                                extracted_bands=()):
     orientation = getattr(crop, "workflow_orientation", "wells_left")
     return _component(
         band_candidates=crop_band_candidates(crop.preview_png, tuple(crop.lanes), orientation,
@@ -26,5 +27,6 @@ def render_annotation_component(crop, *, annotations, token, revision, error, ke
         annotations=annotations, token=token, revision=revision, error=error,
         mode=mode, ladder=ladder, presets=list(presets), ladder_step=ladder_step,
         confirmed_ladder=confirmed_ladder,
+        extracted_bands=list(extracted_bands),
         key=key, default=None,
     )
