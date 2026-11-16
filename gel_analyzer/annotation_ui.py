@@ -302,16 +302,15 @@ def show_annotations(crop, filename: str) -> None:
                             dpi = None
                         else:
                             dpi = st.selectbox("Print setting (DPI)", specification["dpi"],
-                                               index=specification["dpi"].index(300),
+                                               index=specification["dpi"].index(600),
                                                key=f"annotation_export_dpi_{image_format}")
                         st.caption("Your annotated image is ready to download.")
                         if image_format == "SVG":
                             st.caption("SVG keeps labels and brackets sharp when resized and includes the gel image."
                                        if st.session_state.get("annotation_svg") else
                                        "This SVG contains the confirmed image. Edit and confirm annotations again to make labels and brackets scalable.")
-                        else:
-                            st.caption("Leave the print setting as it is unless you need a particular printed size."
-                                       + (" JPEG makes a smaller file but may lose some image detail." if image_format == "JPEG" else ""))
+                        elif image_format == "JPEG":
+                            st.caption("JPEG makes a smaller file but may lose some image detail.")
                         st.button("Edit ladder" if st.session_state.ladder_data else "Annotate ladder",
                                   key="edit_ladder", on_click=start_ladder)
                         st.button("Edit annotations", key="edit_annotations", on_click=edit_annotations)

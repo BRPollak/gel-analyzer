@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .desktop_downloads import download_format, export_extensions, valid_export_path
+from .desktop_preferences import last_directory, remember_directory
 
 
 LOGGER = logging.getLogger("gel_analyzer.desktop")
@@ -23,6 +24,7 @@ class PendingDownload:
         # transfer never deletes or truncates an existing user-approved image.
         try:
             self.path.replace(self.destination)
+            remember_directory("download", self.destination.parent)
         finally:
             self.cancel()
 
@@ -55,7 +57,7 @@ def save_destination(cocoa, response, suggested_filename: str):
     directory = cocoa.Foundation.NSSearchPathForDirectoriesInDomains(
         cocoa.Foundation.NSDownloadsDirectory, cocoa.Foundation.NSUserDomainMask, True,
     )[0]
-    panel.setDirectoryURL_(cocoa.Foundation.NSURL.fileURLWithPath_(directory))
+    panel.setDirectoryURL_(cocoa.Foundation.NSURL.fileURLWithPath_(last_directory("download", directory)))
     filename = Path(suggested_filename).name or "annotated"
     if not valid_export_path(filename, image_format):
         filename = f"{filename.rstrip('.')}.{extension}"

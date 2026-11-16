@@ -4,7 +4,6 @@ Profiles use the middle of each reviewed lane and retain displayed-image XY
 coordinates. These are reviewable proposals, not assignments of ladder sizes.
 """
 
-from functools import lru_cache
 from io import BytesIO
 import math
 import re
@@ -71,12 +70,6 @@ def detect_bands(image: Image.Image, lanes, workflow_orientation="wells_left", *
                                "position": position, "signal": float(residual[peak])})
         results.append(candidates)
     return results
-
-
-@lru_cache(maxsize=4)
-def crop_band_candidates(png: bytes, lanes: tuple, orientation: str, wells: tuple = ()) -> list[list[dict]]:
-    with Image.open(BytesIO(png)) as image:
-        return detect_bands(image, lanes, orientation, wells=wells)
 
 
 def validate_band_rows(rows, lanes, workflow_orientation="wells_left") -> list[list[dict]]:

@@ -345,16 +345,18 @@ test("legacy snapshots use a configured photo only for matching identity and lab
   }, {presets: referencePresets, ladder: {preset, laneIndex: 0, placements: []}, ladderStep: "markers"});
 });
 
-test("top ladder keyboard follows downward migration and detected proposals preserve size assignment", () => harness(h => {
+test("top ladder markers require manual placement and keyboard follows downward migration", () => harness(h => {
   h.select("ladder-preset", "example");
   h.nodes["ladder-continue"].dispatch("click");
   h.select("ladder-lane", "0");
   h.nodes["ladder-use-lane"].dispatch("click");
-  h.nodes["ladder-detect-bands"].dispatch("click");
-  assert.equal(h.nodes["ladder-detected-bands"].children.length, 2);
-  assert.equal(h.nodes["ladder-detected-bands"].children[0].disabled, true, "choose a size before assigning a band");
+  assert.equal(h.nodes["ladder-detect-bands"], undefined);
+  assert.equal(h.nodes["ladder-detected-bands"], undefined);
+  assert.deepEqual(h.state.ladder.placements, []);
+  assert.equal(h.nodes["ladder-lane-outlines"].children.length, 1, "only the selected lane is outlined; no candidate guides");
   h.marker(1).dispatch("click");
-  h.nodes["ladder-detected-bands"].children[0].dispatch("click");
+  assert.deepEqual(h.state.ladder.placements, [], "choosing a size does not place its marker");
+  h.clickImage(15, 44.25);
   assert.deepEqual(h.state.ladder.placements, [{markerIndex: 1, x: 15, y: 44.25}]);
   const cursor = h.nodes["ladder-cursor"];
   cursor.dispatch("keydown", {key: "ArrowDown", shiftKey: true});
@@ -384,7 +386,7 @@ test("Manual ladder is independent of presets and lanes and supports add, edit, 
   assert.equal(h.nodes["ladder-placement-hint"].textContent, "Click a ladder band to add a marker label.");
   assert.equal(h.nodes["ladder-change-lane"].hidden, true);
   assert.equal(h.nodes["ladder-reference"].hidden, true);
-  assert.equal(h.nodes["ladder-detect-bands"].hidden, true);
+  assert.equal(h.nodes["ladder-detect-bands"], undefined);
   const first = manualMarker(h, "500 bp", 20.25, 35.75); // gap outside any lane is valid
   const second = manualMarker(h, "25 kDa", 80.5, 62.25);
   assert.equal(h.state.ladder.placements.length, 2);

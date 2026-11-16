@@ -6,9 +6,23 @@ import logging
 import ntpath
 
 from .desktop_downloads import download_format, export_extensions, valid_export_path
+from .desktop_preferences import last_directory, remember_directory
 
 
 LOGGER = logging.getLogger("gel_analyzer.desktop")
+
+
+def remember_completed_download(operation, destination: str) -> None:
+    """Only update save memory after WebView2 has finished writing the image."""
+    def state_changed(sender, args):
+        state = str(operation.State)
+        if state in ("Completed", "Interrupted"):
+            operation.StateChanged -= state_changed
+            if state == "Completed":
+                remember_directory("download", ntpath.dirname(destination))
+
+    operation.StateChanged += state_changed
+    state_changed(None, None)
 
 
 def install_windows_downloads(edgechromium) -> None:
@@ -45,6 +59,9 @@ def install_windows_downloads(edgechromium) -> None:
             except OSError:
                 # Windows retains a useful default if the Downloads key is absent.
                 pass
+            remembered = last_directory("download")
+            if remembered:
+                dialog.InitialDirectory = remembered
 
             def validate_filename(sender, event):
                 if not valid_export_path(dialog.FileName, image_format):
@@ -94,6 +111,7 @@ def install_windows_downloads(edgechromium) -> None:
                 try:
                     destination = choose_destination(self.form, image_format, suggested_name)
                     if destination is not None:
+                        remember_completed_download(args.DownloadOperation, destination)
                         args.ResultFilePath = destination
                         args.Cancel = False
                 except Exception:

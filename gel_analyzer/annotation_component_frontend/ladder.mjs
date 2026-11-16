@@ -20,11 +20,9 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
   let referenceSignature = "";
   let referenceVisible = true;
   let referenceFailed = false;
-  let candidatesVisible = false;
 
   const top = () => getState()?.workflow_orientation === "wells_top";
   const directions = () => top() ? "Up and Down" : "Left and Right";
-  const candidates = () => getState()?.bandCandidates?.[getState()?.ladder?.laneIndex] ?? [];
   const active = () => getState()?.mode === "ladder";
   const editable = () => active() && !disabled && !pendingChange;
   const placements = () => getState()?.ladder?.placements ?? [];
@@ -65,14 +63,12 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     getState().ladderStep = "markers";
     selectedMarker = null;
     cursor = null;
-    candidatesVisible = false;
     manualEditor.reset();
     changed("Click a ladder band to add a marker label.");
     byId("ladder-heading").focus();
   }
 
   function setLane(index) {
-    candidatesVisible = false;
     getState().ladder = {...getState().ladder, laneIndex: index, placements: []};
     cursor = selectedMarker === null ? null : cursorForMarker(getState().ladder, selectedMarker, getState().lanes);
     changed(`Lane ${index + 1} selected.`);
@@ -167,18 +163,6 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
         : `Click the ${markerLabel()} band in the highlighted lane.`;
     byId("ladder-count").textContent = `${placements().length} of ${labels.length} sizes placed`;
     byId("ladder-remove-marker").hidden = selectedMarker === null || !isPlaced(selectedMarker);
-    byId("ladder-detected-bands").hidden = !candidatesVisible;
-    byId("ladder-detected-bands").replaceChildren();
-    if (candidatesVisible) {
-      candidates().forEach((candidate, index) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = `Band ${index + 1}`;
-        button.disabled = selectedMarker === null || !editable();
-        button.addEventListener("click", () => place({x: candidate.x, y: candidate.y}));
-        byId("ladder-detected-bands").appendChild(button);
-      });
-    }
   }
 
   function renderReference(state) {
@@ -244,16 +228,6 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
       layer.appendChild(rect);
     });
     const lane = state.lanes[state.ladder?.laneIndex];
-    if (candidatesVisible && lane && state.ladderStep === "markers") {
-      for (const candidate of candidates()) {
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        const coordinates = top()
-          ? {x1: layout.gelX + lane[0], x2: layout.gelX + lane[2], y1: layout.gelY + candidate.y, y2: layout.gelY + candidate.y}
-          : {x1: layout.gelX + candidate.x, x2: layout.gelX + candidate.x, y1: layout.gelY + lane[1], y2: layout.gelY + lane[3]};
-        for (const [key, value] of Object.entries({...coordinates, stroke: "#9333ea", "stroke-width": 1, "stroke-dasharray": "3 3", "vector-effect": "non-scaling-stroke"})) line.setAttribute(key,value);
-        layer.appendChild(line);
-      }
-    }
     const showCursor = state.ladderStep === "markers" && selectedMarker !== null && cursor && lane;
     cursorNode.setAttribute("visibility", showCursor ? "visible" : "hidden");
     cursorNode.setAttribute("tabindex", showCursor && !disabled && !pendingChange ? "0" : "-1");
@@ -307,6 +281,8 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     byId("ladder-preset-hint").textContent = choices.length ? "Choose the ladder used in this gel."
       : "No ladder presets are configured. Choose Manual ladder to add your own labels.";
     byId("ladder-back").hidden = step === "preset";
+    byId("ladder-navigation").hidden = step === "preset";
+    byId("ladder-change-options").hidden = step !== "markers";
     byId("ladder-change-preset").hidden = step !== "markers";
     byId("ladder-change-lane").hidden = step !== "markers" || manual();
     byId("ladder-change-preset").textContent = manual() ? "Change ladder" : "Change preset";
@@ -316,7 +292,7 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     byId("ladder-guard").hidden = !pendingChange;
     byId("ladder-guard-message").textContent = pendingChange?.message ?? "";
     byId("ladder-accept-change").textContent = pendingChange?.kind === "remove" ? "Remove ladder" : "Change and clear markers";
-    for (const id of ["ladder-detect-bands", "ladder-keyboard", "ladder-remove-marker", "ladder-detected-bands"]) byId(id).hidden = manual();
+    for (const id of ["ladder-keyboard", "ladder-remove-marker"]) byId(id).hidden = manual();
     byId("ladder-manual").textContent = manual() ? "Continue manual ladder" : "Manual ladder";
     if (manual()) markerSignature = "";
     else {
@@ -328,7 +304,6 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     for (const container of [byId("ladder-panel"), byId("ladder-actions")]) {
       container.querySelectorAll("button, select, input").forEach(node => { node.disabled = disabled || Boolean(pendingChange); });
     }
-    byId("ladder-detected-bands").querySelectorAll("button").forEach(node => { node.disabled ||= selectedMarker === null; });
     for (const name of ["ladder-accept-change", "ladder-keep-current"]) byId(name).disabled = disabled;
     byId("ladder-continue").disabled ||= !state.ladder?.preset;
     byId("ladder-use-lane").disabled ||= state.ladder?.laneIndex == null;
@@ -399,14 +374,6 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
     changed(`${markerLabel()} removed. Click its band to place it again.`);
     markerNodes.get(selectedMarker)?.button.focus();
   });
-  byId("ladder-detect-bands").addEventListener("click", () => {
-    if (!editable()) return;
-    candidatesVisible = !candidatesVisible;
-    render();
-    status(candidatesVisible ? (candidates().length
-      ? `${candidates().length} candidate bands detected. Choose a size, then a detected band. Check assignments before confirming.`
-      : "No candidate bands detected in this lane. Place markers manually on the gel.") : "Detected band guides hidden.");
-  });
   byId("ladder-keyboard").addEventListener("click", () => {
     if (!editable() || selectedMarker === null) return;
     cursorNode.focus();
@@ -466,7 +433,6 @@ export function createLadderEditor({getState, getLayout, canvas, onChange, onAct
 
   function reset() {
     manualEditor.reset();
-    candidatesVisible = false;
     selectedMarker = null;
     cursor = null;
     pendingChange = null;

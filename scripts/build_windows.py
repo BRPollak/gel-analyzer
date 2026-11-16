@@ -39,6 +39,7 @@ REQUIRED_RESOURCES = (
     "app.py", ".streamlit/config.toml", "GelAnalyzer.ico",
     "streamlit/static/index.html", "gel_analyzer/ladder_presets.json",
     "gel_analyzer/viewport.html",
+    "gel_analyzer/desktop_uploads.js",
     "gel_analyzer/orientation_component_frontend/index.html",
     "gel_analyzer/well_component_frontend/index.html",
     "gel_analyzer/annotation_component_frontend/index.html",
