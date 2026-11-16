@@ -510,7 +510,7 @@ def drive_native_dialog(trigger, respond) -> dict:
     """Start the Win32 responder before a browser click can enter modal UI.
 
     Playwright remains on its original thread; only independent Win32 calls
-    run in the responder. The trigger also defers its click until JS returns.
+    run in the responder, so even a modal browser click can finish safely.
     """
     stopped = threading.Event()
     results, errors = [], []
@@ -712,10 +712,15 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
     dialogs = []
     diagnostics = output / "native-dialogs.json"
 
-    def choose(locator, selection=None, *, overwrite=False, cancel=False):
+    def choose(locator, selection=None, *, overwrite=False, cancel=False, download=False):
         try:
+            # Every download needs fresh user activation. Deferred DOM click()
+            # can open the first Save dialog but suppress later downloads.
+            # Uploads use the app's bridge and their file input is hidden.
+            trigger = (lambda: locator.click(no_wait_after=True)) if download else (
+                lambda: locator.evaluate("node => { setTimeout(() => node.click(), 0); }"))
             result = drive_native_dialog(
-                lambda: locator.evaluate("node => { setTimeout(() => node.click(), 0); }"),
+                trigger,
                 lambda stopped: ui.respond_file(pid, selection, stopped, overwrite=overwrite, cancel=cancel))
             dialogs.append(result)
             diagnostics.write_text(json.dumps(dialogs, indent=2), encoding="utf-8")
@@ -755,7 +760,7 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
     expect(png_button).to_be_visible()
     # Populate a known destination before Cancel, so the assertion detects a
     # save despite cancellation rather than checking an unrelated directory.
-    choose(png_button, export_directory / "cancelled α export.png", cancel=True)
+    choose(png_button, export_directory / "cancelled α export.png", cancel=True, download=True)
     assert not list(export_directory.iterdir()), "Cancelled native export created a file"
     expect(png_button).to_be_visible()
     exports = []
@@ -765,7 +770,7 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
         save_button = page.get_by_role("button", name=f"Download annotated {image_format}", exact=True)
         selected = export_directory / f"native α label {image_format}{suffix}"
         destination = selected.with_suffix(".png") if not suffix else selected
-        result = choose(save_button, selected)
+        result = choose(save_button, selected, download=True)
         result["requested_path"] = str(selected)
         result["saved_path"] = str(destination)
         exports.append(wait_for_export(destination, image_format))
@@ -777,7 +782,7 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
     overwritten = export_directory / "overwrite α image.png"
     overwritten.write_bytes(b"existing smoke fixture")
     choose(page.get_by_role("button", name="Download annotated PNG", exact=True), overwritten,
-           overwrite=True)
+           overwrite=True, download=True)
     overwrite_export = wait_for_export(overwritten, "PNG")
     expect(page.get_by_test_id("stException")).to_have_count(0)
     diagnostics.write_text(json.dumps(dialogs, indent=2), encoding="utf-8")
