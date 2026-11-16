@@ -2,10 +2,32 @@
 
 The annotation focus correction is restricted to the Windows desktop backend.
 The source suites and complete installed-app validation pass on both Windows
-Server 2022 and 2025. The fixes remain on the validation branch; no release
-was published and no Mac release was changed.
+Server 2022 and 2025. The fixes were merged in
+[PR #21](https://github.com/BRPollak/gel-analyzer/pull/21). The Windows assets
+on [release 1.0.6](https://github.com/BRPollak/gel-analyzer/releases/tag/v1.0.6)
+were refreshed; the Mac assets and original release tag are unchanged.
 
-## Exact application under test
+## Published Windows installer
+
+The published installer was rebuilt from merged main commit
+`57d9de543c620b7beb08faae677ce073b9e5e85f` in
+[run 43981787159](https://github.com/BRPollak/gel-analyzer/actions/runs/43981787159).
+All jobs passed: 1,471 Python tests (15 skipped) and 184 JavaScript tests on
+each Windows platform; 49 Mac lifecycle tests (1 skipped); build, simulated
+upgrade, and complete installed-app validation on Windows Server 2022 and 2025.
+Native typing preserved focus and caret across 28 and 29 autosave reruns.
+
+- File: `Gel-Analyzer-1.0.6-Windows-x64-Setup.exe` (276,990,828 bytes).
+- SHA-256: `778aeb6691ea66532bf4792fd07f88ac5b538bbcb7b88632fb1724eddd3be210`.
+- The Windows validation archive and checksum file were refreshed alongside
+  the installer. Mac asset IDs, sizes, digests, and update times were preserved.
+- The `v1.0.6` tag still points to the original release, so its automatic source
+  archives retain that source. Use the commit above for the Windows hotfix.
+
+The sections below preserve the earlier candidate's investigation and validation
+record. Its installer hash differs from the final rebuild above.
+
+## Exact candidate application under test
 
 - Application commit: `1ed5e7717c64aa90e63fb6c1df1f6ea26321dd90`.
 - Installer: `Gel-Analyzer-1.0.6-Windows-x64-Setup.exe` (276,986,773 bytes).
