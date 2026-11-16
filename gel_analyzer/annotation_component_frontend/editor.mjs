@@ -5,7 +5,7 @@ import {createExtractedBandEditor} from "./extracted_bands.mjs";
 import {createGroupEditor} from "./groups.mjs";
 import {annotationPreviewBudget} from "./ladder_geometry.mjs";
 import {selectLabelKeys, selectedFormatting, formatSelectedLabels} from "./label_selection.mjs";
-import {navigateLaneLabel} from "./label_navigation.mjs";
+import {handleLabelKeydown} from "./label_keyboard.mjs";
 import {cleanText, cleanStyle, labelRuns, textSnapshot, editText,
   readSelection, restoreSelection, renderRuns} from "./rich_text.mjs";
 
@@ -270,14 +270,10 @@ function updateInputs() {
         captureSelection();
       });
       node.addEventListener("drop", event => event.preventDefault());
-      node.addEventListener("keydown", event => {
-        if (navigateLaneLabel(event, node, inputNodes)) { captureSelection(); return; }
-        if ((event.ctrlKey || event.metaKey) && ["b", "i"].includes(event.key.toLowerCase())) {
-          event.preventDefault(); applyFormat(event.key.toLowerCase() === "b" ? "bold" : "italic"); return;
-        }
-        if ((event.ctrlKey || event.metaKey) && ["z", "y"].includes(event.key.toLowerCase())) {
-          event.preventDefault();
-          const redo = event.shiftKey || event.key.toLowerCase() === "y";
+      node.addEventListener("keydown", event => handleLabelKeydown(event, {
+        windowsDesktop: state.windowsDesktop,
+        composing, node, inputNodes, inputLayer, captureSelection, applyFormat,
+        undoRedo: redo => {
           const history = histories.get(box.key);
           const from = history?.[redo ? "redo" : "undo"];
           if (from?.length) {
@@ -288,15 +284,8 @@ function updateInputs() {
             if (!value.runs) value.runs = labelRuns(value, box.key.startsWith("lane:") ? "text" : "label");
             textSelection = null; changed();
           }
-          return;
-        }
-        if (event.key === "Enter") { event.preventDefault(); node.blur(); }
-        if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.altKey && !event.ctrlKey && !event.metaKey) {
-          const nodes = [...inputLayer.querySelectorAll(".image-label")];
-          const next = nodes[nodes.indexOf(node) + (event.key === "ArrowUp" ? -1 : 1)];
-          if (next) { event.preventDefault(); next.focus(); restoreSelection(next, {start: 0, end: next.textContent.length}); }
-        }
-      });
+        },
+      }));
       inputLayer.appendChild(node);
       inputNodes.set(box.key, node);
     }
@@ -644,6 +633,7 @@ window.addEventListener("message", event => {
     previewError = "";
     revision = incomingRevision;
     state = {token: args.token, width: args.width, height: args.height,
+      windowsDesktop: args.windows_desktop === true,
       lanes: args.lanes.map(lane => [...lane]),
       workflow_orientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
       mode: ["ladder", "extracted"].includes(args.mode) ? args.mode : "lanes",
@@ -656,6 +646,7 @@ window.addEventListener("message", event => {
     extractedBandEditor.reset();
     syncMode();
     component.dataset.token = args.token;
+    component.dataset.windowsDesktop = String(state.windowsDesktop);
     component.dataset.revision = String(revision);
     inputLayer.replaceChildren();
     inputNodes.clear();
