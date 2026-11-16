@@ -88,10 +88,11 @@ function Invoke-Uninstall {
     Assert-True ($process.ExitCode -eq 0) "Uninstaller exited with $($process.ExitCode)"
     # Inno's original uninstaller can exit before its temporary cleanup finishes.
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while ((Test-Path $executable) -and [DateTime]::UtcNow -lt $deadline) {
+    while ((Test-Path $installDirectory) -and [DateTime]::UtcNow -lt $deadline) {
         Start-Sleep -Milliseconds 200
     }
     Assert-True (-not (Test-Path $executable)) "App executable survived uninstall"
+    Assert-True (-not (Test-Path $installDirectory)) "App installation folder or bundled dependencies survived uninstall: $installDirectory"
     Assert-True (-not (Test-Path $registryPath)) "Uninstall registration survived uninstall"
     Assert-True (-not (Test-Path $startMenuShortcut)) "Start menu shortcut survived uninstall"
     Assert-True (-not (Test-Path $desktopShortcut)) "Desktop shortcut survived uninstall"
@@ -131,7 +132,7 @@ try {
     foreach ($runtime in $runtimeBeforeUninstall) {
         Assert-True (Test-Path $runtime) "Uninstall removed shared WebView2 runtime: $runtime"
     }
-    $results.checks.Add("Uninstall removes app, registration, and shortcuts")
+    $results.checks.Add("Uninstall removes the entire app and dependency folder, registration, and shortcuts")
     $results.checks.Add("Shared WebView2 runtime retained after uninstall")
     $results.status = "passed"
 } catch {

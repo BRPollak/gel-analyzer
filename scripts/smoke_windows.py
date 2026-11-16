@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from urllib.error import URLError
@@ -189,6 +190,179 @@ def choose_option(page, label: str, value: str):
     page.get_by_role("option", name=value, exact=True).click()
 
 
+def prepare_annotations(page, output: Path, *, upload=None):
+    """Reach annotation editing through the same UI in Chromium and WebView2."""
+    from playwright.sync_api import expect
+
+    expect.set_options(timeout=45_000)
+    # Observe rerun completion without replacing component events or
+    # application state. Old attribute values retain even transitions
+    # too quick for Playwright polling, and this survives iframe remounts.
+    page.evaluate("""() => {
+        window.gelSmokeRunCompletions = 0;
+        new MutationObserver(records => {
+            for (const record of records) {
+                if (record.target.matches('[data-testid="stApp"]') &&
+                    record.oldValue === "running" &&
+                    record.target.getAttribute("data-test-script-state") === "notRunning") {
+                    window.gelSmokeRunCompletions++;
+                }
+            }
+        }).observe(document.documentElement, {
+            subtree: true, attributes: true, attributeOldValue: true,
+            attributeFilter: ["data-test-script-state"]
+        });
+    }""")
+    fixtures = synthetic_images(output / "synthetic-inputs")
+    for index, fixture in enumerate(fixtures):
+        if index:
+            page.get_by_role("button", name="Replace image", exact=True).click()
+        expect(page.locator('input[type="file"]')).to_have_value("")
+        if upload is None:
+            page.locator('input[type="file"]').set_input_files(fixture)
+        else:
+            upload(fixture)
+        # The uploader shows its selected filename before the server
+        # has processed it. Wait for the analysis preview's st.text, so
+        # replacements cannot race callbacks.
+        expect(page.get_by_test_id("stText")).to_have_text(fixture.name)
+        expect(page.get_by_test_id("stImage").locator("img")).to_be_visible()
+        if index:
+            # Close the popover before interacting with the analysis.
+            page.keyboard.press("Escape")
+        expect(button(page, "rotate_and_orient")).to_be_enabled()
+        expect(page.get_by_test_id("stException")).to_have_count(0)
+
+    # Exercise the shipped orientation component, then use the known
+    # synthetic automatic orientation to keep the guide coordinates fixed.
+    button(page, "adjust_orientation_manually").click()
+    orientation = component_frame(page, "orientation_rectangle")
+    expect(orientation.locator("#gel")).to_be_visible()
+    expect(orientation.locator("#draw-new")).to_be_enabled()
+    orientation.locator("#draw-new").click()
+    button(page, "cancel_manual_orientation").click()
+    expect(page.locator('iframe[src*="orientation_rectangle"]')).to_have_count(0)
+    button(page, "rotate_and_orient").click()
+    button(page, "confirm_orientation").click()
+    button(page, "define_wells").click()
+    count = page.get_by_role("spinbutton", name="Number of wells", exact=True)
+    overlay = component_frame(page, "well_line_overlay")
+    svg = overlay.locator("#gel")
+    expect(svg).to_be_visible()
+    expect(svg).to_have_attribute("data-editable", "true")
+    original_token = svg.get_attribute("data-token")
+    assert original_token, "Well component did not receive its initial state"
+    if count.input_value() != "4":
+        count.fill("4")
+        count.press("Enter")
+        # Changing the well count creates a new component session. Wait
+        # for that server rerender before clicks, or the count callback
+        # can discard points drawn on the previous token.
+        expect(svg).not_to_have_attribute("data-token", original_token)
+    expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
+    expect(svg).to_have_attribute("data-editable", "true")
+    expect(svg).to_have_attribute("data-point-count", "0")
+    guide_token = svg.get_attribute("data-token")
+    assert guide_token
+    for index, (x, y) in enumerate(((36, 36), (36, 291)), start=1):
+        ready_svg = overlay.locator(
+            f'#gel[data-token="{guide_token}"][data-editable="true"]'
+            f'[data-point-count="{index - 1}"]')
+        # Remeasure after each acknowledgement: fitting and iframe
+        # layout can change as the instruction text is updated.
+        bounds = ready_svg.bounding_box()
+        dimensions = ready_svg.evaluate(
+            "(node) => [node.viewBox.baseVal.width, node.viewBox.baseVal.height]")
+        assert bounds and dimensions[0] > 0 and dimensions[1] > 0
+        completed_runs = page.evaluate("window.gelSmokeRunCompletions")
+        ready_svg.click(position={"x": x / dimensions[0] * bounds["width"],
+                                  "y": y / dimensions[1] * bounds["height"]})
+        page.wait_for_function(
+            "(completed) => window.gelSmokeRunCompletions > completed",
+            arg=completed_runs)
+        expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
+        expect(svg).to_have_attribute("data-token", guide_token)
+        expect(svg).to_have_attribute("data-point-count", str(index))
+    expect(button(page, "confirm_well_line")).to_be_enabled()
+    button(page, "confirm_well_line").click()
+    expect(page.get_by_text("Prepared 4 wells and 4 horizontal lanes.", exact=True)).to_be_visible()
+    button(page, "adjust_lane_borders").click()
+    review = component_frame(page, "well_line_overlay")
+    expect(review.locator("#gel")).to_have_attribute("data-review-mode", "borders")
+    expect(review.locator("#lane-review")).to_be_visible()
+    button(page, "confirm_lane_borders").click()
+    expect(review.locator("#gel")).to_have_attribute("data-review-mode", "extent")
+    button(page, "confirm_lane_crop").click()
+    editor = component_frame(page, "lane_annotations")
+    labels = editor.locator('.image-label[contenteditable="true"]')
+    expect(labels).to_have_count(4)
+    expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
+    return editor, fixtures
+
+
+def check_annotation_typing(page, editor) -> dict:
+    """Use a single click and actual keyboard events across autosave reruns.
+
+    Locator.fill/press can focus their target again, concealing the reported
+    interruption. Keyboard events here go only to the current active element.
+    """
+    from playwright.sync_api import expect
+
+    labels = editor.locator('.image-label[contenteditable="true"]')
+    first, second = labels.nth(0), labels.nth(1)
+    first.click()
+    expect(first).to_be_focused()
+    page.keyboard.press("ControlOrMeta+A")
+    iframe = page.locator('iframe[src*="lane_annotations"]')
+    iframe.evaluate("(node) => { window.gelSmokeAnnotationFrame = node; }")
+    first.evaluate("""node => {
+        window.gelSmokeTyping = {node, blurCount: 0};
+        node.addEventListener("blur", () => window.gelSmokeTyping.blurCount++);
+    }""")
+    initial_runs = page.evaluate("window.gelSmokeRunCompletions")
+
+    def assert_typing_target(label, text):
+        expect(label).to_be_focused()
+        expect(label).to_have_text(text)
+        assert iframe.evaluate("""node => window.gelSmokeAnnotationFrame === node &&
+            document.activeElement === node"""), "Annotation iframe was replaced or lost focus"
+        assert label.evaluate("""node => {
+            const selection = window.getSelection();
+            if (!selection?.rangeCount || !selection.isCollapsed ||
+                !node.contains(selection.anchorNode)) return false;
+            const prefix = selection.getRangeAt(0).cloneRange();
+            prefix.selectNodeContents(node);
+            prefix.setEnd(selection.anchorNode, selection.anchorOffset);
+            return prefix.toString().length === node.textContent.length;
+        }"""), "Text caret moved away from the end of the label"
+
+    expected = ""
+    for character in "Windows smoke lane":
+        # Each key takes longer than the editor's 120 ms autosave interval.
+        # No click, focus(), locator.press(), or fill() repairs lost focus.
+        page.keyboard.type(character, delay=180)
+        expected += character
+        assert_typing_target(first, expected)
+        assert first.evaluate("""node => window.gelSmokeTyping?.node === node &&
+            window.gelSmokeTyping.blurCount === 0"""), "Typing blurred or replaced the label"
+    page.wait_for_function("runs => window.gelSmokeRunCompletions > runs", arg=initial_runs)
+    expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
+    assert_typing_target(first, expected)
+    completed_runs = page.evaluate("window.gelSmokeRunCompletions") - initial_runs
+
+    page.keyboard.press("Tab")
+    expect(second).to_be_focused()
+    for index, character in enumerate("Second label", start=1):
+        page.keyboard.type(character, delay=180)
+        assert_typing_target(second, "Second label"[:index])
+    page.keyboard.press("Shift+Tab")
+    expect(first).to_be_focused()
+    expect(first).to_have_text(expected)
+    return {"slow_typing_characters": len(expected) + len("Second label"),
+            "completed_reruns_during_first_label": completed_runs,
+            "focus_and_caret_preserved": True, "tab_navigation": True}
+
+
 def browser_smoke(url: str, output: Path) -> dict:
     from playwright.sync_api import expect, sync_playwright
 
@@ -209,105 +383,8 @@ def browser_smoke(url: str, output: Path) -> dict:
         try:
             page.goto(url, wait_until="domcontentloaded")
             expect(page.get_by_role("heading", name="Agarose Gel Analyzer")).to_be_visible()
-            # Observe rerun completion without replacing component events or
-            # application state. Old attribute values retain even transitions
-            # too quick for Playwright polling, and this survives iframe remounts.
-            page.evaluate("""() => {
-                window.gelSmokeRunCompletions = 0;
-                new MutationObserver(records => {
-                    for (const record of records) {
-                        if (record.target.matches('[data-testid="stApp"]') &&
-                            record.oldValue === "running" &&
-                            record.target.getAttribute("data-test-script-state") === "notRunning") {
-                            window.gelSmokeRunCompletions++;
-                        }
-                    }
-                }).observe(document.documentElement, {
-                    subtree: true, attributes: true, attributeOldValue: true,
-                    attributeFilter: ["data-test-script-state"]
-                });
-            }""")
-            fixtures = synthetic_images(output / "synthetic-inputs")
-            for index, fixture in enumerate(fixtures):
-                if index:
-                    page.get_by_role("button", name="Replace image", exact=True).click()
-                expect(page.locator('input[type="file"]')).to_have_value("")
-                page.locator('input[type="file"]').set_input_files(fixture)
-                # The uploader shows its selected filename before the server
-                # has processed it. Wait for the analysis preview's st.text, so
-                # replacements cannot race callbacks.
-                expect(page.get_by_test_id("stText")).to_have_text(fixture.name)
-                expect(page.get_by_test_id("stImage").locator("img")).to_be_visible()
-                if index:
-                    # Close the popover before interacting with the analysis.
-                    page.keyboard.press("Escape")
-                expect(button(page, "rotate_and_orient")).to_be_enabled()
-                expect(page.get_by_test_id("stException")).to_have_count(0)
-
-            # Exercise the shipped orientation component, then use the known
-            # synthetic automatic orientation to keep the guide coordinates fixed.
-            button(page, "adjust_orientation_manually").click()
-            orientation = component_frame(page, "orientation_rectangle")
-            expect(orientation.locator("#gel")).to_be_visible()
-            expect(orientation.locator("#draw-new")).to_be_enabled()
-            orientation.locator("#draw-new").click()
-            button(page, "cancel_manual_orientation").click()
-            expect(page.locator('iframe[src*="orientation_rectangle"]')).to_have_count(0)
-            button(page, "rotate_and_orient").click()
-            button(page, "confirm_orientation").click()
-            button(page, "define_wells").click()
-            count = page.get_by_role("spinbutton", name="Number of wells", exact=True)
-            overlay = component_frame(page, "well_line_overlay")
-            svg = overlay.locator("#gel")
-            expect(svg).to_be_visible()
-            expect(svg).to_have_attribute("data-editable", "true")
-            original_token = svg.get_attribute("data-token")
-            assert original_token, "Well component did not receive its initial state"
-            if count.input_value() != "4":
-                count.fill("4")
-                count.press("Enter")
-                # Changing the well count creates a new component session. Wait
-                # for that server rerender before clicks, or the count callback
-                # can discard points drawn on the previous token.
-                expect(svg).not_to_have_attribute("data-token", original_token)
-            expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
-            expect(svg).to_have_attribute("data-editable", "true")
-            expect(svg).to_have_attribute("data-point-count", "0")
-            guide_token = svg.get_attribute("data-token")
-            assert guide_token
-            for index, (x, y) in enumerate(((36, 36), (36, 291)), start=1):
-                ready_svg = overlay.locator(
-                    f'#gel[data-token="{guide_token}"][data-editable="true"]'
-                    f'[data-point-count="{index - 1}"]')
-                # Remeasure after each acknowledgement: fitting and iframe
-                # layout can change as the instruction text is updated.
-                bounds = ready_svg.bounding_box()
-                dimensions = ready_svg.evaluate(
-                    "(node) => [node.viewBox.baseVal.width, node.viewBox.baseVal.height]")
-                assert bounds and dimensions[0] > 0 and dimensions[1] > 0
-                completed_runs = page.evaluate("window.gelSmokeRunCompletions")
-                ready_svg.click(position={"x": x / dimensions[0] * bounds["width"],
-                                          "y": y / dimensions[1] * bounds["height"]})
-                page.wait_for_function(
-                    "(completed) => window.gelSmokeRunCompletions > completed",
-                    arg=completed_runs)
-                expect(page.get_by_test_id("stApp")).to_have_attribute("data-test-script-state", "notRunning")
-                expect(svg).to_have_attribute("data-token", guide_token)
-                expect(svg).to_have_attribute("data-point-count", str(index))
-            expect(button(page, "confirm_well_line")).to_be_enabled()
-            button(page, "confirm_well_line").click()
-            expect(page.get_by_text("Prepared 4 wells and 4 horizontal lanes.", exact=True)).to_be_visible()
-            button(page, "adjust_lane_borders").click()
-            review = component_frame(page, "well_line_overlay")
-            expect(review.locator("#gel")).to_have_attribute("data-review-mode", "borders")
-            expect(review.locator("#lane-review")).to_be_visible()
-            button(page, "confirm_lane_borders").click()
-            expect(review.locator("#gel")).to_have_attribute("data-review-mode", "extent")
-            button(page, "confirm_lane_crop").click()
-            editor = component_frame(page, "lane_annotations")
-            labels = editor.locator('.image-label[contenteditable="true"]')
-            expect(labels).to_have_count(4)
-            labels.first.fill("Windows smoke lane")
+            editor, fixtures = prepare_annotations(page, output)
+            typing = check_annotation_typing(page, editor)
             editor.locator("#confirm").click()
             button(page, "skip_ladder").click()
 
@@ -342,7 +419,7 @@ def browser_smoke(url: str, output: Path) -> dict:
             assert not browser_errors, f"Browser errors: {browser_errors}"
             assert not requests, f"Failed HTTP responses: {requests}"
             page.screenshot(path=str(output / "export-workspace.png"), full_page=True)
-            return {"uploads": [path.name for path in fixtures], "exports": exports,
+            return {"uploads": [path.name for path in fixtures], "exports": exports, "typing": typing,
                     "components": ["manual orientation", "well guide", "lane review", "annotations"]}
         except BaseException:
             page.screenshot(path=str(output / "failure.png"), full_page=True)
@@ -401,6 +478,86 @@ def frozen_backend(executable: Path, output: Path):
             wait_until(lambda: not healthy(url), "closed backend listener", timeout=10)
 
 
+def filename_edit(controls: list[dict]) -> int | None:
+    """Find the filename field, excluding the dialog's search/address editors.
+
+    Common file dialogs identify the filename as edt1 (0x480) or a child of
+    cmb13 (0x47c). The modern dialog nests its Edit below that filename combo.
+    Never fall back to an arbitrary Edit, which could be the search field.
+    """
+    indexed = {control["handle"]: control for control in controls}
+    for control in controls:
+        if control["class"] != "Edit" or not control["visible"]:
+            continue
+        candidate = control
+        seen = set()
+        while candidate and candidate["handle"] not in seen:
+            seen.add(candidate["handle"])
+            if candidate["id"] in (0x480, 0x47C):
+                return control["handle"]
+            candidate = indexed.get(candidate["parent"])
+    return None
+
+
+def drive_native_dialog(trigger, respond) -> dict:
+    """Start the Win32 responder before a browser click can enter modal UI.
+
+    Playwright remains on its original thread; only independent Win32 calls
+    run in the responder. The trigger also defers its click until JS returns.
+    """
+    stopped = threading.Event()
+    results, errors = [], []
+
+    def worker():
+        try:
+            results.append(respond(stopped))
+        except BaseException as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=worker, daemon=True, name="native-file-dialog")
+    thread.start()
+    try:
+        trigger()
+        thread.join(timeout=50)
+        if thread.is_alive():
+            raise AssertionError("Native file dialog did not finish within 50 seconds")
+        if errors:
+            raise errors[0]
+        assert results, "Native dialog returned no verification result"
+        return results[0]
+    finally:
+        stopped.set()
+        thread.join(timeout=1)
+
+
+def inspect_export(destination: Path, image_format: str) -> dict:
+    data = destination.read_bytes()
+    assert len(data) > 100, f"{image_format} export is empty"
+    if image_format == "SVG":
+        document = ElementTree.fromstring(data)
+        assert document.tag == "{http://www.w3.org/2000/svg}svg"
+        assert "Windows smoke lane" in data.decode("utf-8")
+        details = {"format": "SVG"}
+    else:
+        with Image.open(BytesIO(data)) as exported:
+            exported.load()
+            assert exported.format == image_format
+            assert min(exported.size) > 0
+            details = {"format": exported.format, "size": list(exported.size)}
+    return {"file": destination.name, "bytes": len(data), **details}
+
+
+def wait_for_export(destination: Path, image_format: str) -> dict:
+    """Wait for WebView2 to finish writing, then validate actual file contents."""
+    def ready():
+        try:
+            return inspect_export(destination, image_format)
+        except (OSError, ValueError, AssertionError, ElementTree.ParseError):
+            return None
+
+    return wait_until(ready, f"completed native {image_format} export: {destination}", timeout=30)
+
+
 class WindowsUI:
     """Small Win32 helper restricted to visible windows belonging to our PID."""
 
@@ -408,6 +565,7 @@ class WindowsUI:
         self.api = ctypes.WinDLL("user32", use_last_error=True)
         self.callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self.api.EnumWindows.argtypes = [self.callback, wintypes.LPARAM]
+        self.api.EnumChildWindows.argtypes = [wintypes.HWND, self.callback, wintypes.LPARAM]
         self.api.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         self.api.IsWindowVisible.argtypes = [wintypes.HWND]
         self.api.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
@@ -415,6 +573,99 @@ class WindowsUI:
         self.api.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         self.api.GetDlgItem.argtypes = [wintypes.HWND, ctypes.c_int]
         self.api.GetDlgItem.restype = wintypes.HWND
+        self.api.GetDlgCtrlID.argtypes = [wintypes.HWND]
+        self.api.GetParent.argtypes = [wintypes.HWND]
+        self.api.GetParent.restype = wintypes.HWND
+        self.api.IsWindow.argtypes = [wintypes.HWND]
+        self.api.GetForegroundWindow.restype = wintypes.HWND
+        self.api.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                               wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
+                                               ctypes.POINTER(ctypes.c_size_t)]
+        self.api.SendMessageTimeoutW.restype = wintypes.LPARAM
+
+    def class_name(self, handle: int) -> str:
+        value = ctypes.create_unicode_buffer(256)
+        self.api.GetClassNameW(handle, value, len(value))
+        return value.value
+
+    def send(self, handle: int, message: int, wparam=0, lparam=0) -> int:
+        result = ctypes.c_size_t()
+        if not self.api.SendMessageTimeoutW(handle, message, wparam, lparam, 0x3, 3000,
+                                           ctypes.byref(result)):
+            raise OSError(f"Native control {handle} did not answer message {message:#x}")
+        return result.value
+
+    def control_text(self, handle: int) -> str:
+        # Unlike GetWindowText, WM_GETTEXT retrieves child edit values in the
+        # other process. Windows marshals messages below WM_USER for us.
+        value = ctypes.create_unicode_buffer(4096)
+        self.send(handle, 0x000D, len(value), ctypes.addressof(value))  # WM_GETTEXT
+        return value.value
+
+    def controls(self, dialog: int) -> list[dict]:
+        found = []
+
+        @self.callback
+        def collect(handle, _):
+            found.append({"handle": handle, "parent": self.api.GetParent(handle),
+                          "id": self.api.GetDlgCtrlID(handle), "class": self.class_name(handle),
+                          "visible": bool(self.api.IsWindowVisible(handle))})
+            return True
+
+        self.api.EnumChildWindows(dialog, collect, 0)
+        return found
+
+    def dialog_snapshot(self, pid: int) -> list[dict]:
+        return [{"handle": handle, "title": title, "class": self.class_name(handle),
+                 "foreground": handle == self.api.GetForegroundWindow(),
+                 "controls": self.controls(handle)} for handle, title in self.windows(pid)]
+
+    def file_dialog(self, pid: int):
+        for handle, title in self.windows(pid):
+            if self.class_name(handle) != "#32770":
+                continue
+            controls = self.controls(handle)
+            edit = filename_edit(controls)
+            if edit:
+                return handle, title, edit, controls
+        return None
+
+    def respond_file(self, pid: int, selection: Path | None, stopped: threading.Event,
+                     *, overwrite=False, cancel=False) -> dict:
+        def active(check):
+            if stopped.is_set():
+                raise AssertionError("Native dialog action was cancelled by the harness")
+            return check()
+
+        dialog, title, edit, controls = wait_until(
+            lambda: active(lambda: self.file_dialog(pid)), "native file dialog", timeout=35)
+        cancelled = cancel or selection is None
+        result = {"title": title, "suggested_name": self.control_text(edit),
+                  "action": "cancel" if cancelled else "choose", "controls": controls}
+        if selection is not None:
+            text = ctypes.create_unicode_buffer(str(selection))
+            assert self.send(edit, 0x000C, 0, ctypes.addressof(text)), "Could not set filename"  # WM_SETTEXT
+            assert self.control_text(edit) == str(selection), "Native filename field did not retain the path"
+        button_id = 2 if cancelled else 1  # IDCANCEL / IDOK
+        target = self.api.GetDlgItem(dialog, button_id)
+        assert target, f"File dialog has no button {button_id}"
+        assert self.api.PostMessageW(target, 0x00F5, 0, 0), "Could not click native dialog button"  # BM_CLICK
+        if overwrite and not cancelled:
+            def overwrite_confirmation():
+                for candidate, caption in self.windows(pid):
+                    if candidate != dialog and self.class_name(candidate) == "#32770":
+                        yes = self.api.GetDlgItem(candidate, 6)  # IDYES
+                        if yes:
+                            return yes, caption
+                return None
+
+            yes, caption = wait_until(lambda: active(overwrite_confirmation),
+                                      "native overwrite confirmation", timeout=10)
+            result["overwrite_confirmation"] = caption
+            assert self.api.PostMessageW(yes, 0x00F5, 0, 0), "Could not confirm overwrite"
+        wait_until(lambda: active(lambda: not self.api.IsWindow(dialog)),
+                   "native file dialog to close", timeout=10)
+        return result
 
     def windows(self, pid: int) -> list[tuple[int, str]]:
         found = []
@@ -447,6 +698,87 @@ class WindowsUI:
                 self.api.PostMessageW(confirm, 0x00F5, 0, 0)  # BM_CLICK
 
 
+def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> dict:
+    """Exercise real Open/Save dialogs without intercepting WebView2 downloads."""
+    from playwright.sync_api import expect
+
+    dialogs = []
+    diagnostics = output / "native-dialogs.json"
+
+    def choose(locator, selection=None, *, overwrite=False, cancel=False):
+        try:
+            result = drive_native_dialog(
+                lambda: locator.evaluate("node => { setTimeout(() => node.click(), 0); }"),
+                lambda stopped: ui.respond_file(pid, selection, stopped, overwrite=overwrite, cancel=cancel))
+            dialogs.append(result)
+            diagnostics.write_text(json.dumps(dialogs, indent=2), encoding="utf-8")
+            return result
+        except BaseException:
+            diagnostics.write_text(json.dumps({"completed": dialogs,
+                "remaining_windows": ui.dialog_snapshot(pid)}, indent=2), encoding="utf-8")
+            raise
+
+    page.wait_for_function("window.__gelImagePickerInstalled && window.pywebview?.api?.choose_image")
+    file_input = page.locator('input[type="file"]')
+    choose(file_input)  # Cancelling the native picker must leave the initial page intact.
+    expect(file_input).to_have_value("")
+    expect(page.get_by_test_id("stException")).to_have_count(0)
+
+    # Unicode and spaces live in both the native open/save directory paths.
+    unicode_output = output / "native α workspace"
+    unicode_output.mkdir(parents=True, exist_ok=True)
+    editor, fixtures = prepare_annotations(
+        page, unicode_output, upload=lambda fixture: choose(page.locator('input[type="file"]'), fixture))
+    expect(editor.locator("#component")).to_have_attribute("data-windows-desktop", "true")
+    typing = check_annotation_typing(page, editor)
+    labels = editor.locator('.image-label[contenteditable="true"]')
+    expected_labels = labels.all_text_contents()
+    # Cancel a replacement in the real picker after typing; existing work survives.
+    page.get_by_role("button", name="Replace image", exact=True).click()
+    choose(page.locator('input[type="file"]'))
+    page.keyboard.press("Escape")
+    expect(labels).to_have_text(expected_labels)
+    editor.locator("#confirm").click()
+    button(page, "skip_ladder").click()
+
+    export_directory = output / "native α exports"
+    export_directory.mkdir(parents=True, exist_ok=True)
+    png_button = page.get_by_role("button", name="Download annotated PNG", exact=True)
+    expect(png_button).to_be_visible()
+    # Populate a known destination before Cancel, so the assertion detects a
+    # save despite cancellation rather than checking an unrelated directory.
+    choose(png_button, export_directory / "cancelled α export.png", cancel=True)
+    assert not list(export_directory.iterdir()), "Cancelled native export created a file"
+    expect(png_button).to_be_visible()
+    exports = []
+    for image_format, suffix in (("PNG", ""), ("JPEG", ".jpeg"), ("TIFF", ".TIF"), ("SVG", ".svg")):
+        if image_format != "PNG":
+            choose_option(page, "Image file type", image_format)
+        save_button = page.get_by_role("button", name=f"Download annotated {image_format}", exact=True)
+        selected = export_directory / f"native α label {image_format}{suffix}"
+        destination = selected.with_suffix(".png") if not suffix else selected
+        result = choose(save_button, selected)
+        result["requested_path"] = str(selected)
+        result["saved_path"] = str(destination)
+        exports.append(wait_for_export(destination, image_format))
+        expect(save_button).to_be_visible()
+        assert page.locator('iframe[src*="lane_annotations"]').count() == 0
+
+    # Force an actual overwrite prompt over our own sentinel fixture.
+    choose_option(page, "Image file type", "PNG")
+    overwritten = export_directory / "overwrite α image.png"
+    overwritten.write_bytes(b"existing smoke fixture")
+    choose(page.get_by_role("button", name="Download annotated PNG", exact=True), overwritten,
+           overwrite=True)
+    overwrite_export = wait_for_export(overwritten, "PNG")
+    expect(page.get_by_test_id("stException")).to_have_count(0)
+    diagnostics.write_text(json.dumps(dialogs, indent=2), encoding="utf-8")
+    return {"typing": typing, "native_uploads": [path.name for path in fixtures],
+            "open_cancel_preserves_annotations": True, "save_cancel": True,
+            "exports": exports, "overwrite": overwrite_export,
+            "extension_added_when_omitted": True, "unicode_paths": True}
+
+
 def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
     import winreg
 
@@ -455,6 +787,7 @@ def native_smoke(executable: Path, output: Path, *, force: bool) -> dict:
     debug_port = free_port()
     profile = Path(tempfile.mkdtemp(prefix="Gel WebView smoke "))
     environment = frozen_environment(logs)
+    environment["GEL_ANALYZER_PREFERENCES_PATH"] = str(logs / "preferences.json")
     environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = f"--remote-debugging-port={debug_port}"
     environment["WEBVIEW2_USER_DATA_FOLDER"] = str(profile)
     elevated = bool(ctypes.WinDLL("shell32").IsUserAnAdmin())
@@ -479,6 +812,8 @@ def _native_smoke(executable: Path, logs: Path, debug_port: int,
                                stderr=subprocess.DEVNULL)
     backend = None
     url = None
+    typing = None
+    native_dialogs = None
     try:
         parent = psutil.Process(process.pid)
 
@@ -548,12 +883,26 @@ def _native_smoke(executable: Path, logs: Path, debug_port: int,
         finally:
             save_native_diagnostics()
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}")
+            # Preserve the host's download policy and real Save As dialogs.
+            # The default CDP attachment otherwise enables allowAndName.
+            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{debug_port}", no_defaults=True)
             pages = [page for context in browser.contexts for page in context.pages]
             assert pages, "WebView2 has no inspectable page"
             native_page = pages[0]
+            native_page.set_default_timeout(45_000)
             native_page.wait_for_url(url + "**", timeout=60_000)
             expect(native_page.get_by_role("heading", name="Agarose Gel Analyzer")).to_be_visible(timeout=45_000)
+            if not force:
+                # Inspect the actual embedded renderer, rather than assuming
+                # standalone Chromium covers WebView2 keyboard/focus behavior.
+                try:
+                    native_dialogs = native_annotation_workflow(native_page, ui, process.pid, logs)
+                    typing = native_dialogs["typing"]
+                    expect(native_page.get_by_test_id("stException")).to_have_count(0)
+                except BaseException:
+                    native_page.screenshot(path=str(logs / "annotation-failure.png"), full_page=True)
+                    (logs / "annotation-failure.html").write_text(native_page.content(), encoding="utf-8")
+                    raise
             native_page.screenshot(path=str(logs / "native-window.png"))
             # Stopping the Playwright driver disconnects inspection; do not send
             # Browser.close to the application being tested.
@@ -570,6 +919,8 @@ def _native_smoke(executable: Path, logs: Path, debug_port: int,
         wait_until(lambda: not healthy(url), "native backend listener shutdown", timeout=10)
         return {"native_window_title": window[1], "renderer": "WebView2",
                 "workspace_rendered_in_native_window": True,
+                "annotation_typing": typing,
+                "native_dialogs": native_dialogs,
                 "close": "forced process termination" if force else "native window close",
                 "backend_pid": backend.pid, "backend_stopped": True, "listener_closed": True}
     finally:
@@ -597,10 +948,11 @@ def main() -> int:
     result = {"started_at": datetime.now(timezone.utc).isoformat(), "platform": sys.platform,
               "status": "running", "limitations": [
                   "No clean physical Windows PC installation was performed.",
-                  "Native Windows save dialogs are not automated; export bytes are checked in Chromium.",
+                  "Native typing uses WebView2 CDP events, not physical Windows keyboard input.",
               ]}
     try:
         if args.url:
+            result["limitations"].append("Browser-only run: native Windows dialogs and lifecycle were not exercised.")
             result["browser"] = browser_smoke(args.url, output)
         else:
             if sys.platform != "win32":

@@ -175,6 +175,10 @@ def watch_parent(pipe: int) -> None:
 
 
 def run_backend(port: int, base_path: str, parent_pipe: int) -> int:
+    if sys.platform == "win32":
+        # Set only in the native child; ordinary Streamlit browser launches and
+        # the Mac backend retain their existing annotation behavior.
+        os.environ["GEL_ANALYZER_DESKTOP"] = "1"
     threading.Thread(target=watch_parent, args=(parent_pipe,), daemon=True,
                      name="parent-watchdog").start()
     root = resource_root()

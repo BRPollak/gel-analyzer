@@ -66,6 +66,65 @@ def test_crop_automatically_opens_editor_with_translated_lane_coordinates(annota
     assert "revise_lane_crop" in keys(annotated.app)
 
 
+@pytest.mark.parametrize("platform, marker, preserve_editor", [
+    ("win32", "1", True), ("win32", None, False), ("win32", "0", False),
+    ("darwin", "1", False), ("darwin", None, False), ("linux", "1", False),
+])
+def test_label_autosave_preserves_editor_only_in_windows_desktop(annotated, monkeypatch,
+                                                               platform, marker, preserve_editor):
+    import streamlit as st
+    from streamlit.runtime.forward_msg_queue import ForwardMsgQueue
+    from gel_analyzer import annotation_component, desktop_context
+
+    monkeypatch.setattr(desktop_context, "sys", SimpleNamespace(platform=platform))
+    if marker is None:
+        monkeypatch.delenv("GEL_ANALYZER_DESKTOP", raising=False)
+    else:
+        monkeypatch.setenv("GEL_ANALYZER_DESKTOP", marker)
+    crop_gel(annotated)
+    render = annotation_component.render_annotation_component
+    sentinel = "Live annotation editor focus sentinel"
+
+    def component(crop, **kwargs):
+        # Put a real element at the mocked component's location so its ancestry
+        # comes from the running app, independent of layout indices or source.
+        st.text(sentinel)
+        return render(crop, **kwargs)
+
+    monkeypatch.setattr(annotation_component, "render_annotation_component", component)
+    messages = []
+    # Inspect before coalescing: a real server can flush an empty delta before
+    # the following container replaces it, destroying the focused iframe.
+    monkeypatch.setattr(ForwardMsgQueue, "_before_enqueue_msg", lambda msg: messages.append(deepcopy(msg)))
+
+    def editor_paths():
+        return {tuple(msg.metadata.delta_path) for msg in messages
+                if msg.HasField("delta") and msg.delta.WhichOneof("type") == "new_element"
+                and msg.delta.new_element.WhichOneof("type") == "text"
+                and msg.delta.new_element.text.body == sentinel}
+
+    annotated.app.run()
+    assert not annotated.app.exception
+    paths = editor_paths()
+    assert len(paths) == 1
+    token = annotated.app.session_state["annotation_token"]
+    messages.clear()
+    annotation_event(annotated, data=rich_annotations())
+
+    assert annotated.app.session_state["annotation_data"]["labels"] == rich_annotations()["labels"]
+    assert annotated.app.session_state["annotation_token"] == token
+    assert editor_paths() == paths
+    clearing_ancestors = [tuple(msg.metadata.delta_path) for msg in messages
+                         if msg.HasField("delta") and msg.delta.WhichOneof("type") == "new_element"
+                         and msg.delta.new_element.WhichOneof("type") == "empty"
+                         and any(path[:len(msg.metadata.delta_path)] == tuple(msg.metadata.delta_path)
+                                 for path in paths)]
+    if preserve_editor:
+        assert not clearing_ancestors, f"Autosave removes the focused editor at {clearing_ancestors}"
+    else:
+        assert clearing_ancestors, "Mac and browser runtimes must retain their original preview behavior"
+
+
 @pytest.mark.parametrize("rich_text", [False, True])
 def test_annotation_edit_confirm_and_reopen_preserve_snapshot_and_ignore_late_events(annotated, rich_text):
     crop = crop_gel(annotated)

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import streamlit.components.v1 as components
 
+from .desktop_context import is_windows_desktop
+
 _component = components.declare_component(
     "lane_annotations", path=str(Path(__file__).with_name("annotation_component_frontend"))
 )
@@ -23,5 +25,6 @@ def render_annotation_component(crop, *, annotations, token, revision, error, ke
         mode=mode, ladder=ladder, presets=list(presets), ladder_step=ladder_step,
         confirmed_ladder=confirmed_ladder,
         extracted_bands=list(extracted_bands),
+        windows_desktop=is_windows_desktop(),
         key=key, default=None,
     )

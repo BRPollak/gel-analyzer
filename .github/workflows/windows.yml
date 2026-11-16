@@ -41,7 +41,16 @@ jobs:
         run: uv run --locked --group desktop pytest -q tests/test_desktop.py tests/test_windows_runtime.py
 
   windows-tests:
-    runs-on: windows-2022
+    name: Windows suites (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            artifact: windows-unit-tests
+          - os: windows-2025
+            artifact: windows-unit-tests-2025
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
       run:
@@ -69,14 +78,64 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-unit-tests
+          name: ${{ matrix.artifact }}
           path: build/windows/pytest.xml
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows-current-install:
+    name: Windows 2025 installed app
+    needs: windows
+    if: ${{ !cancelled() && needs.windows.outputs.installer_artifact_id != '' }}
+    runs-on: windows-2025
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/windows
+      - name: Install locked smoke dependencies
+        run: |
+          uv python install 3.12 --default
+          uv sync --locked --group test-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked --group test-smoke python -m playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installer checksum and installed behavior on Windows 2025
+        run: |
+          $version = .venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $filename = "Gel-Analyzer-$version-Windows-x64-Setup.exe"
+          $installer = Join-Path "dist/windows" $filename
+          $checksums = @(Get-Content "dist/windows/SHA256SUMS-windows.txt")
+          $expected = @($checksums | Where-Object { $_ -match ('^[0-9a-fA-F]{64}  ' + [regex]::Escape($filename) + '$') })
+          if ($expected.Count -ne 1) { throw "Expected exactly one checksum for $filename" }
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          if ($actual -ne $expected[0].Substring(0, 64)) { throw "Installer checksum does not match its build artifact" }
+          ./scripts/test_windows_installer.ps1 -Installer $installer -Version $version -OutputDirectory "build/windows/installer-tests-2025"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain Windows 2025 installed app evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-validation-2025
+          path: build/windows/installer-tests-2025/
           if-no-files-found: warn
           retention-days: 30
 
   windows:
     runs-on: windows-2022
     timeout-minutes: 50
+    outputs:
+      installer_artifact_id: ${{ steps.retain-installer.outputs.artifact-id }}
     defaults:
       run:
         shell: pwsh
@@ -102,6 +161,17 @@ jobs:
         run: |
           uv run --locked --group desktop --group build --group test-smoke python scripts/build_windows.py --webview2-installer build/windows/prerequisites/MicrosoftEdgeWebView2RuntimeInstallerX64.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain installer and checksums
+        id: retain-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            dist/windows/*-Setup.exe
+            dist/windows/SHA256SUMS-windows.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
       - name: Build simulated earlier-version installer for upgrade testing
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -112,16 +182,6 @@ jobs:
           $version = .venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
           ./scripts/test_windows_installer.ps1 -Installer "dist/windows/Gel-Analyzer-$version-Windows-x64-Setup.exe" -Version $version -PreviousInstaller "build/windows/upgrade-fixture/Gel-Analyzer-1.0.2-Windows-x64-Setup.exe" -OutputDirectory "build/windows/installer-tests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Retain installer and checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: |
-            dist/windows/*-Setup.exe
-            dist/windows/SHA256SUMS-windows.txt
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
       - name: Retain build and test evidence
         if: always()
         uses: actions/upload-artifact@v4

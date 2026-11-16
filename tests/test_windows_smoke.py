@@ -2,8 +2,10 @@
 
 from copy import deepcopy
 from pathlib import Path
+import threading
 
 import pytest
+from PIL import Image
 
 from scripts import smoke_windows
 
@@ -175,3 +177,69 @@ def test_temporary_policy_preserves_unrelated_values_added_during_smoke():
         **before,
         ARGUMENTS: {"Other App.exe": ("--other-argument", registry.REG_SZ)},
     }
+
+
+def test_native_filename_field_ignores_search_and_address_inputs():
+    controls = [
+        {"handle": 1, "parent": 0, "id": 1001, "class": "Edit", "visible": True},
+        {"handle": 2, "parent": 0, "id": 0x47C, "class": "ComboBoxEx32", "visible": True},
+        {"handle": 3, "parent": 2, "id": 1001, "class": "ComboBox", "visible": True},
+        {"handle": 4, "parent": 3, "id": 1001, "class": "Edit", "visible": True},
+    ]
+    assert smoke_windows.filename_edit(controls) == 4
+    assert smoke_windows.filename_edit(controls[:1]) is None
+    controls[3]["visible"] = False
+    assert smoke_windows.filename_edit(controls) is None
+
+
+def test_native_filename_field_supports_classic_dialog_and_broken_parent_cycles():
+    controls = [{"handle": 1, "parent": 1, "id": 1001, "class": "Edit", "visible": True}]
+    assert smoke_windows.filename_edit(controls) is None
+    controls.append({"handle": 2, "parent": 0, "id": 0x480, "class": "Edit", "visible": True})
+    assert smoke_windows.filename_edit(controls) == 2
+
+
+def test_native_dialog_responder_can_unblock_modal_trigger_on_its_own_thread():
+    triggered, answered = threading.Event(), threading.Event()
+    origin = threading.get_ident()
+
+    def respond(stopped):
+        assert threading.get_ident() != origin
+        assert triggered.wait(timeout=1)
+        answered.set()
+        return {"cancelled": stopped.is_set()}
+
+    def trigger():
+        assert threading.get_ident() == origin
+        triggered.set()
+        assert answered.wait(timeout=1), "Responder must run even while the browser call is blocked"
+
+    assert smoke_windows.drive_native_dialog(trigger, respond) == {"cancelled": False}
+
+
+def test_native_dialog_worker_errors_are_reported_to_the_harness():
+    def fail(_):
+        raise AssertionError("Native filename field missing")
+
+    with pytest.raises(AssertionError, match="Native filename field missing"):
+        smoke_windows.drive_native_dialog(lambda: None, fail)
+
+
+@pytest.mark.parametrize(("image_format", "suffix"), [("PNG", ".png"), ("JPEG", ".jpeg"), ("TIFF", ".TIF")])
+def test_export_validation_reads_contents_not_extension(tmp_path, image_format, suffix):
+    path = tmp_path / ("native α label" + suffix)
+    Image.new("RGB", (80, 60), "white").save(path, format=image_format)
+    assert smoke_windows.inspect_export(path, image_format)["format"] == image_format
+    wrong_format = "JPEG" if image_format == "PNG" else "PNG"
+    with pytest.raises(AssertionError):
+        smoke_windows.inspect_export(path, wrong_format)
+
+
+def test_svg_export_requires_label_and_valid_svg_document(tmp_path):
+    path = tmp_path / "native α label.svg"
+    path.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">'
+                    '<text x="1" y="20">Windows smoke lane</text></svg>', encoding="utf-8")
+    assert smoke_windows.inspect_export(path, "SVG")["format"] == "SVG"
+    path.write_text(path.read_text().replace("Windows smoke lane", "Different label text"))
+    with pytest.raises(AssertionError):
+        smoke_windows.inspect_export(path, "SVG")

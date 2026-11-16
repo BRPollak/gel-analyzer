@@ -16,6 +16,7 @@ from gel_analyzer.well_component import render_well_component
 from gel_analyzer.wells import SelectionError, detect_wells, validate_line
 from gel_analyzer import annotation_ui, lane_review_ui, orientation_ui
 from gel_analyzer.viewport import install_preview_viewport
+from gel_analyzer.desktop_context import is_windows_desktop
 
 
 def reset_wells(*, editing: bool = False, preserve_points: bool = False) -> None:
@@ -520,9 +521,13 @@ def main() -> None:
             st.button("Discard analysis and clear image", key="clear_image", on_click=clear_image)
         st.caption("TIFF, PNG, or JPEG files (.tif, .tiff, .png, .jpeg, or .jpg).")
 
-    # Replace this same slot immediately, so neither the previous upload nor an
-    # uncropped new image is shown while the new source is being processed.
-    preview_slot = st.empty()
+    # Keep the Windows desktop editor mounted across autosave reruns: an empty
+    # delta can otherwise remove its focused iframe before replacement arrives.
+    # New image work still clears the old preview immediately. Other runtimes
+    # retain their existing container behavior.
+    replacing_preview = st.session_state.pending_upload is not None or st.session_state.orientation_requested
+    preview_slot = (st.container(key="gel_preview")
+                    if is_windows_desktop() and not replacing_preview else st.empty())
     with st.container(key="gel_footer"):
         st.caption("Benjamin Pollak | 2026 · [GitHub](https://github.com/BRPollak/gel-analyzer)")
     if st.session_state.pending_upload is not None:
