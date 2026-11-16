@@ -646,7 +646,6 @@ window.addEventListener("message", event => {
     state = {token: args.token, width: args.width, height: args.height,
       lanes: args.lanes.map(lane => [...lane]),
       workflow_orientation: args.workflow_orientation === "wells_top" ? "wells_top" : "wells_left",
-      bandCandidates: args.band_candidates ?? [],
       mode: ["ladder", "extracted"].includes(args.mode) ? args.mode : "lanes",
       extractedBands: structuredClone(args.extracted_bands || []),
       ladder: args.ladder ? structuredClone(args.ladder) : null,

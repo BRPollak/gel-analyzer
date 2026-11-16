@@ -6,6 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from gel_analyzer.desktop_downloads_windows import install_windows_downloads
+from gel_analyzer.desktop_preferences import last_directory, remember_directory
+
+
+@pytest.fixture(autouse=True)
+def isolated_preferences(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEL_ANALYZER_PREFERENCES_PATH", str(tmp_path / "preferences.json"))
 
 
 class Event:
@@ -105,7 +111,7 @@ def handler(selections, *, mime="image/png", suggested="original.png", enabled=T
     browser = edge.EdgeChrome()
     browser.form = SimpleNamespace(BeginInvoke=begin_invoke)
     args = SimpleNamespace(
-        DownloadOperation=SimpleNamespace(MimeType=mime),
+        DownloadOperation=SimpleNamespace(MimeType=mime, State="InProgress", StateChanged=Event()),
         ResultFilePath=rf"C:\Downloads\{suggested}", Cancel=False, Handled=False,
         GetDeferral=deferral.get, deferral=deferral, queued_actions=queued_actions,
     )
@@ -196,3 +202,25 @@ def test_windows_completes_deferral_even_if_native_cleanup_throws():
     assert args.deferral.completed == 1
     assert args.Cancel and dialog.disposed
     assert args.ResultFilePath == r"C:\Downloads\original.png"
+
+
+@pytest.mark.parametrize("state", ["Completed", "Interrupted"])
+def test_windows_remembers_only_completed_save_and_reuses_it(tmp_path, state):
+    uploads, previous, exports = [tmp_path / name for name in ("uploads", "previous", "exports")]
+    for folder in (uploads, previous, exports):
+        folder.mkdir()
+    remember_directory("upload", uploads)
+    remember_directory("download", previous)
+    args, dialog, _, _ = handler([str(exports / "gel.png")])
+    assert dialog.InitialDirectory == str(previous)
+    assert last_directory("download") == str(previous)
+    operation = args.DownloadOperation
+    operation.State = state
+    for callback in operation.StateChanged.callbacks[:]:
+        callback(operation, None)
+    expected = exports if state == "Completed" else previous
+    assert last_directory("download") == str(expected)
+    assert last_directory("upload") == str(uploads)
+    assert not operation.StateChanged.callbacks
+    _, next_dialog, _, _ = handler([None])
+    assert next_dialog.InitialDirectory == str(expected)

@@ -110,11 +110,18 @@ def test_windows_desktop_requests_edge_and_native_downloads(monkeypatch, tmp_pat
         def __iadd__(self, callback):
             self.callbacks.append(callback)
             return self
-    window = SimpleNamespace(events=SimpleNamespace(closed=Event(), initialized=Event()))
-    settings, calls = {}, []
+    scripts = []
+    window = SimpleNamespace(events=SimpleNamespace(closed=Event(), initialized=Event(), loaded=Event()),
+                             run_js=scripts.append)
+    settings, calls, window_options = {}, [], []
+
+    def create_window(*args, **kwargs):
+        window_options.append(kwargs)
+        return window
+
     fake_webview = SimpleNamespace(
         settings=settings,
-        create_window=lambda *args, **kwargs: window,
+        create_window=create_window,
         start=lambda callback, **kwargs: calls.append(kwargs),
     )
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
@@ -122,4 +129,8 @@ def test_windows_desktop_requests_edge_and_native_downloads(monkeypatch, tmp_pat
     assert calls == [{"gui": "edgechromium", "debug": False, "private_mode": True}]
     assert settings["ALLOW_DOWNLOADS"] is False, "Downloads stay disabled until the adapter is installed"
     assert window.events.initialized.callbacks == [desktop_downloads.configure_downloads]
+    assert window_options[0]["js_api"]._image_picker.window is window
+    assert len(window.events.loaded.callbacks) == 1
+    window.events.loaded.callbacks[0]()
+    assert len(scripts) == 1 and "api.choose_image()" in scripts[0]
     assert settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] is False

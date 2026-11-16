@@ -1,11 +1,13 @@
 """Validate configurable presets and exact, manual crop-relative placements."""
 
 from copy import deepcopy
+from io import BytesIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from gel_analyzer.ladders import LadderError, load_presets, validate_ladder
 
@@ -25,6 +27,26 @@ def ladder():
 
 def manual_ladder():
     return {"mode": "manual", "placements": [{"id": "marker-1", "label": "500 bp", "x": 1.625, "y": 0.25}]}
+
+
+def test_ladder_component_does_not_run_or_send_automatic_band_detection(crop, monkeypatch):
+    from gel_analyzer import annotation_component, bands
+
+    def unexpected_detection(*args, **kwargs):
+        pytest.fail("Opening the manual ladder annotator must not detect bands")
+
+    monkeypatch.setattr(bands, "detect_bands", unexpected_detection)
+    monkeypatch.setattr(annotation_component, "_component", lambda **kwargs: kwargs)
+    output = BytesIO()
+    Image.new("L", (crop.width, crop.height)).save(output, format="PNG")
+    crop.preview_png = output.getvalue()
+    result = annotation_component.render_annotation_component(
+        crop, annotations={}, token="manual-only", revision=0, error=None,
+        key="ladder-test", mode="ladder", presets=load_presets(),
+    )
+    assert "band_candidates" not in result
+    assert result["ladder"] is None
+    assert result["image_src"].startswith("data:image/png;base64,")
 
 
 def test_bundled_neb_presets_match_reference_band_labels_and_load_independent_snapshots():

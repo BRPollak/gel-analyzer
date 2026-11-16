@@ -32,7 +32,15 @@ QUIT_MESSAGE = "Quit Gel Analyzer? Export any images or measurements you want to
 
 
 class DesktopAPI:
-    """Expose only the fixed repository destination to the trusted app page."""
+    """Expose the fixed repository destination and user-controlled image picker."""
+
+    def __init__(self):
+        from .desktop_uploads import ImagePicker
+
+        self._image_picker = ImagePicker()
+
+    def choose_image(self):
+        return self._image_picker.choose_image()
 
     def open_repository(self) -> bool:
         return webbrowser.open("https://github.com/BRPollak/gel-analyzer", new=2)
@@ -299,6 +307,7 @@ def run_desktop() -> int:
 
     import webview
     from .desktop_downloads import configure_downloads
+    from .desktop_uploads import install_upload_picker
 
     backend = Backend(directory)
     atexit.register(backend.stop)
@@ -307,15 +316,18 @@ def run_desktop() -> int:
     # Keep Streamlit's new-window download links in the native webview so its
     # download delegate supplies the suggested name and native save dialog.
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
+    api = DesktopAPI()
     window = webview.create_window(
         APP_NAME,
         html=status_page(APP_NAME, "Starting your analysis workspace…"),
-        js_api=DesktopAPI(),
+        js_api=api,
         width=1440, height=960, min_size=(1000, 700),
         background_color="#FAFBFC", text_select=True, confirm_close=True,
         localization={"global.quitConfirmation": QUIT_MESSAGE},
     )
+    api._image_picker.window = window
     window.events.initialized += configure_downloads
+    window.events.loaded += lambda: install_upload_picker(window)
     window.events.closed += backend.stop
 
     def launch_workspace() -> None:

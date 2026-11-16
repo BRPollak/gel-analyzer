@@ -31,18 +31,20 @@ def test_file_type_updates_resolution_options_and_download_label():
     app = final_editor()
     assert not app.exception
     assert app.selectbox(key="annotation_export_format").value == "PNG"
-    assert app.selectbox(key="annotation_export_dpi_PNG").value == 300
+    assert app.selectbox(key="annotation_export_dpi_PNG").value == 600
     assert app.get("download_button")[0].label == "Download annotated PNG"
 
     app.selectbox(key="annotation_export_format").select("TIFF").run()
     assert not app.exception
     assert app.selectbox(key="annotation_export_dpi_TIFF").options == ["150", "300", "600", "1200"]
+    assert app.selectbox(key="annotation_export_dpi_TIFF").value == 600
     app.selectbox(key="annotation_export_dpi_TIFF").select(1200).run()
     assert not app.exception
     assert app.get("download_button")[0].label == "Download annotated TIFF"
 
     app.selectbox(key="annotation_export_format").select("JPEG").run()
     assert app.selectbox(key="annotation_export_dpi_JPEG").options == ["72", "96", "150", "300", "600"]
+    assert app.selectbox(key="annotation_export_dpi_JPEG").value == 600
     assert app.get("download_button")[0].label == "Download annotated JPEG"
     assert any("may lose some image detail" in caption.value for caption in app.caption)
 
@@ -55,7 +57,7 @@ def test_file_type_updates_resolution_options_and_download_label():
 
     app.selectbox(key="annotation_export_format").select("PNG").run()
     assert not app.exception
-    assert app.selectbox(key="annotation_export_dpi_PNG").value == 300
+    assert app.selectbox(key="annotation_export_dpi_PNG").value == 600
 
 
 def test_export_only_offers_annotated_image_without_band_review_or_dimensions():
@@ -71,5 +73,6 @@ def test_export_only_offers_annotated_image_without_band_review_or_dimensions():
         assert "pixel" not in copy.lower()
         assert "210" not in copy and "44" not in copy
         assert "Exports use display colors" not in copy
+        assert "Leave the print setting" not in copy
         assert not app.expander
         assert len(app.get("download_button")) == 1

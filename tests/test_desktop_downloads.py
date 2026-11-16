@@ -7,6 +7,12 @@ import pytest
 
 from gel_analyzer.desktop_downloads import configure_downloads, download_format, valid_export_path
 from gel_analyzer.desktop_downloads_macos import PendingDownload, install_macos_downloads, save_destination
+from gel_analyzer.desktop_preferences import last_directory, remember_directory
+
+
+@pytest.fixture(autouse=True)
+def isolated_preferences(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEL_ANALYZER_PREFERENCES_PATH", str(tmp_path / "preferences.json"))
 
 
 @pytest.mark.parametrize("mime,name,expected", [
@@ -143,6 +149,32 @@ def test_cocoa_cancellation_does_not_return_a_destination(cocoa):
     panel = SavePanel([None])
     cocoa.AppKit.NSSavePanel = SimpleNamespace(savePanel=lambda: panel)
     assert save_destination(cocoa, SimpleNamespace(MIMEType=lambda: "image/png"), "gel.png") is None
+
+
+def test_cocoa_save_reopens_successful_save_folder_independently_of_upload(cocoa, tmp_path):
+    uploads, exports = tmp_path / "uploads", tmp_path / "exports"
+    uploads.mkdir()
+    exports.mkdir()
+    remember_directory("upload", uploads)
+    pending = PendingDownload(str(exports / "gel.png"))
+    pending.path.write_bytes(b"saved image")
+    pending.finish()
+    assert last_directory("download") == str(exports)
+    panel = SavePanel([None])
+    cocoa.AppKit.NSSavePanel = SimpleNamespace(savePanel=lambda: panel)
+    save_destination(cocoa, SimpleNamespace(MIMEType=lambda: "image/png"), "next.png")
+    assert ("setDirectoryURL_", str(exports)) in panel.calls
+    assert last_directory("upload") == str(uploads)
+
+
+def test_failed_cocoa_save_does_not_change_saved_folder(tmp_path):
+    prior, unsuccessful = tmp_path / "saved", tmp_path / "unsuccessful"
+    prior.mkdir()
+    unsuccessful.mkdir()
+    remember_directory("download", prior)
+    pending = PendingDownload(str(unsuccessful / "gel.png"))
+    pending.cancel()
+    assert last_directory("download") == str(prior)
 
 
 @pytest.mark.parametrize("mime,enabled", [("text/plain", True), ("image/png", False)])

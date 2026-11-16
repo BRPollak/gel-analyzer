@@ -85,12 +85,18 @@
     #status { margin: 9px 0 0; min-height: 20px; font-size: 13px; overflow-wrap: anywhere; }
     #status[data-error="true"] { color: #b42318; }
     #loading { margin: 8px 0; }
-    #ladder-panel { margin-bottom: 10px; }
-    #ladder-panel h2 { font-size: 16px; margin: 0 0 10px; }
+    #ladder-panel { display: grid; gap: 12px; margin-bottom: 10px; }
+    #ladder-panel h2 { font-size: 16px; margin: 0; }
     #ladder-panel button, #ladder-panel select, #ladder-actions button { min-height: 44px; }
-    #ladder-panel .field { min-width: 150px; }
+    #ladder-panel .field { min-width: 0; }
     #ladder-panel .row { align-items: center; }
-    #ladder-markers { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; max-height: 300px; overflow-y: auto; padding: 3px; }
+    #ladder-preset-step, #ladder-lane-step, #ladder-marker-step { display: grid; gap: 10px; min-width: 0; }
+    #ladder-panel .hint { margin: 0; }
+    #ladder-lane-controls, #ladder-marker-controls { display: grid; gap: 8px; min-width: 0; }
+    #ladder-navigation { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+    #ladder-back { justify-self: start; }
+    #ladder-change-options { display: flex; flex-wrap: wrap; gap: 8px; }
+    #ladder-markers { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; max-height: 300px; overflow-y: auto; padding: 3px; }
     .ladder-marker { display: flex; gap: 8px; align-items: center; }
     .ladder-marker-status { font-size: 12px; }
     .ladder-marker[data-placed="true"] { border-style: solid; border-width: 2px; }
@@ -135,7 +141,7 @@
     #ladder-reference-image { display: block; width: auto; height: auto; max-width: 100%; max-height: min(500px, calc(var(--workspace-budget, 620px) - 170px)); margin: 0 auto; background: #fff; }
     #ladder-reference-selected { font-weight: bold; color: var(--accent); }
     #ladder-reference-enlarge { width: 100%; margin-top: 8px; }
-    #ladder-reference-toggle { margin-bottom: 10px; }
+    #ladder-reference-toggle { justify-self: start; }
     #ladder-reference-dialog { padding: 14px; border: 1px solid var(--border); border-radius: 8px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); background: #fff; color: #31333f; }
     #ladder-reference-dialog::backdrop { background: #172b3a70; }
     #ladder-reference-dialog .row { align-items: center; justify-content: space-between; gap: 16px; }
@@ -289,7 +295,7 @@
         </div>
         <div id="ladder-lane-step" hidden>
           <p class="hint">Click the ladder lane on the image, or choose its number.</p>
-          <div class="row">
+          <div id="ladder-lane-controls">
             <label class="field">Ladder lane<select id="ladder-lane" aria-label="Ladder lane"><option value="">Choose a lane…</option></select></label>
             <button id="ladder-use-lane" type="button">Use this lane</button>
           </div>
@@ -307,19 +313,19 @@
             <p id="ladder-manual-error" class="hint" role="alert" hidden></p>
           </div>
           <div id="ladder-markers" role="group" aria-label="Ladder size markers"></div>
-          <div class="row">
-            <button id="ladder-detect-bands" type="button">Detect bands</button>
+          <div id="ladder-marker-controls">
             <button id="ladder-keyboard" type="button">Position with keyboard</button>
             <button id="ladder-remove-marker" type="button" hidden>Remove marker</button>
-            <span class="hint" id="ladder-count"></span>
           </div>
-          <div id="ladder-detected-bands" class="row" role="group" aria-label="Detected candidate bands" hidden></div>
+          <p class="hint" id="ladder-count" aria-live="polite"></p>
           <p class="hint" id="ladder-marker-help">Place any sizes you need. Select a placed size to move or remove it.</p>
         </div>
-        <div class="row" id="ladder-navigation">
+        <div id="ladder-navigation">
           <button id="ladder-back" type="button" hidden>Back</button>
-          <button id="ladder-change-preset" type="button" hidden>Change preset</button>
-          <button id="ladder-change-lane" type="button" hidden>Change lane</button>
+          <div id="ladder-change-options">
+            <button id="ladder-change-preset" type="button" hidden>Change preset</button>
+            <button id="ladder-change-lane" type="button" hidden>Change lane</button>
+          </div>
         </div>
         <div id="ladder-guard" role="group" aria-labelledby="ladder-guard-message" hidden>
           <p id="ladder-guard-message"></p>
