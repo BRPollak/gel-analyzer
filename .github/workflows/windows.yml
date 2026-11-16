@@ -285,6 +285,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify installed native app, dialogs, exports, and cleanup
         run: |
+          uv run --locked --group test-smoke pytest -q tests/test_windows_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/test_windows_installer.ps1 -Installer $env:REUSED_INSTALLER -Version $env:REUSED_VERSION -OutputDirectory "build/windows/native-validation/installer-tests"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain native validation evidence

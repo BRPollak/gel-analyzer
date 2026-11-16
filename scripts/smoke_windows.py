@@ -565,6 +565,43 @@ def wait_for_export(destination: Path, image_format: str) -> dict:
     return wait_until(ready, f"completed native {image_format} export: {destination}", timeout=30)
 
 
+class KeyboardInput(ctypes.Structure):
+    _fields_ = [("vk", ctypes.c_uint16), ("scan", ctypes.c_uint16),
+                ("flags", ctypes.c_uint32), ("time", ctypes.c_uint32), ("extra", ctypes.c_size_t)]
+
+
+class MouseInput(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_int32), ("y", ctypes.c_int32), ("data", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32), ("time", ctypes.c_uint32), ("extra", ctypes.c_size_t)]
+
+
+class InputUnion(ctypes.Union):
+    _fields_ = [("keyboard", KeyboardInput), ("mouse", MouseInput)]
+
+
+class NativeInput(ctypes.Structure):
+    _fields_ = [("kind", ctypes.c_uint32), ("value", InputUnion)]
+
+
+class GUIThreadInfo(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("flags", ctypes.c_uint32),
+                ("active", ctypes.c_void_p), ("focus", ctypes.c_void_p),
+                ("capture", ctypes.c_void_p), ("menu", ctypes.c_void_p),
+                ("move", ctypes.c_void_p), ("caret", ctypes.c_void_p),
+                ("caret_rect", ctypes.c_int32 * 4)]
+
+
+def native_key(vk=0, *, scan=0, flags=0) -> NativeInput:
+    return NativeInput(1, InputUnion(keyboard=KeyboardInput(vk, scan, flags, 0, 0)))
+
+
+def unicode_keys(text: str) -> list[NativeInput]:
+    """SendInput consumes UTF-16 code units, including paired surrogates."""
+    raw = text.encode("utf-16-le")
+    return [native_key(scan=int.from_bytes(raw[index:index + 2], "little"), flags=flags)
+            for index in range(0, len(raw), 2) for flags in (0x4, 0x6)]
+
+
 class WindowsUI:
     """Small Win32 helper restricted to visible windows belonging to our PID."""
 
@@ -585,6 +622,9 @@ class WindowsUI:
         self.api.GetParent.restype = wintypes.HWND
         self.api.IsWindow.argtypes = [wintypes.HWND]
         self.api.GetForegroundWindow.restype = wintypes.HWND
+        self.api.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUIThreadInfo)]
+        self.api.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(NativeInput), ctypes.c_int]
+        self.api.SendInput.restype = wintypes.UINT
         self.api.SendMessageTimeoutW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
                                                wintypes.LPARAM, wintypes.UINT, wintypes.UINT,
                                                ctypes.POINTER(ctypes.c_size_t)]
@@ -608,6 +648,29 @@ class WindowsUI:
         value = ctypes.create_unicode_buffer(4096)
         self.send(handle, 0x000D, len(value), ctypes.addressof(value))  # WM_GETTEXT
         return value.value
+
+    def send_keys(self, events: list[NativeInput]) -> None:
+        inputs = (NativeInput * len(events))(*events)
+        sent = self.api.SendInput(len(inputs), inputs, ctypes.sizeof(NativeInput))
+        assert sent == len(inputs), f"Windows accepted only {sent}/{len(inputs)} keyboard events"
+
+    def enter_filename(self, dialog: int, edit: int, text: str) -> None:
+        # WM_SETTEXT can change the visible Edit without updating the modern
+        # dialog's cached filename. Use its actual keyboard input path instead.
+        # The CI dialogs are English (Open/Save As); Alt+N selects File name.
+        assert self.api.GetForegroundWindow() == dialog, "Refusing to type outside the app's file dialog"
+        self.send_keys([native_key(0x12), native_key(0x4E), native_key(0x4E, flags=0x2),
+                        native_key(0x12, flags=0x2)])
+
+        def filename_focused():
+            info = GUIThreadInfo(size=ctypes.sizeof(GUIThreadInfo))
+            return (self.api.GetGUIThreadInfo(0, ctypes.byref(info)) and info.focus == edit
+                    and self.api.GetForegroundWindow() == dialog)
+
+        wait_until(filename_focused, "native filename keyboard focus", timeout=5)
+        self.send_keys([native_key(0x11), native_key(0x41), native_key(0x41, flags=0x2),
+                        native_key(0x11, flags=0x2)] + unicode_keys(text))
+        wait_until(lambda: self.control_text(edit) == text, "typed native filename", timeout=5)
 
     def controls(self, dialog: int) -> list[dict]:
         found = []
@@ -650,13 +713,15 @@ class WindowsUI:
         result = {"title": title, "suggested_name": self.control_text(edit),
                   "action": "cancel" if cancelled else "choose", "controls": controls}
         if selection is not None:
-            text = ctypes.create_unicode_buffer(str(selection))
-            assert self.send(edit, 0x000C, 0, ctypes.addressof(text)), "Could not set filename"  # WM_SETTEXT
-            assert self.control_text(edit) == str(selection), "Native filename field did not retain the path"
-        button_id = 2 if cancelled else 1  # IDCANCEL / IDOK
-        target = self.api.GetDlgItem(dialog, button_id)
-        assert target, f"File dialog has no button {button_id}"
-        assert self.api.PostMessageW(target, 0x00F5, 0, 0), "Could not click native dialog button"  # BM_CLICK
+            result["requested_path"] = str(selection)
+            self.enter_filename(dialog, edit, str(selection))
+            result["entered_filename"] = self.control_text(edit)
+            assert result["entered_filename"] == str(selection), "Native filename field did not retain the path"
+        assert self.api.GetForegroundWindow() == dialog, "Refusing to commit another application's dialog"
+        # Enter commits the filename combo's model before Save/Open; Escape
+        # cancels. Keep these behind the queued text events in the input stream.
+        key = 0x1B if cancelled else 0x0D
+        self.send_keys([native_key(key), native_key(key, flags=0x2)])
         if overwrite and not cancelled:
             def overwrite_confirmation():
                 for candidate, caption in self.windows(pid):
@@ -773,7 +838,25 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
         result = choose(save_button, selected, download=True)
         result["requested_path"] = str(selected)
         result["saved_path"] = str(destination)
-        exports.append(wait_for_export(destination, image_format))
+        try:
+            exports.append(wait_for_export(destination, image_format))
+        except BaseException:
+            # Only inspect this synthetic fixture's names in the disposable
+            # runner's Downloads folder, never unrelated user documents.
+            downloads = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Downloads"
+            found = []
+            for path in downloads.glob("synthetic gel 16-bit-annotated*"):
+                if path.is_file():
+                    found.append({"path": str(path), "bytes": path.stat().st_size})
+                    unexpected = output / "unexpected-native-downloads"
+                    unexpected.mkdir(exist_ok=True)
+                    shutil.copyfile(path, unexpected / path.name)
+            (output / "native-export-failure.json").write_text(json.dumps({
+                "requested_path": str(selected), "expected_path": str(destination),
+                "dialog": result, "fixture_downloads": found,
+                "export_directory_files": [path.name for path in export_directory.iterdir()],
+            }, indent=2), encoding="utf-8")
+            raise
         expect(save_button).to_be_visible()
         assert page.locator('iframe[src*="lane_annotations"]').count() == 0
 

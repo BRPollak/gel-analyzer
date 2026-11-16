@@ -1,6 +1,7 @@
 """Temporary WebView2 inspection policy must leave machine settings intact."""
 
 from copy import deepcopy
+import ctypes
 from pathlib import Path
 import threading
 
@@ -246,6 +247,18 @@ def test_native_dialog_worker_errors_are_reported_to_the_harness():
 
     with pytest.raises(AssertionError, match="Native filename field missing"):
         smoke_windows.drive_native_dialog(lambda: None, fail)
+
+
+def test_native_keyboard_structures_match_win32_pointer_alignment():
+    assert ctypes.sizeof(smoke_windows.NativeInput) == (40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)
+    assert ctypes.sizeof(smoke_windows.GUIThreadInfo) == (72 if ctypes.sizeof(ctypes.c_void_p) == 8 else 48)
+
+
+def test_native_unicode_input_preserves_spaces_greek_and_surrogate_pairs():
+    events = smoke_windows.unicode_keys("α 🧬")
+    assert [event.value.keyboard.scan for event in events[::2]] == [0x3B1, 0x20, 0xD83E, 0xDDEC]
+    assert [event.value.keyboard.flags for event in events] == [0x4, 0x6] * 4
+    assert all(event.kind == 1 and event.value.keyboard.vk == 0 for event in events)
 
 
 @pytest.mark.parametrize(("image_format", "suffix"), [("PNG", ".png"), ("JPEG", ".jpeg"), ("TIFF", ".TIF")])
