@@ -718,7 +718,8 @@ def native_annotation_workflow(page, ui: WindowsUI, pid: int, output: Path) -> d
                 "remaining_windows": ui.dialog_snapshot(pid)}, indent=2), encoding="utf-8")
             raise
 
-    page.wait_for_function("window.__gelImagePickerInstalled && window.pywebview?.api?.choose_image")
+    page.wait_for_function("() => Boolean(window.__gelImagePickerInstalled && "
+                           "typeof window.pywebview?.api?.choose_image === 'function')")
     file_input = page.locator('input[type="file"]')
     choose(file_input)  # Cancelling the native picker must leave the initial page intact.
     expect(file_input).to_have_value("")

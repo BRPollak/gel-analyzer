@@ -2,6 +2,12 @@ name: Windows installer
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_installer_run_id:
+        description: "Optional build run ID: rerun native validation only, requiring identical application sources"
+        required: false
+        type: string
+        default: ""
   push:
     branches: [codex/windows-installer, main]
     paths:
@@ -20,6 +26,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: windows-installer-${{ github.ref }}
@@ -27,6 +34,7 @@ concurrency:
 
 jobs:
   macos-regression:
+    if: ${{ !inputs.reuse_installer_run_id }}
     runs-on: macos-15
     timeout-minutes: 15
     steps:
@@ -41,6 +49,7 @@ jobs:
         run: uv run --locked --group desktop pytest -q tests/test_desktop.py tests/test_windows_runtime.py
 
   windows-tests:
+    if: ${{ !inputs.reuse_installer_run_id }}
     name: Windows suites (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -132,6 +141,7 @@ jobs:
           retention-days: 30
 
   windows:
+    if: ${{ !inputs.reuse_installer_run_id }}
     runs-on: windows-2022
     timeout-minutes: 50
     outputs:
@@ -191,5 +201,97 @@ jobs:
             build/windows/validation.json
             build/windows/installer-tests/
             build/windows/pyinstaller/**/warn-*.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+  native-reuse:
+    name: Reused installer native validation (${{ matrix.os }})
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.reuse_installer_run_id != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      SOURCE_RUN_ID: ${{ inputs.reuse_installer_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source run ID
+        run: |
+          if ($env:SOURCE_RUN_ID -notmatch '^[1-9][0-9]*$') { throw "Installer run ID must be a positive integer" }
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/windows
+          run-id: ${{ inputs.reuse_installer_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-validation
+          path: build/windows/source-validation
+          run-id: ${{ inputs.reuse_installer_run_id }}
+          github-token: ${{ github.token }}
+      - name: Require identical application sources and verified installer
+        run: |
+          $ErrorActionPreference = "Stop"
+          $report = Get-Content "build/windows/source-validation/validation.json" -Raw | ConvertFrom-Json
+          $source = $report.git_commit
+          if ($source -notmatch '^[0-9a-fA-F]{40}$') { throw "Build report has no valid source commit" }
+          git fetch --no-tags --depth=1 origin $source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $changed = @(git diff --name-only $source HEAD --)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $productionChanges = @($changed | Where-Object {
+            $_ -notmatch '^(\.github/|tests/|docs/)' -and
+            $_ -notin @('scripts/smoke_windows.py', 'scripts/test_windows_installer.ps1')
+          })
+          if ($productionChanges.Count -gt 0) { throw "Application or build inputs changed: build a new installer instead of reusing this one. Changed paths: $($productionChanges -join ', ')" }
+          $filename = $report.installer.filename
+          $version = $report.version
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $filename -ne "Gel-Analyzer-$version-Windows-x64-Setup.exe") { throw "Unexpected installer identity in build report" }
+          $installer = Join-Path "dist/windows" $filename
+          $checksums = @(Get-Content "dist/windows/SHA256SUMS-windows.txt")
+          $expected = @($checksums | Where-Object { $_ -match ('^[0-9a-fA-F]{64}  ' + [regex]::Escape($filename) + '$') })
+          if ($expected.Count -ne 1) { throw "Expected exactly one installer checksum" }
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          if ($actual -ne $expected[0].Substring(0, 64) -or $actual -ne $report.installer.sha256) { throw "Installer checksum differs from build evidence" }
+          if ((Get-Item -LiteralPath $installer).Length -ne $report.installer.size_bytes) { throw "Installer size differs from build evidence" }
+          New-Item -ItemType Directory -Force "build/windows/native-validation" | Out-Null
+          [ordered]@{
+            installer_run_id = $env:SOURCE_RUN_ID
+            application_commit = $source
+            harness_commit = $env:GITHUB_SHA
+            installer = $filename
+            installer_sha256 = $actual.ToLowerInvariant()
+            identical_application_sources = $true
+          } | ConvertTo-Json | Set-Content -Encoding utf8 "build/windows/native-validation/reused-installer.json"
+          "REUSED_INSTALLER=$installer" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "REUSED_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install locked smoke dependencies
+        run: |
+          uv python install 3.12 --default
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv sync --locked --group test-smoke
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked --group test-smoke python -m playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installed native app, dialogs, exports, and cleanup
+        run: |
+          ./scripts/test_windows_installer.ps1 -Installer $env:REUSED_INSTALLER -Version $env:REUSED_VERSION -OutputDirectory "build/windows/native-validation/installer-tests"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain native validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-validation-${{ matrix.os }}
+          path: build/windows/native-validation/
           if-no-files-found: warn
           retention-days: 30
