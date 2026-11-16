@@ -241,6 +241,25 @@ def test_native_dialog_responder_can_unblock_modal_trigger_on_its_own_thread():
     assert smoke_windows.drive_native_dialog(trigger, respond) == {"cancelled": False}
 
 
+def test_native_overwrite_confirmation_finds_nested_yes_with_id_zero():
+    # Native run 43979267967: Confirm Save As places both ID-zero buttons
+    # beneath separate CtrlNotifySink children of DirectUIHWND.
+    controls = [
+        {"handle": 1, "parent": 0, "id": 0, "class": "DirectUIHWND", "visible": True},
+        {"handle": 2, "parent": 1, "id": 0, "class": "CtrlNotifySink", "visible": True},
+        {"handle": 3, "parent": 2, "id": 0, "class": "Button", "visible": True, "text": "&No"},
+        {"handle": 4, "parent": 1, "id": 0, "class": "CtrlNotifySink", "visible": True},
+        {"handle": 5, "parent": 4, "id": 0, "class": "Button", "visible": True, "text": "&Yes"},
+        {"handle": 6, "parent": 1, "id": 6, "class": "Button", "visible": False, "text": "Yes"},
+    ]
+    assert smoke_windows.overwrite_yes_button(controls) == 5
+    controls[4]["text"] = "Save"
+    assert smoke_windows.overwrite_yes_button(controls) is None
+    controls[4]["text"] = "Yes"
+    controls[-1]["visible"] = True
+    assert smoke_windows.overwrite_yes_button(controls) is None, "Ambiguous Yes buttons must not be guessed"
+
+
 def test_native_dialog_worker_errors_are_reported_to_the_harness():
     def fail(_):
         raise AssertionError("Native filename field missing")

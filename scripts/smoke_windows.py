@@ -506,6 +506,14 @@ def filename_edit(controls: list[dict]) -> int | None:
     return modern[0] if len(modern) == 1 else None
 
 
+def overwrite_yes_button(controls: list[dict]) -> int | None:
+    """Modern Confirm Save As uses nested buttons with ID zero, not IDYES."""
+    matches = [control["handle"] for control in controls
+               if control["class"] == "Button" and control["visible"]
+               and control.get("text", "").replace("&", "").strip().casefold() == "yes"]
+    return matches[0] if len(matches) == 1 else None
+
+
 def drive_native_dialog(trigger, respond) -> dict:
     """Start the Win32 responder before a browser click can enter modal UI.
 
@@ -677,12 +685,16 @@ class WindowsUI:
 
         @self.callback
         def collect(handle, _):
-            found.append({"handle": handle, "parent": self.api.GetParent(handle),
-                          "id": self.api.GetDlgCtrlID(handle), "class": self.class_name(handle),
-                          "visible": bool(self.api.IsWindowVisible(handle))})
+            control = {"handle": handle, "parent": self.api.GetParent(handle),
+                       "id": self.api.GetDlgCtrlID(handle), "class": self.class_name(handle),
+                       "visible": bool(self.api.IsWindowVisible(handle))}
+            found.append(control)
             return True
 
         self.api.EnumChildWindows(dialog, collect, 0)
+        for control in found:
+            if control["class"] == "Button" and control["visible"]:
+                control["text"] = self.control_text(control["handle"])
         return found
 
     def dialog_snapshot(self, pid: int) -> list[dict]:
@@ -725,15 +737,18 @@ class WindowsUI:
         if overwrite and not cancelled:
             def overwrite_confirmation():
                 for candidate, caption in self.windows(pid):
-                    if candidate != dialog and self.class_name(candidate) == "#32770":
-                        yes = self.api.GetDlgItem(candidate, 6)  # IDYES
+                    if (candidate != dialog and self.class_name(candidate) == "#32770"
+                            and caption == "Confirm Save As"
+                            and self.api.GetForegroundWindow() == candidate):
+                        yes = overwrite_yes_button(self.controls(candidate))
                         if yes:
-                            return yes, caption
+                            return candidate, yes, caption
                 return None
 
-            yes, caption = wait_until(lambda: active(overwrite_confirmation),
-                                      "native overwrite confirmation", timeout=10)
+            confirmation, yes, caption = wait_until(lambda: active(overwrite_confirmation),
+                                                    "native overwrite confirmation", timeout=10)
             result["overwrite_confirmation"] = caption
+            assert self.api.GetForegroundWindow() == confirmation, "Overwrite dialog lost focus"
             assert self.api.PostMessageW(yes, 0x00F5, 0, 0), "Could not confirm overwrite"
         wait_until(lambda: active(lambda: not self.api.IsWindow(dialog)),
                    "native file dialog to close", timeout=10)
