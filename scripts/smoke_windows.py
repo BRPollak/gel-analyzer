@@ -482,21 +482,28 @@ def filename_edit(controls: list[dict]) -> int | None:
     """Find the filename field, excluding the dialog's search/address editors.
 
     Common file dialogs identify the filename as edt1 (0x480) or a child of
-    cmb13 (0x47c). The modern dialog nests its Edit below that filename combo.
-    Never fall back to an arbitrary Edit, which could be the search field.
+    cmb13 (0x47c). The modern Save dialog observed on Windows 2025 instead
+    uses Edit 1001 under ComboBox/FloatNotifySink/DirectUIHWND/DUIViewWndClassName.
+    Require that full hierarchy and a unique match, never an arbitrary Edit.
     """
     indexed = {control["handle"]: control for control in controls}
+    modern = []
     for control in controls:
         if control["class"] != "Edit" or not control["visible"]:
             continue
         candidate = control
         seen = set()
+        ancestry = []
         while candidate and candidate["handle"] not in seen:
             seen.add(candidate["handle"])
+            ancestry.append(candidate["class"])
             if candidate["id"] in (0x480, 0x47C):
                 return control["handle"]
             candidate = indexed.get(candidate["parent"])
-    return None
+        if control["id"] == 1001 and ancestry[:5] == [
+                "Edit", "ComboBox", "FloatNotifySink", "DirectUIHWND", "DUIViewWndClassName"]:
+            modern.append(control["handle"])
+    return modern[0] if len(modern) == 1 else None
 
 
 def drive_native_dialog(trigger, respond) -> dict:

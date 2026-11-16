@@ -199,6 +199,29 @@ def test_native_filename_field_supports_classic_dialog_and_broken_parent_cycles(
     assert smoke_windows.filename_edit(controls) == 2
 
 
+def test_native_filename_field_supports_observed_windows_2025_save_dialog():
+    # Shape captured from run 43977095967: modern Save As leaves the filename
+    # ComboBox ID at zero, unlike the Open dialog's documented cmb13 ID.
+    controls = [
+        {"handle": 10, "parent": 0, "id": 0, "class": "DUIViewWndClassName", "visible": True},
+        {"handle": 11, "parent": 10, "id": 0, "class": "DirectUIHWND", "visible": True},
+        {"handle": 12, "parent": 11, "id": 0, "class": "FloatNotifySink", "visible": True},
+        {"handle": 13, "parent": 12, "id": 0, "class": "ComboBox", "visible": True},
+        {"handle": 14, "parent": 13, "id": 1001, "class": "Edit", "visible": True},
+        {"handle": 20, "parent": 0, "id": 0, "class": "Address Band Root", "visible": True},
+        {"handle": 21, "parent": 20, "id": 0, "class": "ComboBox", "visible": True},
+        {"handle": 22, "parent": 21, "id": 1001, "class": "Edit", "visible": True},
+        {"handle": 30, "parent": 0, "id": 0, "class": "SearchEditBoxWrapperClass", "visible": True},
+        {"handle": 31, "parent": 30, "id": 1001, "class": "Edit", "visible": True},
+    ]
+    assert smoke_windows.filename_edit(controls) == 14
+    assert smoke_windows.filename_edit(controls[5:]) is None
+    controls.append({"handle": 15, "parent": 13, "id": 1001, "class": "Edit", "visible": True})
+    assert smoke_windows.filename_edit(controls) is None, "Ambiguous modern fields must not be guessed"
+    controls[-1]["visible"] = False
+    assert smoke_windows.filename_edit(controls) == 14
+
+
 def test_native_dialog_responder_can_unblock_modal_trigger_on_its_own_thread():
     triggered, answered = threading.Event(), threading.Event()
     origin = threading.get_ident()
