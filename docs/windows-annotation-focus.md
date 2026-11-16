@@ -38,9 +38,12 @@ Windows desktop flag gates this correction, preserving Mac keyboard behavior.
 - The normal local browser also passed the typing and export checks. The
   targeted Python suite passed 157 tests; the JavaScript suite passed 31.
 
-The browser checks ran in Chromium on macOS. The timing defect is confirmed;
-its prevalence on Windows has not been measured. Native Windows verification
-and a new installer remain pending.
+The original timing reproduction ran in Chromium on macOS. The fixes were
+then restricted to Windows desktop, built into a Windows installer, and
+validated on Windows Server 2022 and 2025. The prevalence of the original
+issue among users has not been measured. See
+[the Windows validation report](windows-validation-2026-11-16.md) for the
+source suites, native test results, installer identity, and remaining limits.
 
 ## Regression coverage
 
